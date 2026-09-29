@@ -172,6 +172,50 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
     make_tool("tag", "给图层打语义标签（如 hero/background/logo）", [("id", "string:req:图层 id"), ("tag", "string:req:标签")]),
     make_tool("undo", "撤销上一次修改（工具出错后自我纠正用）", []),
     make_tool("save_mpd", "把当前文档打包为 .mpd 容器（页面会提供下载）", []),
+    // 修图操作（B4.5）
+    make_tool("add_paint_layer", "新建画笔层（自由手绘/涂抹的载体）", [("name", "string:图层名")]),
+    make_tool(
+      "paint_stroke",
+      "画笔：沿折线落笔触（手绘/涂鸦/标注）",
+      [
+        ("layer", "string:req:画笔层 id（raster；先 add_paint_layer）"),
+        ("pts", "string:req:折线 x,y;x,y;…（画布坐标）"),
+        ("r", "number:笔触半径 px（默认 6）"),
+        ("color", "string:颜色 #RRGGBB[AA]（默认黑）"),
+      ],
+    ),
+    make_tool(
+      "erase_stroke",
+      "橡皮擦：擦除画笔层笔迹",
+      [
+        ("layer", "string:req:画笔层 id"),
+        ("pts", "string:req:折线 x,y;x,y;…"),
+        ("r", "number:半径 px（默认 10）"),
+      ],
+    ),
+    make_tool(
+      "apply_filter",
+      "叠加调整层（非破坏，可撤销）：blur模糊/sharpen锐化/smooth磨皮/whiten美白/warm暖色(-负=冷)/vignette暗角/grayscale黑白/invert反色/brightness/contrast/saturation",
+      [
+        ("op", "string:req:算子名"),
+        ("value", "number:req:强度 -1..1（0..1 为单向操作）"),
+      ],
+    ),
+    make_tool(
+      "crop_canvas",
+      "裁剪画布到区域（全部层同步平移）",
+      [
+        ("x", "number:req:左上 x"),
+        ("y", "number:req:左上 y"),
+        ("w", "number:req:宽"),
+        ("h", "number:req:高"),
+      ],
+    ),
+    make_tool(
+      "sample_color",
+      "吸管：取画布坐标处合成像素颜色",
+      [("x", "number:req:x"), ("y", "number:req:y")],
+    ),
   ]
 }
 
@@ -303,20 +347,6 @@ pub impl @posoco.ToolProvider for PaintTools with fn execute(
     }
     "pick" => "pick \{arg(call, "x")} \{arg(call, "y")}"
     "group" => {
-      let gid = arg(call, "gid")
-      let ids = arg(call, "ids")
-      "group \{gid} \{ids}"
-    }
-    "ungroup" => {
-      let gid = arg(call, "gid")
-      "ungroup \{gid}"
-    }
-    "tag" => {
-      let tid = arg(call, "id")
-      "tag \{tid} \{arg(call, "tag")}"
-    }
-    "undo" => "undo"
-    "group" => {
       let ids = arg(call, "ids")
       "group \{arg(call, "gid")} \{ids.replace(old=",", new=" ")}"
     }
@@ -327,6 +357,27 @@ pub impl @posoco.ToolProvider for PaintTools with fn execute(
     "tag" => "tag \{arg(call, "id")} \{arg(call, "tag")}"
     "undo" => "undo"
     "new_canvas" => "new \{arg(call, "w")} \{arg(call, "h")}"
+    "add_paint_layer" => {
+      let tail = args_to_tail(call.arguments, ["name"])
+      "add-paint \{tail}"
+    }
+    "paint_stroke" => {
+      let lid = arg(call, "layer")
+      let pts = arg(call, "pts")
+      let r = opt(call, "r", "6")
+      let color = opt(call, "color", "#222222FF")
+      "brush layer=\{lid} pts=\{pts} r=\{r} color=\{color}"
+    }
+    "erase_stroke" => {
+      let lid = arg(call, "layer")
+      let pts = arg(call, "pts")
+      let r = opt(call, "r", "10")
+      "erase layer=\{lid} pts=\{pts} r=\{r}"
+    }
+    "apply_filter" =>
+      "add-adjust op=\{arg(call, "op")} value=\{opt(call, "value", "0.5")}"
+    "crop_canvas" => "crop \{arg(call, "x")} \{arg(call, "y")} \{arg(call, "w")} \{arg(call, "h")}"
+    "sample_color" => "sample \{arg(call, "x")} \{arg(call, "y")}"
     "set_style" => {
       let id = arg(call, "id")
       let tail = args_to_tail(

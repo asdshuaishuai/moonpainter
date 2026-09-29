@@ -479,6 +479,7 @@ fn kind_str(k : ShapeKind) -> String {
     Group => "group"
     Text => "text"
     Adjust => "adjust"
+    Raster => "raster"
   }
 }
 
@@ -530,6 +531,12 @@ fn adjust_json(a : Adjust?) -> String {
         Saturation => "saturation"
         Invert => "invert"
         Grayscale => "grayscale"
+        Blur => "blur"
+        Sharpen => "sharpen"
+        Smooth => "smooth"
+        Whiten => "whiten"
+        Warm => "warm"
+        Vignette => "vignette"
       }
       "{\"op\":\"\{op}\",\"value\":\{fmt_num(adj.value)}}"
     }
@@ -564,6 +571,19 @@ fn layer_json(l : Layer) -> String {
   sb.write_string("]")
   sb.write_string(",\"fill\":\{fill_json(l.fill)}")
   sb.write_string(",\"stroke\":{\"c\":\"\{@codec.color_to_hex(l.stroke.color)}\",\"w\":\{fmt_num(l.stroke.width)}}")
+  sb.write_string(",\"dabs\":[")
+  let mut fd = true
+  for d in l.dabs {
+    if fd {
+      fd = false
+    } else {
+      sb.write_string(",")
+    }
+    sb.write_string(
+      "{\"x\":\{fmt_num(d.x)},\"y\":\{fmt_num(d.y)},\"r\":\{fmt_num(d.r)},\"c\":\"\{@codec.color_to_hex(d.color)}\",\"e\":\{d.erase}}",
+    )
+  }
+  sb.write_string("]")
   sb.write_string(",\"asset\":\"\{l.asset_hash}\"")
   sb.write_string(",\"tags\":[")
   let mut f2 = true
@@ -675,6 +695,7 @@ fn kind_of(s : String) -> Result[ShapeKind, String] {
     "group" => Ok(Group)
     "text" => Ok(Text)
     "adjust" => Ok(Adjust)
+    "raster" => Ok(Raster)
     _ => Err("未知节点类型: \{s}")
   }
 }
@@ -796,12 +817,31 @@ fn adjust_of(v : JValue) -> Adjust? {
             "saturation" => Some({ op: Saturation, value })
             "invert" => Some({ op: Invert, value })
             "grayscale" => Some({ op: Grayscale, value })
+            "blur" => Some({ op: Blur, value })
+            "sharpen" => Some({ op: Sharpen, value })
+            "smooth" => Some({ op: Smooth, value })
+            "whiten" => Some({ op: Whiten, value })
+            "warm" => Some({ op: Warm, value })
+            "vignette" => Some({ op: Vignette, value })
             _ => None
           }
         }
         _ => None
       }
     None => None
+  }
+}
+
+///|
+fn dab_of(v : JValue) -> Result[Dab, String] {
+  let x = num_of(v, "x")
+  let y = num_of(v, "y")
+  let r = num_of(v, "r")
+  let c = str_of(v, "c")
+  match (x, y, r, c) {
+    (Ok(dx), Ok(dy), Ok(dr), Ok(dc)) =>
+      Ok({ x: dx, y: dy, r: dr, color: @codec.color_from_hex(dc), erase: bool_field(v, "e") })
+    _ => Err("dab 字段不完整（x/y/r/c）")
   }
 }
 
@@ -894,6 +934,16 @@ fn layer_of(v : JValue) -> Result[Layer, String] {
       }
     _ => return Err("缺 children")
   }
+  let dabs : Array[Dab] = []
+  match v.get("dabs") {
+    Some(JArr(arr)) => for dv in arr {
+        match dab_of(dv) {
+          Ok(d) => dabs.push(d)
+          Err(e) => return Err("dab: \{e}")
+        }
+      }
+    _ => return Err("缺 dabs")
+  }
   // 逐字段拼装（元组匹配 15 个字段太长，按序检查）
   match
     (id, name, kind, visible, opacity, blend, x, y, w, h, rot, radius, flip_h, flip_v, text, font_size, mask, adjust, fill, stroke_c, stroke_w, asset) {
@@ -941,6 +991,7 @@ fn layer_of(v : JValue) -> Result[Layer, String] {
         mask,
         adjust,
         points,
+        dabs,
         fill: fi,
         stroke: { color: sc, width: sw },
         asset_hash: ash,

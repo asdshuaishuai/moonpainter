@@ -44,6 +44,19 @@ pub fn list_tools() -> Array[AgentTool] {
   add("reorder", "reorder <id> front|back|up|down", "meta")
   add("group", "group <gid> <id…>：把根级层编成组（直通合成）", "meta")
   add("ungroup", "ungroup <gid>", "meta")
+  // 文本 / 调整 / 蒙版
+  add("add-text", "add-text x= y= text=<内容> [font_size=] [fill=]：文本层（ASCII 真字形）", "meta")
+  add("set-text", "set-text <id> <新内容>", "meta")
+  add("add-adjust", "add-adjust op=<算子> value=<-1..1>：调整层（PSD 语义）。算子：brightness/contrast/saturation/invert/grayscale/blur/sharpen/smooth/whiten/warm/vignette", "meta")
+  add("add-mask", "add-mask <id> kind=rect|ellipse x= y= w= h= [radius=] [invert=true]", "meta")
+  add("set-mask", "set-mask <id> x= y= w= h= [radius=] [invert=true]", "meta")
+  add("remove-mask", "remove-mask <id>", "meta")
+  // 修图操作
+  add("add-paint", "add-paint [name=]：新建画笔层（raster，全画布）", "meta")
+  add("brush", "brush layer=<raster层> pts=x1,y1;x2,y2[;…] r=<半径px> [color=#RRGGBB[AA]]：沿折线落笔触", "meta")
+  add("erase", "erase layer=<raster层> pts=… r=<半径px>：橡皮擦（destination-out）", "meta")
+  add("crop", "crop <x> <y> <w> <h>：裁剪画布，全部层同步平移", "meta")
+  add("sample", "sample <x> <y>：吸管取色（合成像素 hex + 命中层）", "vision")
   // 元参数
   add("list-params", "元参数表", "meta")
   add("set-param", "set-param <name> <value>（纯元数据；live 绑定属下轮）", "meta")

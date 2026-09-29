@@ -128,6 +128,11 @@ pub fn exec(s : Session, line : String) -> String {
     "ungroup" => cmd_ungroup(s, tokens)
     "add-text" => cmd_add_text(s, tokens)
     "set-text" => cmd_set_text(s, tokens)
+    "add-paint" => cmd_add_paint(s, tokens)
+    "brush" => cmd_brush(s, tokens, false)
+    "erase" => cmd_brush(s, tokens, true)
+    "crop" => cmd_crop(s, tokens)
+    "sample" => cmd_sample(s, tokens)
     "add-adjust" => cmd_add_adjust(s, tokens)
     "add-mask" => cmd_add_mask(s, tokens)
     "set-mask" => cmd_set_mask(s, tokens)
@@ -316,6 +321,7 @@ fn kind_str(k : @core.ShapeKind) -> String {
     @core.ShapeKind::Group => "group"
     @core.ShapeKind::Text => "text"
     @core.ShapeKind::Adjust => "adjust"
+    @core.ShapeKind::Raster => "raster"
   }
 }
 
@@ -618,7 +624,16 @@ fn parse_adjust(m : Map[String, String]) -> Result[@core.Adjust, String] {
     "saturation" => Ok({ op: @core.AdjustOp::Saturation, value })
     "invert" => Ok({ op: @core.AdjustOp::Invert, value: 0.0 })
     "grayscale" => Ok({ op: @core.AdjustOp::Grayscale, value: 0.0 })
-    _ => Err("未知调整算子 \{op}（brightness/contrast/saturation/invert/grayscale）")
+    "blur" => Ok({ op: @core.AdjustOp::Blur, value })
+    "sharpen" => Ok({ op: @core.AdjustOp::Sharpen, value })
+    "smooth" => Ok({ op: @core.AdjustOp::Smooth, value })
+    "whiten" => Ok({ op: @core.AdjustOp::Whiten, value })
+    "warm" => Ok({ op: @core.AdjustOp::Warm, value })
+    "vignette" => Ok({ op: @core.AdjustOp::Vignette, value })
+    _ =>
+      Err(
+        "未知调整算子 \{op}（brightness/contrast/saturation/invert/grayscale/blur/sharpen/smooth/whiten/warm/vignette）",
+      )
   }
 }
 
@@ -1492,4 +1507,216 @@ fn help_json() -> String {
 ///|
 fn tools_json() -> String {
   help_json()
+}
+
+// ---------------------------------------------------------------------------
+// 修图操作命令：画笔 / 橡皮擦 / 裁剪 / 取色（B1–B3）
+// ---------------------------------------------------------------------------
+
+///|
+/// 新建画笔层（Raster）：几何 = 全画布，dabs 为内容。
+fn cmd_add_paint(s : Session, tokens : Array[String]) -> String {
+  let doc = match require_doc(s) {
+    Ok(d) => d
+    Err(e) => return err(e)
+  }
+  let m = kv_args(tokens, 1)
+  let id = match m.get("id") {
+    Some(i) => i
+    None => @core.alloc_layer_id(doc)
+  }
+  if @core.find_layer(doc.layers, id) is Some(_) {
+    return err("层 id 已存在：\{id}")
+  }
+  let name = m.get("name").unwrap_or("画笔层")
+  let l = @core.default_layer(id, name, 0.0, 0.0, doc.width.to_double(), doc.height.to_double())
+  let l2 = { ..l, kind: @core.ShapeKind::Raster, fill: @core.Fill::NoFill }
+  snapshot(s, doc, "add-paint \{id}")
+  doc.layers.push(l2)
+  "{\"ok\":true,\"op\":\"add-paint\",\"id\":\"\{id}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+}
+
+///|
+/// 沿折线落笔触（画笔/橡皮擦共用）。pts 为**画布坐标**——落点存入层时
+/// 平移到层局部坐标（层被 move/crop 后语义不变）。笔触沿段均匀分布，
+/// 间距 = max(1, r·0.45)。
+fn cmd_brush(s : Session, tokens : Array[String], erase : Bool) -> String {
+  let doc = match require_doc(s) {
+    Ok(d) => d
+    Err(e) => return err(e)
+  }
+  if tokens.length() < 2 {
+    return err("用法：brush layer=<id> pts=x1,y1;x2,y2[;…] r=<半径px> [color=#RRGGBB[AA]]")
+  }
+  let m = kv_args(tokens, 1)
+  let lid = match m.get("layer") {
+    Some(v) => v
+    None => return err("brush 需要 layer=<id>")
+  }
+  let layer = match @core.find_layer(doc.layers, lid) {
+    Some(l) => l
+    None => return err("层不存在：\{lid}")
+  }
+  if !(layer.kind is @core.ShapeKind::Raster) {
+    return err("层 \{lid} 不是画笔层（raster）：先 add-paint 或对 raster 层落笔")
+  }
+  let pts = match m.get("pts") {
+    Some(v) =>
+      match parse_points(v) {
+        Ok(p) => p
+        Err(e) => return err(e)
+      }
+    None => return err("brush 需要 pts=x1,y1;x2,y2[;…]")
+  }
+  let r = match arg_d(m, "r", 4.0) {
+    Ok(v) => v
+    Err(e) => return err(e)
+  }
+  if r <= 0.0 || r > 200.0 {
+    return err("r 越界（0 < r ≤ 200）")
+  }
+  let color : Int = if erase {
+    0x00000000
+  } else {
+    match m.get("color") {
+      Some(c) =>
+        match parse_color(c) {
+          Ok(v) => v
+          Err(e) => return err(e)
+        }
+      None => 0xFF000000
+    }
+  }
+  // 折线等距落点（画布坐标 → 层局部：减层原点，move/crop 后语义稳定）
+  let ox = layer.x
+  let oy = layer.y
+  let canvas_pts : Array[(Double, Double)] = []
+  for p in pts {
+    canvas_pts.push((p.0 - ox, p.1 - oy))
+  }
+  let pts = canvas_pts
+  let dabs : Array[@core.Dab] = []
+  let spacing = if r * 0.45 > 1.0 { r * 0.45 } else { 1.0 }
+  let mut i = 0
+  while i + 1 < pts.length() {
+    let (ax, ay) = pts[i]
+    let (bx, by) = pts[i + 1]
+    let dx = bx - ax
+    let dy = by - ay
+    let len = Double::sqrt(dx * dx + dy * dy)
+    let n = if len <= 0.0 {
+      1
+    } else {
+      let v = (len / spacing).to_int()
+      if v < 1 { 1 } else { v }
+    }
+    let mut k = 0
+    while k < n {
+      let t = k.to_double() / n.to_double()
+      dabs.push({ x: ax + dx * t, y: ay + dy * t, r, color, erase })
+      k = k + 1
+    }
+    i = i + 1
+  }
+  let last = pts[pts.length() - 1]
+  dabs.push({ x: last.0, y: last.1, r, color, erase })
+  snapshot(s, doc, "\{if erase { "erase" } else { "brush" }} \{lid} (\{dabs.length()} dabs)")
+  let _ = update_layer(doc.layers, lid, fn(l) { { ..l, dabs: l.dabs + dabs } })
+  "{\"ok\":true,\"op\":\"\{if erase { "erase" } else { "brush" }}\",\"id\":\"\{lid}\",\"dabs\":\{dabs.length()},\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+}
+
+///|
+fn shift_layers(
+  layers : Array[@core.Layer],
+  dx : Double,
+  dy : Double,
+) -> Unit {
+  let mut i = 0
+  while i < layers.length() {
+    let l = layers[i]
+    layers[i] = { ..l, x: l.x + dx, y: l.y + dy }
+    shift_layers(layers[i].children, dx, dy)
+    i = i + 1
+  }
+}
+
+///|
+/// 裁剪：画布收窄到 (x,y,w,h)，全部层同步平移 (-x,-y)。
+/// 硬约束：区域必须在原画布内（越界拒绝，AgentGate 零容忍）。
+fn cmd_crop(s : Session, tokens : Array[String]) -> String {
+  let doc = match require_doc(s) {
+    Ok(d) => d
+    Err(e) => return err(e)
+  }
+  if tokens.length() < 5 {
+    return err("用法：crop <x> <y> <w> <h>")
+  }
+  let cx = match to_i(tokens[1]) {
+    Some(v) => v
+    None => return err("x=\{tokens[1]} 不是整数")
+  }
+  let cy = match to_i(tokens[2]) {
+    Some(v) => v
+    None => return err("y=\{tokens[2]} 不是整数")
+  }
+  let cw = match to_i(tokens[3]) {
+    Some(v) => v
+    None => return err("w=\{tokens[3]} 不是整数")
+  }
+  let ch = match to_i(tokens[4]) {
+    Some(v) => v
+    None => return err("h=\{tokens[4]} 不是整数")
+  }
+  if cw <= 0 || ch <= 0 {
+    return err("裁剪尺寸必须为正")
+  }
+  if cx < 0 || cy < 0 || cx + cw > doc.width || cy + ch > doc.height {
+    return err(
+      "裁剪区域 (\{cx},\{cy},\{cw},\{ch}) 超出画布 (\{doc.width}x\{doc.height})",
+    )
+  }
+  if cw.to_int64() * ch.to_int64() > @mpd.LIMIT_MAX_PIXELS.to_int64() {
+    return err("画布总像素超限")
+  }
+  snapshot(s, doc, "crop \{cx},\{cy} \{cw}x\{ch}")
+  shift_layers(doc.layers, -cx.to_double(), -cy.to_double())
+  doc.width = cw
+  doc.height = ch
+  "{\"ok\":true,\"op\":\"crop\",\"width\":\{cw},\"height\":\{ch},\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+}
+
+///|
+/// 取色（吸管）：渲染当前合成并采样 (x,y) 像素颜色。
+fn cmd_sample(s : Session, tokens : Array[String]) -> String {
+  let doc = match require_doc(s) {
+    Ok(d) => d
+    Err(e) => return err(e)
+  }
+  if tokens.length() < 3 {
+    return err("用法：sample <x> <y>")
+  }
+  let x = match to_i(tokens[1]) {
+    Some(v) => v
+    None => return err("x=\{tokens[1]} 不是整数")
+  }
+  let y = match to_i(tokens[2]) {
+    Some(v) => v
+    None => return err("y=\{tokens[2]} 不是整数")
+  }
+  if x < 0 || y < 0 || x >= doc.width || y >= doc.height {
+    return err("采样点 (\{x},\{y}) 超出画布 (\{doc.width}x\{doc.height})")
+  }
+  let env = match session_env(s) {
+    Ok(e) => e
+    Err(e) => return err(e)
+  }
+  let buf = @render.render_doc(doc, env)
+  let px = if x >= buf.width { buf.width - 1 } else { x }
+  let py = if y >= buf.height { buf.height - 1 } else { y }
+  let c = @codec.rgba_get(buf, px, py)
+  let picked = match @render.pick(doc, x.to_double() + 0.5, y.to_double() + 0.5) {
+    Some(id) => id
+    None => ""
+  }
+  "{\"ok\":true,\"op\":\"sample\",\"x\":\{x},\"y\":\{y},\"color\":\"\{@codec.color_to_hex(c)}\",\"layer\":\"\{picked}\"}"
 }

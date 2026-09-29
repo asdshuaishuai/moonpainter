@@ -77,6 +77,7 @@ fn inside_fill(l : @core.Layer, lx : Double, ly : Double) -> Bool {
     @core.ShapeKind::Group => false
     @core.ShapeKind::Text => lx >= 0.0 && lx < l.w && ly >= 0.0 && ly < l.h
     @core.ShapeKind::Adjust => false
+    @core.ShapeKind::Raster => false
   }
 }
 
@@ -281,6 +282,10 @@ fn paint_layer(
       paint_text(l, buf, env, eff_opacity)
       return
     }
+    @core.ShapeKind::Raster => {
+      paint_raster(l, buf, env, eff_opacity)
+      return
+    }
     _ => ()
   }
   // 保守包围盒（旋转 45° 时取对角线长）
@@ -367,12 +372,149 @@ fn paint_layer(
 }
 
 ///|
+/// Raster 层绘制：离屏缓冲逐 dab 落点（含橡皮擦 destination-out），
+/// 再一次性合成到文档缓冲——擦除只作用于本层笔迹，透出其下层内容。
+/// 层透明度与蒙版在合成阶段统一并入。
+fn paint_raster(
+  l : @core.Layer,
+  buf : @codec.RgbaBuf,
+  env : RenderEnv,
+  eff_opacity : Double,
+) -> Unit {
+  if l.dabs.length() == 0 {
+    return
+  }
+  let _ = env
+  let scratch = @codec.rgba_new(buf.width, buf.height)
+  // 透明底
+  let total = scratch.width * scratch.height
+  let mut i = 0
+  while i < total {
+    scratch.pixels[i] = 0
+    i = i + 1
+  }
+  paint_dabs(l, scratch)
+  // 合成：src alpha ← dab alpha × 层透明度 × 蒙版
+  let mut y = 0
+  while y < buf.height {
+    let mut x = 0
+    while x < buf.width {
+      let sp = scratch.pixels[y * buf.width + x]
+      let sa = (sp >> 24) & 0xFF
+      if sa > 0 {
+        let mf = mask_cover_at(l, x.to_double() + 0.5, y.to_double() + 0.5)
+        let a = sa.to_double() / 255.0 * eff_opacity * mf
+        let a255 = (a * 255.0 + 0.5).to_int()
+        if a255 > 0 {
+          let src = (a255 << 24) + (sp & 0x00FFFFFF)
+          let dst = buf.pixels[y * buf.width + x]
+          buf.pixels[y * buf.width + x] = composite_pixel(dst, src, @core.BlendMode::Normal)
+        }
+      }
+      x = x + 1
+    }
+    y = y + 1
+  }
+}
+
+///|
+/// 逐 dab 圆斑绘制到透明缓冲，2×2 子采样 AA；erase=true 按覆盖度乘减
+/// 缓冲 alpha（destination-out）。笔色 alpha 通道作为落点浓度。
+fn paint_dabs(l : @core.Layer, scratch : @codec.RgbaBuf) -> Unit {
+  for d in l.dabs {
+    if d.r <= 0.0 {
+      continue
+    }
+    let x0 = (l.x + d.x - d.r).to_int() - 1
+    let y0 = (l.y + d.y - d.r).to_int() - 1
+    let x1 = (l.x + d.x + d.r).to_int() + 1
+    let y1 = (l.y + d.y + d.r).to_int() + 1
+    let px0 = if x0 < 0 { 0 } else { x0 }
+    let py0 = if y0 < 0 { 0 } else { y0 }
+    let px1 = if x1 > scratch.width { scratch.width } else { x1 }
+    let py1 = if y1 > scratch.height { scratch.height } else { y1 }
+    let r2 = d.r * d.r
+    // 橡皮擦不受笔色 alpha 影响（恒全强度）；画笔的 AA 通道=落点浓度
+    let dalpha = if d.erase { 1.0 } else { ((d.color >> 24) & 0xFF).to_double() / 255.0 }
+    let mut py = py0
+    while py < py1 {
+      let mut px = px0
+      while px < px1 {
+        let mut hits = 0
+        for s in dab_samples {
+          let sx = px.to_double() + s.0 - (l.x + d.x)
+          let sy = py.to_double() + s.1 - (l.y + d.y)
+          if sx * sx + sy * sy <= r2 {
+            hits = hits + 1
+          }
+        }
+        if hits > 0 {
+          let cover = hits.to_double() / 4.0 * dalpha
+          let dst = scratch.pixels[py * scratch.width + px]
+          if d.erase {
+            let da = ((dst >> 24) & 0xFF).to_double() * (1.0 - cover)
+            let na = (da + 0.5).to_int()
+            scratch.pixels[py * scratch.width + px] = (na << 24) + (dst & 0x00FFFFFF)
+          } else {
+            let a255 = (cover * 255.0 + 0.5).to_int()
+            if a255 > 0 {
+              // 简单 over 合成（同一层内笔迹自叠）
+              let da = ((dst >> 24) & 0xFF).to_double() / 255.0
+              let sa = cover
+              let oa = sa + da * (1.0 - sa)
+              if oa > 0.0 {
+                let sr = ((dst >> 16) & 0xFF).to_double() / 255.0
+                let sg = ((dst >> 8) & 0xFF).to_double() / 255.0
+                let sb = (dst & 0xFF).to_double() / 255.0
+                let cr = (d.color >> 16) & 0xFF
+                let cg = (d.color >> 8) & 0xFF
+                let cb = d.color & 0xFF
+                let or_ = (cr.to_double() / 255.0 * sa + sr * da * (1.0 - sa)) / oa
+                let og = (cg.to_double() / 255.0 * sa + sg * da * (1.0 - sa)) / oa
+                let ob = (cb.to_double() / 255.0 * sa + sb * da * (1.0 - sa)) / oa
+                let nv = ((oa * 255.0 + 0.5).to_int() << 24) +
+                  ((or_ * 255.0 + 0.5).to_int() << 16) +
+                  ((og * 255.0 + 0.5).to_int() << 8) +
+                  (ob * 255.0 + 0.5).to_int()
+                scratch.pixels[py * scratch.width + px] = nv
+              }
+            }
+          }
+        }
+        px = px + 1
+      }
+      py = py + 1
+    }
+  }
+}
+
+///|
+let dab_samples : Array[(Double, Double)] = [
+  (0.25, 0.25),
+  (0.75, 0.25),
+  (0.25, 0.75),
+  (0.75, 0.75),
+]
+
+///|
 /// 调整算子：就地施加于缓冲（调整层语义=作用于其下全部可见层的合成）。
+/// 逐像素类走统一循环；缓冲变换类（模糊/锐化/磨皮）走专用实现。
 fn apply_adjust(a : @core.Adjust?, buf : @codec.RgbaBuf) -> Unit {
   let adj = match a {
     Some(x) => x
     None => return
   }
+  match adj.op {
+    @core.AdjustOp::Blur => apply_blur(buf, adj.value)
+    @core.AdjustOp::Sharpen => apply_sharpen(buf, adj.value)
+    @core.AdjustOp::Smooth => apply_smooth(buf, adj.value)
+    @core.AdjustOp::Vignette => apply_vignette(buf, adj.value)
+    _ => apply_adjust_pixel(adj, buf)
+  }
+}
+
+///|
+fn apply_adjust_pixel(adj : @core.Adjust, buf : @codec.RgbaBuf) -> Unit {
   let total = buf.width * buf.height
   let mut i = 0
   while i < total {
@@ -408,8 +550,240 @@ fn apply_adjust(a : @core.Adjust?, buf : @codec.RgbaBuf) -> Unit {
           clamp8((lum.to_double() + (b.to_double() - lum.to_double()) * k + 0.5).to_int()),
         )
       }
+      // 美白：暖色调（R>B）像素按皮肤相似度加权提亮
+      @core.AdjustOp::Whiten => {
+        let s = if r > b { (r - b).to_double() / 60.0 } else { 0.0 }
+        let sk = if s > 1.0 { 1.0 } else { s }
+        let d = (adj.value * 70.0 * sk + 0.5).to_int()
+        (clamp8(r + d), clamp8(g + d), clamp8(b + d))
+      }
+      // 色温：正=暖（R+/B-），负=冷
+      @core.AdjustOp::Warm => {
+        let d = (adj.value * 45.0 + 0.5).to_int()
+        (clamp8(r + d), g, clamp8(b - d))
+      }
+      _ => (r, g, b)
     }
     buf.pixels[i] = (p & 0xFF000000) + (pair.0 << 16) + (pair.1 << 8) + pair.2
+    i = i + 1
+  }
+}
+
+///|
+/// 径向暗角：中心亮、四角按 value 渐暗（平滑过渡带 0.35..1.0）。
+fn apply_vignette(buf : @codec.RgbaBuf, value : Double) -> Unit {
+  let cx = buf.width.to_double() / 2.0
+  let cy = buf.height.to_double() / 2.0
+  let md = Double::sqrt(cx * cx + cy * cy)
+  if md <= 0.0 {
+    return
+  }
+  let mut y = 0
+  while y < buf.height {
+    let mut x = 0
+    while x < buf.width {
+      let dx = x.to_double() - cx
+      let dy = y.to_double() - cy
+      let d = Double::sqrt(dx * dx + dy * dy) / md
+      let t0 = (d - 0.35) / 0.65
+      let t = if t0 < 0.0 { 0.0 } else if t0 > 1.0 { 1.0 } else { t0 }
+      let f = 1.0 - value * t
+      let i = y * buf.width + x
+      let p = buf.pixels[i]
+      let r = ((p >> 16) & 0xFF).to_double() * f
+      let g = ((p >> 8) & 0xFF).to_double() * f
+      let b = (p & 0xFF).to_double() * f
+      buf.pixels[i] = (p & 0xFF000000) + (clamp8((r + 0.5).to_int()) << 16) +
+        (clamp8((g + 0.5).to_int()) << 8) +
+        clamp8((b + 0.5).to_int())
+      x = x + 1
+    }
+    y = y + 1
+  }
+}
+
+///|
+/// 预乘 alpha 拆包/打包辅助（模糊需预乘空间插值，避免边缘色晕）。
+fn premul(p : Int) -> (Int, Int, Int, Int) {
+  let a = (p >> 24) & 0xFF
+  (a, ((p >> 16) & 0xFF) * a, ((p >> 8) & 0xFF) * a, (p & 0xFF) * a)
+}
+
+///|
+/// 单趟可分离盒式模糊（水平或垂直），滑窗求和 O(n)。
+/// horizontal=true：逐行处理，line=行号，count=宽；
+/// horizontal=false：逐列处理，line=列号，count=高。
+fn blur_axis(
+  src : FixedArray[Int],
+  out : FixedArray[Int],
+  count : Int,
+  lines : Int,
+  radius : Int,
+  horizontal : Bool,
+) -> Unit {
+  let w = if horizontal { count } else { lines } // 画布宽
+  let mut line = 0
+  while line < lines {
+    let hi0 = if radius < count - 1 { radius } else { count - 1 }
+    let mut sa = 0
+    let mut sr = 0
+    let mut sg = 0
+    let mut sb = 0
+    let mut k = 0
+    while k <= hi0 {
+      let (a, r, g, b) = premul(blur_at(src, line, k, w, horizontal))
+      sa = sa + a
+      sr = sr + r
+      sg = sg + g
+      sb = sb + b
+      k = k + 1
+    }
+    let mut i = 0
+    while i < count {
+      let lo = if i - radius > 0 { i - radius } else { 0 }
+      let hi = if i + radius < count - 1 { i + radius } else { count - 1 }
+      let win = hi - lo + 1
+      let a = sa / win
+      let mut nr = 0
+      let mut ng = 0
+      let mut nb = 0
+      if a > 0 {
+        nr = sr / a
+        ng = sg / a
+        nb = sb / a
+      }
+      blur_set(out, line, i, w, horizontal, (a << 24) + (nr << 16) + (ng << 8) + nb)
+      let add_i = i + radius + 1
+      if add_i < count {
+        let (a2, r2, g2, b2) = premul(blur_at(src, line, add_i, w, horizontal))
+        sa = sa + a2
+        sr = sr + r2
+        sg = sg + g2
+        sb = sb + b2
+      }
+      let rem_i = i - radius
+      if rem_i >= 0 {
+        let (a3, r3, g3, b3) = premul(blur_at(src, line, rem_i, w, horizontal))
+        sa = sa - a3
+        sr = sr - r3
+        sg = sg - g3
+        sb = sb - b3
+      }
+      i = i + 1
+    }
+    line = line + 1
+  }
+}
+
+///|
+/// 模糊轴索引：水平时 line=行、idx=列（行基址 + idx）；垂直时 line=列、idx=行。
+fn blur_at(
+  src : FixedArray[Int],
+  line : Int,
+  idx : Int,
+  w : Int,
+  horizontal : Bool,
+) -> Int {
+  if horizontal {
+    src[line * w + idx]
+  } else {
+    src[idx * w + line]
+  }
+}
+
+///|
+fn blur_set(
+  out : FixedArray[Int],
+  line : Int,
+  idx : Int,
+  w : Int,
+  horizontal : Bool,
+  v : Int,
+) -> Unit {
+  if horizontal {
+    out[line * w + idx] = v
+  } else {
+    out[idx * w + line] = v
+  }
+}
+
+///|
+/// 两趟盒式模糊近似高斯。value 0..1 → 半径 1..24。
+fn apply_blur(buf : @codec.RgbaBuf, value : Double) -> Unit {
+  let v = if value < 0.0 { 0.0 } else if value > 1.0 { 1.0 } else { value }
+  let mut radius = (v * 24.0).to_int()
+  if radius < 1 {
+    radius = 1
+  }
+  let total = buf.width * buf.height
+  let a1 = buf.pixels.copy()
+  let t = FixedArray::make(total, 0)
+  let a2 = FixedArray::make(total, 0)
+  blur_axis(a1, t, buf.width, buf.height, radius, true)
+  blur_axis(t, a2, buf.height, buf.width, radius, false)
+  blur_axis(a2, t, buf.width, buf.height, radius, true)
+  blur_axis(t, buf.pixels, buf.height, buf.width, radius, false)
+}
+
+///|
+/// 非锐化掩模：out = orig + value·(orig − blur(半径2))。
+fn apply_sharpen(buf : @codec.RgbaBuf, value : Double) -> Unit {
+  let v = if value < 0.0 { 0.0 } else if value > 1.0 { 1.0 } else { value }
+  let total = buf.width * buf.height
+  let blurred = buf.pixels.copy()
+  let tmp = FixedArray::make(total, 0)
+  let nxt = FixedArray::make(total, 0)
+  blur_axis(blurred, tmp, buf.width, buf.height, 2, true)
+  blur_axis(tmp, nxt, buf.height, buf.width, 2, false)
+  let mut i = 0
+  while i < total {
+    let p = buf.pixels[i]
+    let q = nxt[i]
+    let r = (p >> 16) & 0xFF
+    let g = (p >> 8) & 0xFF
+    let b = p & 0xFF
+    let qr = (q >> 16) & 0xFF
+    let qg = (q >> 8) & 0xFF
+    let qb = q & 0xFF
+    let nr = clamp8((r.to_double() + (r - qr).to_double() * v * 1.5 + 0.5).to_int())
+    let ng = clamp8((g.to_double() + (g - qg).to_double() * v * 1.5 + 0.5).to_int())
+    let nb = clamp8((b.to_double() + (b - qb).to_double() * v * 1.5 + 0.5).to_int())
+    buf.pixels[i] = (p & 0xFF000000) + (nr << 16) + (ng << 8) + nb
+    i = i + 1
+  }
+}
+
+///|
+/// 磨皮：边缘感知平滑。平坦区（|orig−blur| 小）按 value 混入模糊，
+/// 纹理/边缘区保留 → 皮肤变净、五官不糊。
+fn apply_smooth(buf : @codec.RgbaBuf, value : Double) -> Unit {
+  let v = if value < 0.0 { 0.0 } else if value > 1.0 { 1.0 } else { value }
+  let total = buf.width * buf.height
+  let blurred = buf.pixels.copy()
+  let tmp = FixedArray::make(total, 0)
+  let nxt = FixedArray::make(total, 0)
+  blur_axis(blurred, tmp, buf.width, buf.height, 4, true)
+  blur_axis(tmp, nxt, buf.height, buf.width, 4, false)
+  let mut i = 0
+  while i < total {
+    let p = buf.pixels[i]
+    let q = nxt[i]
+    let r = (p >> 16) & 0xFF
+    let g = (p >> 8) & 0xFF
+    let b = p & 0xFF
+    let qr = (q >> 16) & 0xFF
+    let qg = (q >> 8) & 0xFF
+    let qb = q & 0xFF
+    let dr = r - qr
+    let dg = g - qg
+    let db = b - qb
+    let diff = dr * dr + dg * dg + db * db
+    // w = value·255·300/(300+diff²)：平坦区→value·255，强边缘→0
+    let w = (v * 255.0 * 300.0 / (300.0 + diff.to_double())).to_int()
+    let nr = clamp8(r + (qr - r) * w / 255)
+    let ng = clamp8(g + (qg - g) * w / 255)
+    let nb = clamp8(b + (qb - b) * w / 255)
+    buf.pixels[i] = (p & 0xFF000000) + (nr << 16) + (ng << 8) + nb
     i = i + 1
   }
 }

@@ -38,6 +38,8 @@ pub(all) enum ShapeKind {
   Group
   Text
   Adjust
+  /// 画笔层：dabs 笔触为唯一内容（画笔/橡皮擦落点），局部坐标
+  Raster
 }
 
 ///|
@@ -94,6 +96,22 @@ pub(all) enum AdjustOp {
   Saturation // value: -1..1（负=去饱和）
   Invert
   Grayscale
+  Blur // value: 0..1 → 框式模糊半径 1..24px（两趟近似高斯）
+  Sharpen // value: 0..1 → 非锐化掩模强度
+  Smooth // 磨皮：value 0..1，边缘感知平滑（平坦区强、纹理区弱）
+  Whiten // 美白：value 0..1，暖色调像素加权提亮
+  Warm // 色温：value -1..1，正=暖（R+/B-）负=冷
+  Vignette // 暗角：value 0..1，径向渐暗
+}
+
+///|
+/// 笔触落点（Raster 层内容原子）：局部坐标圆斑。
+pub(all) struct Dab {
+  x : Double
+  y : Double
+  r : Double
+  color : Int // 0xAARRGGBB（erase=true 时仅 alpha 生效）
+  erase : Bool
 }
 
 ///|
@@ -124,6 +142,7 @@ pub(all) struct Layer {
   mask : LayerMask? // 矢量蒙版（与层同变换；None=无）
   adjust : Adjust? // Adjust 层的算子参数；其余恒 None
   points : Array[(Double, Double)] // Line/Polygon 顶点（局部坐标，0..w / 0..h）
+  dabs : Array[Dab] // Raster 层笔触（局部坐标）；其余层恒空
   fill : Fill
   stroke : Stroke
   asset_hash : String // Image 层引用的资产键；其余为 ""
@@ -214,6 +233,7 @@ pub fn default_layer(
     mask: None,
     adjust: None,
     points: [],
+    dabs: [],
     fill: Solid(0xFF808080),
     stroke: { color: 0xFF000000, width: 0.0 },
     asset_hash: "",
