@@ -53,13 +53,21 @@ pub impl @posoco.ModelPort for PaintModel with fn chat(
   _scope : @posoco.InvocationScope,
   messages : ArrayView[@posoco.Message],
   tools : Array[@posoco.ToolDef],
-  _options : @posoco.ChatOptions,
-  _stream : @posoco.StreamMode,
+  options : @posoco.ChatOptions,
+  stream : @posoco.StreamMode,
 ) -> @posoco.ModelCallResult raise @posoco.ModelError {
+  ignore(options)
   if self.cfg.provider == "mock" {
     return self.mock_chat(messages)
   }
-  self.openai_chat(messages, tools)
+  match stream {
+    @posoco.StreamMode::Stream(emit) =>
+      self.openai_chat_streamed(messages, tools, emit)
+    _ => {
+      // NoStream：仍走流式端点但不向调用方发增量（结果等价非流式）
+      self.openai_chat_streamed(messages, tools, fn(_) { () })
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -216,10 +224,11 @@ fn tool_defs_to_wire(tools : Array[@posoco.ToolDef]) -> Json {
 }
 
 ///|
-async fn PaintModel::openai_chat(
+async fn PaintModel::openai_chat_streamed(
   self : PaintModel,
   messages : ArrayView[@posoco.Message],
   tools : Array[@posoco.ToolDef],
+  emit : (@posoco.StreamChunk) -> Unit,
 ) -> @posoco.ModelCallResult raise @posoco.ModelError {
   // 请求体（deepOrca 同款 OpenAI wire；非流式已足够演示工具循环）
   let body_map : Map[String, Json] = Map([])
@@ -233,19 +242,87 @@ async fn PaintModel::openai_chat(
     body_map["tools"] = tool_defs_to_wire(tools)
     body_map["tool_choice"] = Json::string("auto")
   }
+  body_map["stream"] = Json::boolean(true)
   let body = Json::object(body_map).stringify()
   let url = self.cfg.base_url.trim(char_set="/").to_owned() + "/chat/completions"
-  let wrapped = js_http_post_json_wait(url, body, self.cfg.api_key) catch {
-    _ => raise @posoco.ModelError::Transport("网络请求失败（fetch 被拒/断网/CORS）")
+  let mut content_buf = ""
+  // tool_calls 按 index 拼接（deepOrca 模式）
+  let tc_ids : Map[Int, String] = Map([])
+  let tc_names : Map[Int, String] = Map([])
+  let tc_args : Map[Int, StringBuilder] = Map([])
+  let on_line = fn(payload : String) {
+    match parse_sse_chunk(payload) {
+      None => ()
+      Some((content, tc_idx, tc_id, tc_name, tc_args_delta)) => {
+        if content != "" {
+          content_buf = content_buf + content
+          emit(@posoco.StreamChunk::TextDelta(token=content))
+        }
+        if tc_idx >= 0 {
+          if tc_id != "" {
+            tc_ids[tc_idx] = tc_id
+          }
+          if tc_name != "" {
+            tc_names[tc_idx] = tc_name
+          }
+          if tc_args_delta != "" {
+            match tc_args.get(tc_idx) {
+              Some(sb) => sb.write_string(tc_args_delta)
+              None => {
+                let sb = StringBuilder()
+                sb.write_string(tc_args_delta)
+                tc_args[tc_idx] = sb
+              }
+            }
+          }
+        }
+      }
+    }
   }
-  let status = extract_json_number(wrapped, "http_status")
-  let text = strip_status_envelope(wrapped)
+  let status : Int = js_fetch_sse(url, body, self.cfg.api_key, on_line).wait() catch {
+    _ => 0
+  }
   if status != 200 {
-    raise @posoco.ModelError::Transport(
-      "HTTP \{status}：\{shorten_str(text, 300)}",
-    )
+    raise @posoco.ModelError::Transport("HTTP \{status}（流式请求失败）")
   }
-  parse_openai_response(text)
+  // 拼接完整 tool_calls
+  let calls : Array[@posoco.ToolCall] = []
+  let mut max_idx = -1
+  for k, _ in tc_args {
+    if k > max_idx {
+      max_idx = k
+    }
+  }
+  let mut idx = 0
+  while idx <= max_idx {
+    let cid = tc_ids.get(idx).unwrap_or("call_\{idx}")
+    let cname = tc_names.get(idx).unwrap_or("")
+    let cargs = match tc_args.get(idx) {
+      Some(sb) => sb.to_string()
+      None => "{}"
+    }
+    if cname != "" {
+      calls.push({
+        call_id: @posoco.CallId::unchecked(cid),
+        name: @posoco.ToolName::unchecked(cname),
+        arguments: @json.parse(cargs) catch { _ => Json::object(Map([])) },
+      })
+    }
+    idx = idx + 1
+  }
+  let finish = if calls.length() > 0 {
+    @posoco.FinishReason::ToolCalls
+  } else {
+    @posoco.FinishReason::Stop
+  }
+  let completion : @posoco.Completion = @posoco.Completion(
+    content=[@posoco.Content::Text(content_buf)],
+    tool_calls=calls,
+    reasoning=None,
+    finish_reason=finish,
+    usage=None,
+  )
+  { completion, processed_messages: [] }
 }
 
 ///|
@@ -535,4 +612,16 @@ fn PaintModel::mock_chat(
       }
     }
   }
+}
+
+///|
+/// JSON 对象取字段（pub 转发，streaming.mbt 跨文件可见）。
+pub fn json_field_pub(j : Json, key : String) -> Json? {
+  json_field(j, key)
+}
+
+///|
+/// JSON 路径取字符串（pub 转发）。
+pub fn json_path_str_pub(j : Json, path : Array[String]) -> String {
+  json_path_str(j, path)
 }
