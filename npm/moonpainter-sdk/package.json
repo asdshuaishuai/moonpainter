@@ -1,0 +1,24 @@
+{
+  "name": "moonpainter-sdk",
+  "version": "0.1.0",
+  "description": "MoonPainter 引擎 wasm SDK（JS 宿主胶水）：加载 moonpainter.wasm 并提供类型化的命令执行/渲染/容器面",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "license": "MIT",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "moonpainter.wasm"
+  ],
+  "keywords": [
+    "moonbit",
+    "wasm",
+    "image-editing",
+    "agent",
+    "ai"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "type": "module"
+}

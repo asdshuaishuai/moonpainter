@@ -1,0 +1,7 @@
+target/
+_build/
+.mooncakes/
+*.core
+.DS_Store
+npm/moonpainter-sdk/moonpainter.wasm
+dist/

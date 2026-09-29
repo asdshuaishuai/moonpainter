@@ -1,0 +1,538 @@
+/// demo —— ModelPort 端口：OpenAI wire 协议的修图模型（demo/paint_model）。
+///
+/// 接入形态对齐 deepOrca：`POST {baseURL}/chat/completions` +
+/// `Authorization: Bearer`；tools 为 function 定义；响应取
+/// choices[0].message（content + tool_calls）转 posoco Completion，
+/// tool 回放（role:"tool"）由 posoco 内核负责。provider=mock 时走
+/// 内置脚本模型（逐轮吐工具调用），离线即可完整演示"AI 逐工具修图"。
+/// 传输用 moonbitlang/async/http（js 后端 = 浏览器 fetch）。
+
+///|
+pub(all) struct LlmConfig {
+  provider : String
+  base_url : String
+  model : String
+  api_key : String
+}
+
+///|
+struct PaintModel {
+  cfg : LlmConfig
+  /// mock 脚本的轮次游标
+  mut mock_step : Int
+}
+
+///|
+fn PaintModel::PaintModel(cfg : LlmConfig) -> PaintModel {
+  { cfg, mock_step: 0 }
+}
+
+///|
+pub impl @posoco.ModelPort for PaintModel with fn provider_config(
+  _self,
+) -> @posoco.ProviderConfig {
+  @posoco.ProviderConfig::empty()
+}
+
+///|
+pub impl @posoco.ModelPort for PaintModel with fn compact(
+  _self,
+  _scope : @posoco.InvocationScope,
+  _messages : ArrayView[@posoco.Message],
+  _options : @posoco.ChatOptions,
+  _trigger : @posoco.CompactTrigger,
+) -> @posoco.CompactResult raise @posoco.ModelError {
+  raise @posoco.ModelError::ResponseParse(
+    "PaintModel 未实现 compact（demo 会话很短，不会触发）",
+  )
+}
+
+///|
+pub impl @posoco.ModelPort for PaintModel with fn chat(
+  self,
+  _scope : @posoco.InvocationScope,
+  messages : ArrayView[@posoco.Message],
+  tools : Array[@posoco.ToolDef],
+  _options : @posoco.ChatOptions,
+  _stream : @posoco.StreamMode,
+) -> @posoco.ModelCallResult raise @posoco.ModelError {
+  if self.cfg.provider == "mock" {
+    return self.mock_chat(messages)
+  }
+  self.openai_chat(messages, tools)
+}
+
+// ---------------------------------------------------------------------------
+// 真实 provider：OpenAI wire（非流式）
+// ---------------------------------------------------------------------------
+
+///|
+/// posoco Message → OpenAI wire JSON。
+fn message_to_wire(m : @posoco.Message) -> Json {
+  let obj : Map[String, Json] = Map([])
+  match m {
+    @posoco.Message::SystemMessage(content~) => {
+      obj["role"] = Json::string("system")
+      obj["content"] = Json::string(content_text(content))
+    }
+    @posoco.Message::UserMessage(content~) => {
+      obj["role"] = Json::string("user")
+      let has_image = content_has_image(content)
+      if has_image {
+        let parts : Array[Json] = []
+        for c in content {
+          match c {
+            @posoco.Content::Text(t) =>
+              parts.push(
+                wire_object(
+                  [
+                    ("type", Json::string("text")),
+                    ("text", Json::string(t)),
+                  ],
+                ),
+              )
+            @posoco.Content::Image(media_type~, data~) =>
+              parts.push(
+                wire_object([
+                  ("type", Json::string("image_url")),
+                  (
+                    "image_url",
+                    wire_object([
+                      (
+                        "url",
+                        Json::string("data:\{media_type};base64,\{data}"),
+                      ),
+                    ]),
+                  ),
+                ]),
+              )
+          }
+        }
+        obj["content"] = Json::array(parts)
+      } else {
+        obj["content"] = Json::string(content_text(content))
+      }
+    }
+    @posoco.Message::AssistantMessage(content~, tool_calls~, ..) => {
+      obj["role"] = Json::string("assistant")
+      let text = content_text(content)
+      obj["content"] = Json::string(text)
+      if tool_calls.length() > 0 {
+        let arr : Array[Json] = []
+        for tc in tool_calls {
+          arr.push(
+            wire_object([
+              ("id", Json::string(tc.call_id.to_string())),
+              ("type", Json::string("function")),
+              (
+                "function",
+                wire_object([
+                  ("name", Json::string(tc.name.to_string())),
+                  ("arguments", Json::string(tc.arguments.stringify())),
+                ]),
+              ),
+            ]),
+          )
+        }
+        obj["tool_calls"] = Json::array(arr)
+      }
+    }
+    @posoco.Message::ToolMessage(call_id~, outcome~, ..) => {
+      obj["role"] = Json::string("tool")
+      obj["tool_call_id"] = Json::string(call_id.to_string())
+      obj["content"] = Json::string(outcome_text(outcome))
+    }
+  }
+  Json::object(obj)
+}
+
+///|
+fn wire_object(pairs : Array[(String, Json)]) -> Json {
+  let m : Map[String, Json] = Map([])
+  for p in pairs {
+    m[p.0] = p.1
+  }
+  Json::object(m)
+}
+
+///|
+fn content_text(content : Array[@posoco.Content]) -> String {
+  let sb = StringBuilder()
+  for c in content {
+    match c {
+      @posoco.Content::Text(t) => {
+        sb.write_string(t)
+        sb.write_string("\n")
+      }
+      @posoco.Content::Image(..) => sb.write_string("[图像]")
+    }
+  }
+  sb.to_string()
+}
+
+///|
+fn content_has_image(content : Array[@posoco.Content]) -> Bool {
+  for c in content {
+    match c {
+      @posoco.Content::Image(..) => return true
+      _ => ()
+    }
+  }
+  false
+}
+
+///|
+/// ToolOutcome → 工具消息文本（图像附件以占位说明，图像本体走视觉通道）。
+fn outcome_text(o : @posoco.ToolOutcome) -> String {
+  match o {
+    @posoco.ToolOutcome::Success(content~, ..) => content
+    @posoco.ToolOutcome::SuccessWithAttachments(content~, ..) =>
+      content + "\n[渲染 PNG 已附于本条消息]"
+    @posoco.ToolOutcome::ToolReportedError(content~, ..) => content
+    @posoco.ToolOutcome::RuntimeFailure(message~, ..) => "运行时失败：\{message}"
+    @posoco.ToolOutcome::NotExecuted(reason~, ..) => "未执行：\{reason.to_string()}"
+  }
+}
+
+///|
+fn tool_defs_to_wire(tools : Array[@posoco.ToolDef]) -> Json {
+  let arr : Array[Json] = []
+  for t in tools {
+    arr.push(
+      wire_object([
+        ("type", Json::string("function")),
+        (
+          "function",
+          wire_object([
+            ("name", Json::string(t.name.to_string())),
+            ("description", Json::string(t.description)),
+            ("parameters", t.input_schema),
+          ]),
+        ),
+      ]),
+    )
+  }
+  Json::array(arr)
+}
+
+///|
+async fn PaintModel::openai_chat(
+  self : PaintModel,
+  messages : ArrayView[@posoco.Message],
+  tools : Array[@posoco.ToolDef],
+) -> @posoco.ModelCallResult raise @posoco.ModelError {
+  // 请求体（deepOrca 同款 OpenAI wire；非流式已足够演示工具循环）
+  let body_map : Map[String, Json] = Map([])
+  body_map["model"] = Json::string(self.cfg.model)
+  let msgs : Array[Json] = []
+  for m in messages {
+    msgs.push(message_to_wire(m))
+  }
+  body_map["messages"] = Json::array(msgs)
+  if tools.length() > 0 {
+    body_map["tools"] = tool_defs_to_wire(tools)
+    body_map["tool_choice"] = Json::string("auto")
+  }
+  let body = Json::object(body_map).stringify()
+  let url = self.cfg.base_url.trim(char_set="/").to_owned() + "/chat/completions"
+  let wrapped = js_http_post_json_wait(url, body, self.cfg.api_key) catch {
+    _ => raise @posoco.ModelError::Transport("网络请求失败（fetch 被拒/断网/CORS）")
+  }
+  let status = extract_json_number(wrapped, "http_status")
+  let text = strip_status_envelope(wrapped)
+  if status != 200 {
+    raise @posoco.ModelError::Transport(
+      "HTTP \{status}：\{shorten_str(text, 300)}",
+    )
+  }
+  parse_openai_response(text)
+}
+
+///|
+fn parse_openai_response(
+  text : String,
+) -> @posoco.ModelCallResult raise @posoco.ModelError {
+  let j = @json.parse(text) catch {
+    e => raise @posoco.ModelError::ResponseParse("响应 JSON 解析失败: \{e}")
+  }
+  // choices[0]
+  let choice : Json = match json_field(j, "choices") {
+    Some(Json::Array(arr)) =>
+      if arr.length() > 0 {
+        arr[0]
+      } else {
+        raise @posoco.ModelError::ResponseParse("choices 为空")
+      }
+    _ => raise @posoco.ModelError::ResponseParse("响应缺 choices：\{shorten_str(text, 200)}")
+  }
+  let msg = json_field(choice, "message")
+  // content
+  let content : Array[@posoco.Content] = match msg {
+    Some(m) =>
+      match json_field(m, "content") {
+        Some(Json::String(s)) => if s != "" { [@posoco.Content::Text(s)] } else { [] }
+        _ => []
+      }
+    None => []
+  }
+  // tool_calls
+  let calls : Array[@posoco.ToolCall] = []
+  let wire_calls : Array[Json] = match msg {
+    Some(m) =>
+      match json_field(m, "tool_calls") {
+        Some(Json::Array(arr)) => arr
+        _ => []
+      }
+    None => []
+  }
+  for tc in wire_calls {
+    let id = json_path_str(tc, ["id"])
+    let name = json_path_str(tc, ["function", "name"])
+    let args_str = json_path_str(tc, ["function", "arguments"])
+    if name != "" {
+      let args : Json = @json.parse(if args_str == "" { "{}" } else { args_str }) catch {
+        _ => Json::object(Map([]))
+      }
+      calls.push(
+        {
+          call_id: @posoco.CallId::unchecked(
+            if id == "" { "call_\{calls.length()}" } else { id },
+          ),
+          name: @posoco.ToolName::unchecked(name),
+          arguments: args,
+        },
+      )
+    }
+  }
+  let finish = match json_field(choice, "finish_reason") {
+    Some(Json::String("tool_calls")) => @posoco.FinishReason::ToolCalls
+    Some(Json::String("length")) => @posoco.FinishReason::Length
+    Some(Json::String("stop")) => @posoco.FinishReason::Stop
+    Some(Json::String(other)) => @posoco.FinishReason::Other(other)
+    _ => if calls.length() > 0 {
+      @posoco.FinishReason::ToolCalls
+    } else {
+      @posoco.FinishReason::Stop
+    }
+  }
+  let completion : @posoco.Completion = @posoco.Completion(
+    content=content,
+    tool_calls=calls,
+    reasoning=None,
+    finish_reason=finish,
+    usage=None,
+  )
+  { completion, processed_messages: [] }
+}
+
+///|
+/// 从 js_http_post_json_wait 的包装信封里取状态码。
+fn extract_json_number(text : String, key : String) -> Int {
+  try {
+    let j = @json.parse(text)
+    match json_field(j, key) {
+      Some(Json::Number(n, ..)) => n.to_int()
+      _ => 0
+    }
+  } catch {
+    _ => 0
+  }
+}
+
+///|
+/// 剥掉包装信封，取正文原文（body 字段是字符串化 JSON）。
+fn strip_status_envelope(text : String) -> String {
+  try {
+    let j = @json.parse(text)
+    match json_field(j, "body") {
+      Some(Json::String(s)) => s
+      _ => text
+    }
+  } catch {
+    _ => text
+  }
+}
+
+///|
+/// Json 对象取字段（.value() 已弃用，统一走模式匹配）。
+fn json_field(j : Json, key : String) -> Json? {
+  match j {
+    Json::Object(m) => m.get(key)
+    _ => None
+  }
+}
+
+///|
+fn json_path_str(j : Json, path : Array[String]) -> String {
+  let mut cur = j
+  for k in path {
+    match json_field(cur, k) {
+      Some(next) => cur = next
+      None => return ""
+    }
+  }
+  if cur is Json::String(s) {
+    s
+  } else {
+    ""
+  }
+}
+
+///|
+fn shorten_str(s : String, max : Int) -> String {
+  if s.length() <= max {
+    s
+  } else {
+    s[0:max].to_owned() + "…"
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mock 模型：离线脚本（逐轮真实工具调用，演示全过程）
+// ---------------------------------------------------------------------------
+
+///|
+fn PaintModel::mock_chat(
+  self : PaintModel,
+  messages : ArrayView[@posoco.Message],
+) -> @posoco.ModelCallResult {
+  // 取最后一条用户文本做脚本路由
+  let mut request = ""
+  for m in messages {
+    match m {
+      @posoco.Message::UserMessage(content~) =>
+        request = content_text(content)
+      _ => ()
+    }
+  }
+  let step = self.mock_step
+  self.mock_step = self.mock_step + 1
+  fn call(id : String, name : String, args : String) -> @posoco.ToolCall {
+    {
+      call_id: @posoco.CallId::unchecked(id),
+      name: @posoco.ToolName::unchecked(name),
+      arguments: @json.parse(args) catch {
+        _ => Json::object(Map([]))
+      },
+    }
+  }
+
+  fn say(text : String) -> @posoco.Completion {
+    @posoco.Completion(
+      content=[@posoco.Content::Text(text)],
+      tool_calls=[],
+      reasoning=None,
+      finish_reason=@posoco.FinishReason::Stop,
+      usage=None,
+    )
+  }
+
+  fn with_calls(
+    text : String,
+    calls : Array[@posoco.ToolCall],
+  ) -> @posoco.ModelCallResult {
+    {
+      completion: @posoco.Completion(
+        content=[@posoco.Content::Text(text)],
+        tool_calls=calls,
+        reasoning=None,
+        finish_reason=@posoco.FinishReason::ToolCalls,
+        usage=None,
+      ),
+      processed_messages: [],
+    }
+  }
+
+  let wants_badge = request.contains("徽章") || request.contains("圆")
+  let wants_cool = request.contains("冷") || request.contains("蓝")
+  // 脚本：徽章 = 3 工具轮；换色 = 2 轮；默认 = 2 轮
+  if wants_badge {
+    match step {
+      0 =>
+        return with_calls(
+          "好的，我来在右上角加一个渐变圆形徽章——先画圆。",
+          [
+            call(
+              "m1",
+              "add_ellipse",
+              "{\"id\":\"badge\",\"x\":500,\"y\":40,\"w\":110,\"h\":110,\"lgrad\":\"#FF7A45FF,#2E6FE8FF,0,0,1,1\",\"name\":\"badge\"}",
+            ),
+          ],
+        )
+      1 =>
+        return with_calls(
+          "圆形就位，加一圈描边让徽章更立体。",
+          [
+            call(
+              "m2",
+              "set_style",
+              "{\"id\":\"badge\",\"stroke\":\"#FFFFFFCC\",\"stroke_w\":4}",
+            ),
+          ],
+        )
+      2 =>
+        return with_calls(
+          "渲染看一眼效果。",
+          [call("m3", "render", "{\"w\":480}")],
+        )
+      _ => {
+        self.mock_step = 0
+        return {
+          completion: say(
+            "徽章完成：右上角渐变圆形 + 白色描边，已渲染确认。全过程共 3 次工具调用。",
+          ),
+          processed_messages: [],
+        }
+      }
+    }
+  } else if wants_cool {
+    match step {
+      0 =>
+        return with_calls(
+          "把主背景换成冷色调，先看当前图层。",
+          [call("m1", "list_layers", "{}")],
+        )
+      1 =>
+        return with_calls(
+          "背景是第一层，直接改填充色并渲染确认。",
+          [
+            call("m2", "set_style", "{\"id\":\"l1\",\"fill\":\"#16324FFF\"}"),
+            call("m3", "render", "{\"w\":480}"),
+          ],
+        )
+      _ => {
+        self.mock_step = 0
+        return {
+          completion: say("已把主背景切换为深冷蓝（#16324F），渲染确认完成。"),
+          processed_messages: [],
+        }
+      }
+    }
+  }
+  match step {
+    0 =>
+      return with_calls(
+        "我先看一下画布现状。",
+        [call("m1", "stats", "{}")],
+      )
+    1 =>
+      return with_calls(
+        "加一个点缀色块，然后渲染确认。",
+        [
+          call(
+            "m2",
+            "add_rect",
+            "{\"x\":40,\"y\":390,\"w\":180,\"h\":50,\"fill\":\"#33CC66FF\",\"radius\":10,\"name\":\"accent\"}",
+          ),
+          call("m3", "render", "{\"w\":480}"),
+        ],
+      )
+    _ => {
+      self.mock_step = 0
+      {
+        completion: say("完成：查看统计后添加了绿色点缀块并渲染确认。"),
+        processed_messages: [],
+      }
+    }
+  }
+}

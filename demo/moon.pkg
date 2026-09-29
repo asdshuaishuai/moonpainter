@@ -1,0 +1,18 @@
+// demo：AI 修图演示页（仅 js 后端——浏览器/Node）。
+// 引擎经 wasm SDK 实例驱动（wasm 包的 in 槽 + mp_exec_in，经典 wasm 零 import），
+// agent 循环用 colmugx/posoco（ModelPort/ToolProvider/Observer 三端口扩展）：
+// 人类提需求 → AI 逐轮思考并真实调用引擎工具 → Observer 把每一步上屏（全程可见）。
+// 本包同时是引擎能力的端到端验证器（demo_test：mock 模型 + 真实 wasm 实例）。
+
+import {
+  "moonpainter/core",
+  "colmugx/posoco",
+  "moonbitlang/async",
+  "moonbitlang/async/js_async",
+  "moonbitlang/core/json",
+  "moonbitlang/core/encoding/utf8",
+}
+
+pkgtype(kind: "executable")
+
+supported_targets = "+js"

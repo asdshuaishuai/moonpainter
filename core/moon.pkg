@@ -1,0 +1,9 @@
+// core：IR 文档模型 + canonical JSON + 指纹。
+// 依赖 base（SHA-256）与 codec（颜色 hex），不依赖 render/mpd/agent。
+
+import {
+  "moonpainter/base",
+  "moonpainter/codec",
+  "moonbitlang/core/encoding/utf8",
+  "moonbitlang/core/string",
+}

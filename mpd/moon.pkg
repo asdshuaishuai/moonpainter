@@ -1,0 +1,11 @@
+// mpd：.mpd 双层容器——ZIP 物理封装、manifest/元参数层、内容寻址资产、
+// 预览、拒绝式校验、确定性 pack。依赖 core（IR/JSON/指纹）、codec（ZIP/PNG）、
+// base（SHA-256）、render（预览）。文件落盘（含原子写）在 cli 层，本包纯字节进出。
+
+import {
+  "moonpainter/core",
+  "moonpainter/codec",
+  "moonpainter/base",
+  "moonpainter/render",
+  "moonbitlang/core/encoding/utf8",
+}

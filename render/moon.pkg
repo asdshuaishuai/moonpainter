@@ -1,0 +1,11 @@
+// render：软件光栅——形状覆盖（子采样 AA）、仿射变换、7 种混合、
+// 位图采样、取景渲染、pick、统计。依赖 core（IR）与 codec（RgbaBuf/PNG）。
+
+import {
+  "moonpainter/core",
+  "moonpainter/codec",
+}
+
+import {
+  "moonpainter/base",
+} for "test"

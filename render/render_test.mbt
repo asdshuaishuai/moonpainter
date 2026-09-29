@@ -1,0 +1,156 @@
+/// 渲染测试：混合公式数值验证（不依赖 golden）、确定性、取景、pick、stats。
+
+///|
+/// 4×4 画布：底红矩形 + 顶蓝矩形（可换混合模式）。
+fn blend_doc(mode : @core.BlendMode) -> @core.Document {
+  let doc = @core.new_document("u-blend", 4, 4)
+  let red = @core.default_layer("l1", "red", 0.0, 0.0, 4.0, 4.0)
+  let red2 = { ..red, fill: @core.Fill::Solid(0xFF0000FF), blend: @core.BlendMode::Normal }
+  let blue = @core.default_layer("l2", "blue", 0.0, 0.0, 4.0, 4.0)
+  let blue2 = {
+    ..blue,
+    fill: @core.Fill::Solid(0xFFFF0000),
+    blend: mode,
+  }
+  doc.layers.push(red2)
+  doc.layers.push(blue2)
+  doc
+}
+
+///|
+test "混合公式数值验证：multiply→黑 / screen→品红 / normal→蓝" {
+  let env = @render.RenderEnv::new()
+  // multiply: 红 × 蓝 = 黑
+  let m = @render.render_doc(blend_doc(@core.BlendMode::Multiply), env)
+  let pm = @codec.rgba_get(m, 2, 2)
+  assert_eq(pm, 0xFF000000)
+  // screen: 红 ∪ 蓝 = 品红 (R=255,G=0,B=255)
+  let s = @render.render_doc(blend_doc(@core.BlendMode::Screen), env)
+  let ps = @codec.rgba_get(s, 2, 2)
+  assert_eq(ps, 0xFFFF00FF)
+  // normal: 蓝盖红 = 蓝
+  let n = @render.render_doc(blend_doc(@core.BlendMode::Normal), env)
+  let pn = @codec.rgba_get(n, 2, 2)
+  assert_eq(pn, 0xFFFF0000)
+}
+
+///|
+test "半透明层透明度并入：50% 蓝盖白 → 127/255 蓝" {
+  let env = @render.RenderEnv::new()
+  let doc = @core.new_document("u-alpha", 4, 4)
+  let blue = @core.default_layer("l1", "blue", 0.0, 0.0, 4.0, 4.0)
+  let blue2 = {
+    ..blue,
+    fill: @core.Fill::Solid(0xFF0000FF),
+    opacity: 0.5,
+    blend: @core.BlendMode::Normal,
+  }
+  doc.layers.push(blue2)
+  let buf = @render.render_doc(doc, env)
+  let p = @codec.rgba_get(buf, 1, 1)
+  let a = (p >> 24) & 0xFF
+  let r = (p >> 16) & 0xFF // R 通道（0xAARRGGBB 打包，R 在次高字节）
+  let b = p & 0xFF
+  assert_eq(a, 255)
+  assert_eq(b, 255) // 蓝通道全量
+  // 白底 50% 蓝：R = G = 127~128（浮点取整容差 1）
+  assert_true(r >= 126 && r <= 129, msg="R=\{r}")
+}
+
+///|
+test "椭圆 + 渐变 + 旋转 golden 渲染确定性" {
+  let doc = @core.new_document("u-golden", 64, 64)
+  let bg = @core.default_layer("l1", "bg", 0.0, 0.0, 64.0, 64.0)
+  let bg2 = { ..bg, fill: @core.Fill::Solid(0x1B2A41FF) }
+  let orb = @core.default_layer("l2", "orb", 12.0, 12.0, 40.0, 40.0)
+  let orb2 = {
+    ..orb,
+    kind: @core.ShapeKind::Ellipse,
+    fill: @core.Fill::LinearGradient(0xFF7A45FF, 0x2E6FE8FF, 0.0, 0.0, 1.0, 1.0),
+  }
+  let bar = @core.default_layer("l3", "bar", 8.0, 52.0, 48.0, 4.0)
+  let bar2 = {
+    ..bar,
+    kind: @core.ShapeKind::Rect,
+    corner_radius: 2.0,
+    fill: @core.Fill::Solid(0x33CC66FF),
+    blend: @core.BlendMode::Screen,
+  }
+  let rot = @core.default_layer("l4", "tilt", 20.0, 4.0, 24.0, 8.0)
+  let rot2 = {
+    ..rot,
+    rotation_deg: 30.0,
+    fill: @core.Fill::NoFill,
+    stroke: { color: 0xFFFFFFAA, width: 2.0 },
+  }
+  doc.layers.push(bg2)
+  doc.layers.push(orb2)
+  doc.layers.push(bar2)
+  doc.layers.push(rot2)
+  let env = @render.RenderEnv::new()
+  let png1 = @codec.png_encode(@render.render_doc(doc, env))
+  let png2 = @codec.png_encode(@render.render_doc(doc, env))
+  assert_eq(png1.length(), png2.length())
+  let mut i = 0
+  while i < png1.length() {
+    assert_eq(png1[i].to_int(), png2[i].to_int())
+    i = i + 1
+  }
+  let hash = @base.sha256_hex(png1)
+  // golden：固定样例场景的渲染指纹（同引擎版本内必须稳定）
+  assert_eq(hash, "9caa1c1d52d6297e5a802733850c1252a981abbd2fc4458e27e765578e9e5195")
+}
+
+///|
+test "pick：上层命中返回上层 id，空白返回 None" {
+  let doc = @core.new_document("u-pick", 100, 100)
+  let a = @core.default_layer("l1", "a", 10.0, 10.0, 50.0, 50.0)
+  let a2 = { ..a, fill: @core.Fill::Solid(0xFF0000FF) }
+  let b = @core.default_layer("l2", "b", 30.0, 30.0, 50.0, 50.0)
+  let b2 = { ..b, fill: @core.Fill::Solid(0xFF00FF00) }
+  doc.layers.push(a2)
+  doc.layers.push(b2)
+  // (40,40) 同时命中两层 → 顶层 l2
+  assert_eq(@render.pick(doc, 40.0, 40.0), Some("l2"))
+  // (15,15) 只在 a 内
+  assert_eq(@render.pick(doc, 15.0, 15.0), Some("l1"))
+  // (5,5) 都不在
+  assert_true(@render.pick(doc, 5.0, 5.0) is None)
+}
+
+///|
+test "render_view：取景裁剪 + 缩放尺寸正确，角点像素与全图一致" {
+  let doc = @core.new_document("u-view", 100, 100)
+  let a = @core.default_layer("l1", "a", 50.0, 0.0, 50.0, 100.0)
+  let a2 = { ..a, fill: @core.Fill::Solid(0xFF0000FF) } // 右半蓝，左半白
+  doc.layers.push(a2)
+  let env = @render.RenderEnv::new()
+  let view = match @render.render_view(doc, env, 0.5, 0.0, 1.0, 1.0, 20) {
+    Ok(v) => v
+    Err(e) => abort("render_view 失败: \{e}")
+  }
+  assert_eq(view.width, 20)
+  // 视口区域是 50×100（竖长），按宽度 20 等比 → 高 40
+  assert_eq(view.height, 40)
+  // 右半取景：全部应为蓝
+  assert_eq(@codec.rgba_get(view, 10, 10), 0xFF0000FF)
+  // 非法 viewport 拒绝
+  assert_true(
+    match @render.render_view(doc, env, 0.9, 0.0, 0.1, 1.0, 10) {
+      Err(_) => true
+      Ok(_) => false
+    },
+  )
+}
+
+///|
+test "stats：直方图 JSON 形态与全覆盖计数" {
+  let doc = @core.new_document("u-stats", 8, 8)
+  let a = @core.default_layer("l1", "a", 0.0, 0.0, 8.0, 8.0)
+  let a2 = { ..a, fill: @core.Fill::Solid(0xFF336699) }
+  doc.layers.push(a2)
+  let env = @render.RenderEnv::new()
+  let s = @render.stats(@render.render_doc(doc, env))
+  assert_true(s.has_prefix("{\"total\":64,\"opaque_px\":64"))
+  assert_true(s.has_suffix("]}"))
+}

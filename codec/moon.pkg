@@ -1,0 +1,7 @@
+// codec：字节格式基座 —— ZIP 容器读写、DEFLATE 压缩/inflate 解压、PNG 编解码。
+// zip/deflate/inflate 移植自 deepOffice/ooxml（自有 MIT），PNG 编码移植自
+// moonviz/playground（自有 MIT）；PNG 解码为本仓库新写。
+
+import {
+  "moonbitlang/core/encoding/utf8",
+}

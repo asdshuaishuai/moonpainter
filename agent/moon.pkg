@@ -1,0 +1,16 @@
+// agent：会话与工具 API——工具能力字典（单一事实源）、行协议分发、
+// vision 能力闸、undo/redo 快照栈、P0–P2 谓词。依赖 core/render/mpd/codec/base。
+
+import {
+  "moonpainter/core",
+  "moonpainter/render",
+  "moonpainter/mpd",
+  "moonpainter/codec",
+  "moonpainter/base",
+  "moonbitlang/core/encoding/base64",
+  "moonbitlang/core/string",
+}
+
+import {
+  "moonbitlang/core/encoding/base64",
+} for "test"

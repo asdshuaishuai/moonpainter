@@ -1,0 +1,5 @@
+// base：SHA-256 与基础字节工具。依赖图最底层，零依赖（测试用 utf8）。
+
+import {
+  "moonbitlang/core/encoding/utf8",
+} for "test"

@@ -1,0 +1,46 @@
+// wasm：引擎的 wasm SDK 边界（对齐 moonviz/wasm 家族契约）。
+// 纯 WASM MVP（零 import、宿主中立）：输入走 in_ 分块槽（UTF-8 ≤4 字节小端块），
+// 输出为引擎分配的字符串指针（[len@ptr-4][UTF-16LE@ptr]，宿主 engReadStr 同款解码）。
+// 会话为实例内单全局会话：mp_reset 重开，mp_exec_in 执行槽内命令行。
+
+import {
+  "moonpainter/core",
+  "moonpainter/agent",
+  "moonbitlang/core/encoding/utf8",
+}
+
+options(
+  link: {
+    "wasm": {
+      "export-memory-name": "memory",
+      "exports": [
+        "mp_version",
+        "mp_reset",
+        "mp_open",
+        "mp_close",
+        "mp_exec_h",
+        "in_reset",
+        "in_push",
+        "in_len",
+        "mp_exec_in",
+      ],
+    },
+    "wasm-gc": {
+      "exports": [
+        "mp_version",
+        "mp_reset",
+        "mp_open",
+        "mp_close",
+        "mp_exec_h",
+        "in_reset",
+        "in_push",
+        "in_len",
+        "mp_exec_in",
+      ],
+    },
+  },
+)
+
+import {
+  "moonbitlang/core/encoding/utf8",
+} for "test"

@@ -1,0 +1,17 @@
+import {
+  "moonpainter/core",
+  "moonpainter/agent",
+  "moonpainter/mpd",
+  "moonbitlang/core/encoding/utf8",
+  "moonbitlang/core/env",
+}
+
+pkgtype(kind: "executable")
+
+options(
+  targets: {
+    "main.mbt": [ "native" ],
+    "main_stub.mbt": [ "not", "native" ],
+    "cli_test.mbt": [ "native" ],
+  },
+)
