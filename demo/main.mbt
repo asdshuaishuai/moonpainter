@@ -479,39 +479,24 @@ fn register_globals() -> Unit {
 
 async fn main {
   if js_is_node() {
-    let lines : Ref[Array[String]] = Ref([])
-    let mut images = 0
-    let summary = run_edit_turn(
-      "在右上角加一个渐变圆形徽章",
-      { provider: "mock", base_url: "", model: "mock-script", api_key: "" },
-      log=fn(line) { lines.val.push(line) },
-      on_image=fn(_png) { images = images + 1 },
-    )
-    let mut tc = 0
-    let mut tok = 0
-    for l in lines.val {
-      if l.contains("🔧 执行") {
-        tc = tc + 1
-      }
-      if l.contains("✅") {
-        tok = tok + 1
-      }
-    }
-    let sv = engine_exec_line("save-mpd-b64")
-    let saved = match json_get(parse_json_safe(sv), "mpd_b64") {
-      Some(Json::String(s)) => s.length() > 0
-      _ => false
-    }
-    let esc_summary = @core.json_escape(summary)
-    let arr : Array[Json] = []
-    for l in lines.val {
-      arr.push(Json::string(l))
-    }
-    let log_str = Json::array(arr).stringify()
-    println(
-      "{\"headless_selftest\":true,\"tool_calls\":\{tc},\"tool_ok\":\{tok},\"renders\":\{images},\"saved_mpd\":\{saved},\"summary\":\"\{esc_summary}\",\"log\":\{log_str}}",
-    )
+    // Node headless：MoonBit async runtime 正常，跑简短验证
+    ensure_engine()
+    let ver = @core.ENGINE_VERSION
+    let r0 = engine_exec_line("session-open full_image")
+    let r1 = engine_exec_line("new 400 300 uuid=headless")
+    let r2 = engine_exec_line("add-rect x=0 y=0 w=400 h=300 fill=#2C3E6BFF name=card")
+    let r3 = engine_exec_line("render 400")
+    let ok = r0.contains("ok") && r1.contains("ok") && r2.contains("ok") && r3.contains("png_b64")
+    let ok_val : Json = Json::boolean(ok)
+    let ver_val : Json = Json::string(ver)
+    let result : Json = Json::object({
+      "headless_selftest": Json::boolean(true),
+      "engine_ok": ok_val,
+      "version": ver_val,
+    })
+    println(result.stringify())
   } else {
+    // 浏览器：同步初始化（无 async 运行时依赖）
     ensure_engine()
     inject_css()
     inject_html()

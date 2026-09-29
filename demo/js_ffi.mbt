@@ -122,8 +122,12 @@ extern "js" fn js_load_wasm_browser(url : String) -> WasmEngine =
   #| (url) => {
   #|   const xhr = new XMLHttpRequest();
   #|   xhr.open('GET', url, false);
+  #|   xhr.overrideMimeType('text/plain; charset=x-user-defined');
   #|   xhr.send();
-  #|   const inst = new WebAssembly.Instance(new WebAssembly.Module(xhr.response), {});
+  #|   const text = xhr.responseText;
+  #|   const bytes = new Uint8Array(text.length);
+  #|   for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i) & 0xff;
+  #|   const inst = new WebAssembly.Instance(new WebAssembly.Module(bytes), {});
   #|   return inst.exports;
   #| }
 
