@@ -6,6 +6,37 @@
 /// Promise 桥一律走 moonbitlang/async/js_async（Promise::wait）。
 
 // ---------------------------------------------------------------------------
+// JSON 安全解析 + 字段访问（builtin Json API）
+// ---------------------------------------------------------------------------
+
+///|
+/// JSON 安全解析（失败返回 Null 值——用 Json::null() 工厂）。
+pub fn parse_json_safe(text : String) -> Json {
+  @json.parse(text) catch { _ => Json::null() }
+}
+
+///|
+pub fn json_has_ok(j : Json) -> Bool {
+  match j.value("ok") {
+    Some(v) => v is Json::True
+    _ => false
+  }
+}
+
+///|
+pub fn json_get_str(j : Json, key : String) -> String {
+  match j.value(key) {
+    Some(Json::String(s)) => s
+    _ => ""
+  }
+}
+
+///|
+pub fn json_get(j : Json, key : String) -> Json? {
+  j.value(key)
+}
+
+// ---------------------------------------------------------------------------
 // JS 互操作底座
 // ---------------------------------------------------------------------------
 
