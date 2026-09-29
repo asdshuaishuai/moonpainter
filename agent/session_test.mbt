@@ -214,3 +214,109 @@ test "inspect：元参数层实时视图（manifest/design/params/edits）" {
   let r2 = run(s2, "inspect")
   assert_true(r2.has_prefix("{\"error\":\"尚未创建文档"), msg=r2)
 }
+
+///|
+test "文本层：add-text/set-text 命令 + 渲染像素可检出" {
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 200 100")
+  let r = run(s, "add-text x=10 y=40 text=HELLO font_size=28 id=title")
+  assert_true(r.contains("\"op\":\"add-text\""), msg=r)
+  // 点阵字形渲染：画布上应有黑色像素（文本 H..O 均为黑）
+  let env = @render.RenderEnv::new()
+  let buf = @render.render_doc(unwrap_doc(s), env)
+  let mut dark = 0
+  let total = buf.width * buf.height
+  let mut i = 0
+  while i < total {
+    let p = buf.pixels[i]
+    let lum = ((p >> 16) & 0xFF)
+    if lum < 128 && ((p >> 24) & 0xFF) > 0 {
+      dark = dark + 1
+    }
+    i = i + 1
+  }
+  assert_true(dark > 0, msg="文本应渲染出非背景像素")
+  // set-text 修改内容 → 指纹变化
+  let f1 = run(s, "fingerprint")
+  let r2 = run(s, "set-text title WORLD")
+  assert_true(r2.contains("\"op\":\"set-text\""), msg=r2)
+  let f2 = run(s, "fingerprint")
+  assert_true(f1 != f2)
+  // undo → 回到 HELLO
+  let _ = run(s, "undo")
+  let q = run(s, "query-layer title")
+  assert_true(q.contains("HELLO"), msg=q)
+}
+
+///|
+test "调整层：add-adjust 作用于下层合成 + 非法算子拒绝" {
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 8 8")
+  let _ = run(s, "add-rect x=0 y=0 w=8 h=8 fill=#FF0000 id=red")
+  // 反相调整层置于栈顶 → 红变青
+  let r = run(s, "add-adjust op=invert id=inv")
+  assert_true(r.contains("\"op\":\"add-adjust\""), msg=r)
+  let env = @render.RenderEnv::new()
+  let buf = @render.render_doc(unwrap_doc(s), env)
+  let p = @codec.rgba_get(buf, 4, 4)
+  // 红 FF0000 反相 → 00FFFF
+  assert_eq(p & 0x00FFFFFF, 0x00FFFF)
+  // 亮度 +0.5：中灰 → 灰度 ~191
+  let s2 = @agent.Session::new()
+  let _ = run(s2, "session-open full_image")
+  let _ = run(s2, "new 4 4")
+  let _ = run(s2, "add-rect x=0 y=0 w=4 h=4 fill=#808080")
+  let _ = run(s2, "add-adjust op=brightness value=0.25")
+  let buf2 = @render.render_doc(unwrap_doc(s2), env)
+  let p2 = @codec.rgba_get(buf2, 2, 2)
+  let g = (p2 >> 8) & 0xFF
+  assert_true(g >= 180 && g <= 200, msg="亮度后灰度=\{g}")
+  // 非法算子拒绝
+  let bad = run(s2, "add-adjust op=vibrance")
+  assert_true(bad.has_prefix("{\"error\":\"未知调整算子"), msg=bad)
+}
+
+///|
+test "蒙版：rect 蒙版裁剪 + invert 反选 + remove-mask 还原" {
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 20 20")
+  // 白底 + 全画布红层 + 蒙版只留左半（蒙版外透出白底）
+  let _ = run(s, "add-rect x=0 y=0 w=20 h=20 fill=#FFFFFFFF id=bg")
+  let _ = run(s, "add-rect x=0 y=0 w=20 h=20 fill=#FF0000 id=r")
+  let env = @render.RenderEnv::new()
+  let before = @render.render_doc(unwrap_doc(s), env)
+  assert_eq(@codec.rgba_get(before, 5, 10), 0xFFFF0000)
+  assert_eq(@codec.rgba_get(before, 15, 10), 0xFFFF0000)
+  let rm = run(s, "add-mask r kind=rect x=0 y=0 w=10 h=20")
+  assert_true(rm.contains("\"op\":\"add-mask\""), msg=rm)
+  let masked = @render.render_doc(unwrap_doc(s), env)
+  assert_eq(@codec.rgba_get(masked, 5, 10), 0xFFFF0000) // 蒙版内保留
+  assert_eq(@codec.rgba_get(masked, 15, 10), 0xFFFFFFFF) // 蒙版外变白底
+  // invert：反选 → 右半保留
+  let _ = run(s, "set-mask r invert=true")
+  let inverted = @render.render_doc(unwrap_doc(s), env)
+  assert_eq(@codec.rgba_get(inverted, 15, 10), 0xFFFF0000)
+  assert_eq(@codec.rgba_get(inverted, 5, 10), 0xFFFFFFFF) // 反选后左半透出白底
+  // 椭圆蒙版 + remove 还原
+  let _ = run(s, "remove-mask r")
+  let m2 = run(s, "add-mask r kind=ellipse x=0 y=0 w=20 h=20")
+  assert_true(m2.contains("\"op\":\"add-mask\""), msg=m2)
+  let ell = @render.render_doc(unwrap_doc(s), env)
+  assert_eq(@codec.rgba_get(ell, 19, 0), 0xFFFFFFFF) // 椭圆外角点被裁
+  let _ = run(s, "remove-mask r")
+  let restored = @render.render_doc(unwrap_doc(s), env)
+  assert_eq(@codec.rgba_get(restored, 5, 10), 0xFFFF0000)
+  assert_eq(@codec.rgba_get(restored, 15, 10), 0xFFFF0000)
+}
+
+///|
+/// 测试辅助：提取会话当前文档（供直接走 render 驱动断言像素）。
+fn unwrap_doc(s : @agent.Session) -> @core.Document {
+  match s.doc {
+    Some(d) => d
+    None => @core.new_document("empty", 1, 1)
+  }
+}

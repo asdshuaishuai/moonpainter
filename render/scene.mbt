@@ -75,6 +75,8 @@ fn inside_fill(l : @core.Layer, lx : Double, ly : Double) -> Bool {
     @core.ShapeKind::Line => false // 线段无填充面
     @core.ShapeKind::Image => lx >= 0.0 && lx < l.w && ly >= 0.0 && ly < l.h
     @core.ShapeKind::Group => false
+    @core.ShapeKind::Text => lx >= 0.0 && lx < l.w && ly >= 0.0 && ly < l.h
+    @core.ShapeKind::Adjust => false
   }
 }
 
@@ -270,6 +272,15 @@ fn paint_layer(
       // 组自身无面
       return
     }
+    @core.ShapeKind::Adjust => {
+      // 调整层：对当前缓冲（其下全部可见层的合成结果）就地施加算子
+      apply_adjust(l.adjust, buf)
+      return
+    }
+    @core.ShapeKind::Text => {
+      paint_text(l, buf, env, eff_opacity)
+      return
+    }
     _ => ()
   }
   // 保守包围盒（旋转 45° 时取对角线长）
@@ -335,6 +346,13 @@ fn paint_layer(
         let src_alpha = ((cover & 0xFF) << 24)
         let rgb = color & 0x00FFFFFF
         let mut src = src_alpha | rgb
+        // 蒙版因子先于合成融入源 alpha（蒙版外→源透明→下层透出）
+        let mf = mask_cover_at(l, px.to_double(), py.to_double())
+        if mf < 1.0 {
+          let ma = ((src >> 24) & 0xFF).to_double() / 255.0 * mf
+          let ma255 = (ma * 255.0 + 0.5).to_int()
+          src = (ma255 << 24) | rgb
+        }
         // 层透明度并入源 alpha
         let a = ((src >> 24) & 0xFF).to_double() / 255.0 * eff_opacity
         let a255 = (a * 255.0 + 0.5).to_int()
@@ -345,6 +363,65 @@ fn paint_layer(
       px = px + 1
     }
     py = py + 1
+  }
+}
+
+///|
+/// 调整算子：就地施加于缓冲（调整层语义=作用于其下全部可见层的合成）。
+fn apply_adjust(a : @core.Adjust?, buf : @codec.RgbaBuf) -> Unit {
+  let adj = match a {
+    Some(x) => x
+    None => return
+  }
+  let total = buf.width * buf.height
+  let mut i = 0
+  while i < total {
+    let p = buf.pixels[i]
+    let r = (p >> 16) & 0xFF
+    let g = (p >> 8) & 0xFF
+    let b = p & 0xFF
+    let pair : (Int, Int, Int) = match adj.op {
+      @core.AdjustOp::Invert => (255 - r, 255 - g, 255 - b)
+      @core.AdjustOp::Grayscale => {
+        let lum = (r * 30 + g * 59 + b * 11) / 100
+        (lum, lum, lum)
+      }
+      @core.AdjustOp::Brightness => {
+        let d = (adj.value * 255.0).to_int()
+        (clamp8(r + d), clamp8(g + d), clamp8(b + d))
+      }
+      @core.AdjustOp::Contrast => {
+        // value: -1..1 → 系数 0..2（0=原样）
+        let k = adj.value + 1.0
+        (
+          clamp8(((r.to_double() - 128.0) * k + 128.0 + 0.5).to_int()),
+          clamp8(((g.to_double() - 128.0) * k + 128.0 + 0.5).to_int()),
+          clamp8(((b.to_double() - 128.0) * k + 128.0 + 0.5).to_int()),
+        )
+      }
+      @core.AdjustOp::Saturation => {
+        let lum = (r * 30 + g * 59 + b * 11) / 100
+        let k = if adj.value < 0.0 { 1.0 + adj.value } else { 1.0 }
+        (
+          clamp8((lum.to_double() + (r.to_double() - lum.to_double()) * k + 0.5).to_int()),
+          clamp8((lum.to_double() + (g.to_double() - lum.to_double()) * k + 0.5).to_int()),
+          clamp8((lum.to_double() + (b.to_double() - lum.to_double()) * k + 0.5).to_int()),
+        )
+      }
+    }
+    buf.pixels[i] = (p & 0xFF000000) + (pair.0 << 16) + (pair.1 << 8) + pair.2
+    i = i + 1
+  }
+}
+
+///|
+fn clamp8(v : Int) -> Int {
+  if v < 0 {
+    0
+  } else if v > 255 {
+    255
+  } else {
+    v
   }
 }
 
@@ -737,4 +814,211 @@ fn sin_series(x2 : Double) -> Double {
     i = i - 1
   }
   acc
+}
+
+// ---------------------------------------------------------------------------
+// 文本层：5x7 点阵字形（审计已知边界：ASCII 真字形，非 ASCII 盒形占位）
+// ---------------------------------------------------------------------------
+
+///|
+/// 逻辑右移（本地实现；render 不依赖 base）。
+fn lsr(x : Int, n : Int) -> Int {
+  if n <= 0 {
+    x
+  } else if n >= 32 {
+    0
+  } else {
+    (x >> n) & ((1 << (32 - n)) - 1)
+  }
+}
+
+///|
+/// 5x7 字形，按列编码（5 列 × 7 位，bit=该列自上而下）。覆盖 ASCII 32..126。
+fn glyph_columns(ch : Char) -> Array[Int]? {
+  let n = ch.to_int()
+  if n < 32 || n > 126 {
+    return None
+  }
+  let table : Array[(Int, Array[Int])] = [
+    (32, [0, 0, 0, 0, 0]), // space
+    (33, [4, 4, 4, 0, 4]), // !
+    (34, [10, 10, 0, 0, 0]), // "
+    (35, [10, 31, 10, 31, 10]), // #
+    (36, [4, 15, 20, 15, 5]), // $
+    (37, [25, 2, 4, 8, 19]), // %
+    (38, [8, 20, 8, 21, 14]), // &
+    (39, [4, 4, 0, 0, 0]), // '
+    (40, [2, 4, 4, 4, 2]), // (
+    (41, [4, 2, 2, 2, 4]), // )
+    (42, [0, 4, 21, 4, 0]), // *
+    (43, [0, 4, 14, 4, 0]), // +
+    (44, [0, 0, 0, 4, 4]), // ,
+    (45, [0, 0, 14, 0, 0]), // -
+    (46, [0, 0, 0, 12, 12]), // .
+    (47, [1, 2, 4, 8, 16]), // /
+    (48, [14, 17, 19, 21, 13]), // 0
+    (49, [4, 12, 4, 4, 14]), // 1
+    (50, [14, 17, 1, 2, 31]), // 2
+    (51, [31, 2, 4, 2, 31]), // 3
+    (52, [2, 6, 10, 31, 2]), // 4
+    (53, [31, 16, 14, 1, 14]), // 5
+    (54, [6, 8, 14, 17, 14]), // 6
+    (55, [31, 1, 2, 4, 8]), // 7
+    (56, [14, 17, 14, 17, 14]), // 8
+    (57, [14, 17, 15, 1, 14]), // 9
+    (58, [0, 12, 12, 0, 0]), // :
+    (59, [0, 4, 4, 0, 4]), // ;
+    (60, [2, 4, 8, 4, 2]), // <
+    (61, [0, 14, 0, 14, 0]), // =
+    (62, [8, 4, 2, 4, 8]), // >
+    (63, [14, 1, 6, 0, 4]), // ?
+    (64, [14, 17, 23, 21, 14]), // @
+    (65, [14, 17, 31, 17, 17]), // A
+    (66, [30, 17, 30, 17, 30]), // B
+    (67, [14, 17, 16, 17, 14]), // C
+    (68, [28, 18, 17, 18, 28]), // D
+    (69, [31, 16, 30, 16, 31]), // E
+    (70, [31, 16, 30, 16, 16]), // F
+    (71, [14, 17, 23, 17, 15]), // G
+    (72, [17, 17, 31, 17, 17]), // H
+    (73, [14, 4, 4, 4, 14]), // I
+    (74, [1, 1, 1, 17, 14]), // J
+    (75, [17, 10, 4, 10, 17]), // K
+    (76, [16, 16, 16, 16, 31]), // L
+    (77, [17, 27, 21, 17, 17]), // M
+    (78, [17, 25, 21, 19, 17]), // N
+    (79, [14, 17, 17, 17, 14]), // O
+    (80, [30, 17, 30, 16, 16]), // P
+    (81, [14, 17, 21, 18, 13]), // Q
+    (82, [30, 17, 30, 10, 17]), // R
+    (83, [15, 16, 14, 1, 30]), // S
+    (84, [31, 4, 4, 4, 4]), // T
+    (85, [17, 17, 17, 17, 14]), // U
+    (86, [17, 17, 10, 4, 4]), // V
+    (87, [17, 21, 21, 21, 10]), // W
+    (88, [17, 10, 4, 10, 17]), // X
+    (89, [17, 10, 4, 4, 4]), // Y
+    (90, [31, 2, 4, 8, 31]), // Z
+    (91, [14, 8, 8, 8, 14]), // [
+    (92, [16, 8, 4, 2, 1]), // backslash
+    (93, [14, 2, 2, 2, 14]), // ]
+    (94, [4, 10, 0, 0, 0]), // ^
+    (95, [0, 0, 0, 0, 31]), // _
+    (96, [4, 2, 0, 0, 0]), // `
+    (97, [0, 14, 1, 15, 15]), // a
+    (98, [16, 16, 14, 17, 14]), // b
+    (99, [0, 14, 16, 16, 14]), // c
+    (100, [1, 1, 15, 17, 15]), // d
+    (101, [0, 14, 17, 30, 16]), // e
+    (102, [6, 8, 30, 8, 8]), // f
+    (103, [15, 17, 15, 1, 14]), // g
+    (104, [16, 16, 14, 17, 17]), // h
+    (105, [4, 0, 4, 4, 4]), // i
+    (106, [1, 0, 1, 17, 14]), // j
+    (107, [16, 10, 4, 10, 16]), // k
+    (108, [14, 4, 4, 4, 4]), // l
+    (109, [0, 26, 21, 21, 21]), // m
+    (110, [0, 14, 17, 17, 17]), // n
+    (111, [0, 14, 17, 17, 14]), // o
+    (112, [14, 17, 14, 16, 16]), // p
+    (113, [15, 17, 15, 1, 1]), // q
+    (114, [0, 14, 16, 16, 16]), // r
+    (115, [0, 15, 16, 14, 1]), // s
+    (116, [8, 30, 8, 8, 6]), // t
+    (117, [0, 17, 17, 19, 13]), // u
+    (118, [0, 17, 10, 10, 4]), // v
+    (119, [0, 17, 21, 21, 10]), // w
+    (120, [0, 10, 4, 10, 0]), // x
+    (121, [17, 15, 1, 14, 0]), // y
+    (122, [0, 31, 2, 4, 31]), // z
+    (123, [2, 4, 8, 4, 2]), // {
+    (124, [4, 4, 4, 4, 4]), // |
+    (125, [8, 4, 2, 4, 8]), // }
+    (126, [5, 20, 0, 0, 0]), // ~
+  ]
+  for pair in table {
+    if pair.0 == n {
+      return Some(pair.1)
+    }
+  }
+  None
+}
+
+///|
+/// 文本层绘制：字形按 font_size/7 缩放，advance = 6 * scale。
+fn paint_text(
+  l : @core.Layer,
+  buf : @codec.RgbaBuf,
+  env : RenderEnv,
+  eff_opacity : Double,
+) -> Unit {
+  let scale = (l.font_size / 7.0).to_int()
+  let sc = if scale < 1 { 1 } else { scale }
+  let advance = 6 * sc
+  let color = fill_color_at(l.fill, 0.0, 0.0, l.w, l.h)
+  let px0 = l.x.to_int()
+  let py0 = l.y.to_int()
+  let mut cx = 0
+  for ch in l.text.iter() {
+    let glyph : Array[Int] = match glyph_columns(ch) {
+      Some(g) => g
+      None => [31, 21, 21, 21, 31] // 非 ASCII：盒形占位（诚实边界）
+    }
+    // 每列 5 bit 自上而下
+    for col in 0..<5 {
+      let bits = glyph[col]
+      for row in 0..<7 {
+        if (lsr(bits, 6 - row) & 1) == 1 {
+          let mut sy = 0
+          while sy < sc {
+            let mut sx = 0
+            while sx < sc {
+              let px = px0 + cx + col * sc + sx
+              let py = py0 + row * sc + sy
+              let mf = mask_cover_at(l, px.to_double(), py.to_double())
+              let a = eff_opacity * mf
+              let a255 = (a * 255.0 + 0.5).to_int()
+              let src = (a255 << 24) + (color & 0x00FFFFFF)
+              let dst = @codec.rgba_get(buf, px, py)
+              @codec.rgba_set(buf, px, py, composite_pixel(dst, src, @core.BlendMode::Normal))
+              sx = sx + 1
+            }
+            sy = sy + 1
+          }
+        }
+      }
+    }
+    cx = cx + advance
+  }
+  let _ = env
+  let _ = eff_opacity
+}
+
+///|
+/// 蒙版覆盖度：画布坐标 (px,py) 在层蒙版内=1 外=0（invert 反选）。
+fn mask_cover_at(l : @core.Layer, px : Double, py : Double) -> Double {
+  let mask = match l.mask {
+    Some(m) => m
+    None => return 1.0
+  }
+  let dx = px - mask.x
+  let dy = py - mask.y
+  let inside = match mask.kind {
+    @core.ShapeKind::Ellipse => {
+      if mask.w <= 0.0 || mask.h <= 0.0 {
+        false
+      } else {
+        let nx = dx / mask.w * 2.0 - 1.0
+        let ny = dy / mask.h * 2.0 - 1.0
+        nx * nx + ny * ny <= 1.0
+      }
+    }
+    _ => dx >= 0.0 && dy >= 0.0 && dx < mask.w && dy < mask.h
+  }
+  let cover = if inside { 1.0 } else { 0.0 }
+  if mask.invert {
+    1.0 - cover
+  } else {
+    cover
+  }
 }

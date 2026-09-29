@@ -124,6 +124,12 @@ pub fn exec(s : Session, line : String) -> String {
     "reorder" => cmd_reorder(s, tokens)
     "group" => cmd_group(s, tokens)
     "ungroup" => cmd_ungroup(s, tokens)
+    "add-text" => cmd_add_text(s, tokens)
+    "set-text" => cmd_set_text(s, tokens)
+    "add-adjust" => cmd_add_adjust(s, tokens)
+    "add-mask" => cmd_add_mask(s, tokens)
+    "set-mask" => cmd_set_mask(s, tokens)
+    "remove-mask" => cmd_remove_mask(s, tokens)
     "list-params" => cmd_list_params(s)
     "set-param" => cmd_set_param(s, tokens)
     "render" => cmd_render(s, tokens)
@@ -260,6 +266,10 @@ fn layer_summary(l : @core.Layer) -> String {
   sb.write_string(",\"opacity\":\{@core.fmt_num(l.opacity)}")
   sb.write_string(",\"blend\":\"\{blend_str(l.blend)}\"")
   sb.write_string(",\"rot\":\{@core.fmt_num(l.rotation_deg)}")
+  if l.text != "" {
+    sb.write_string(",\"text\":\"\{@core.json_escape(l.text)}\"")
+    sb.write_string(",\"font_size\":\{@core.fmt_num(l.font_size)}")
+  }
   if l.asset_hash != "" {
     sb.write_string(",\"asset\":\"\{l.asset_hash}\"")
   }
@@ -302,6 +312,8 @@ fn kind_str(k : @core.ShapeKind) -> String {
     @core.ShapeKind::Polygon => "polygon"
     @core.ShapeKind::Image => "image"
     @core.ShapeKind::Group => "group"
+    @core.ShapeKind::Text => "text"
+    @core.ShapeKind::Adjust => "adjust"
   }
 }
 
@@ -585,6 +597,225 @@ fn cmd_flip(s : Session, tokens : Array[String]) -> String {
   snapshot(s, doc, "flip \{id} \{tokens[2]}")
   let _ = update_layer(doc.layers, id, fn(l) { { ..l, flip_h: fh, flip_v: fv } })
   "{\"ok\":true,\"op\":\"flip\",\"id\":\"\{id}\",\"flip_h\":\{fh},\"flip_v\":\{fv},\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+}
+
+///|
+/// 解析 k=v 中的调整算子（op/value）。
+fn parse_adjust(m : Map[String, String]) -> Result[@core.Adjust, String] {
+  let op = match m.get("op") {
+    Some(v) => v
+    None => return Err("adjust 需要 op=")
+  }
+  let value = match to_d(m.get("value").unwrap_or("0")) {
+    Some(v) => v
+    None => return Err("value=\{m.get("value").unwrap_or("0")} 不是数字")
+  }
+  match op {
+    "brightness" => Ok({ op: @core.AdjustOp::Brightness, value })
+    "contrast" => Ok({ op: @core.AdjustOp::Contrast, value })
+    "saturation" => Ok({ op: @core.AdjustOp::Saturation, value })
+    "invert" => Ok({ op: @core.AdjustOp::Invert, value: 0.0 })
+    "grayscale" => Ok({ op: @core.AdjustOp::Grayscale, value: 0.0 })
+    _ => Err("未知调整算子 \{op}（brightness/contrast/saturation/invert/grayscale）")
+  }
+}
+
+///|
+fn cmd_add_text(s : Session, tokens : Array[String]) -> String {
+  let doc = match require_doc(s) {
+    Ok(d) => d
+    Err(e) => return err(e)
+  }
+  let m = kv_args(tokens, 1)
+  let text = match m.get("text") {
+    Some(t) => t
+    None => return err("add-text 需要 text=<内容>（下划线代替空格）")
+  }
+  let id = match m.get("id") {
+    Some(i) => i
+    None => @core.alloc_layer_id(doc)
+  }
+  if @core.find_layer(doc.layers, id) is Some(_) {
+    return err("层 id 已存在：\{id}")
+  }
+  let w = match to_d(m.get("w").unwrap_or("0")) {
+    Some(v) => v
+    None => 0.0
+  }
+  let h = match to_d(m.get("h").unwrap_or("0")) {
+    Some(v) => v
+    None => 0.0
+  }
+  let x = match to_d(m.get("x").unwrap_or("0")) {
+    Some(v) => v
+    None => 0.0
+  }
+  let y = match to_d(m.get("y").unwrap_or("0")) {
+    Some(v) => v
+    None => 0.0
+  }
+  // w ≤ 0 时按 6px/字符、font_size 高度估算占位盒
+  let fs = match to_d(m.get("font_size").unwrap_or("16")) {
+    Some(v) => v
+    None => 16.0
+  }
+  let bw = if w > 0.0 { w } else { text.length().to_double() * fs * 6.0 / 7.0 }
+  let bh = if h > 0.0 { h } else { fs }
+  let layer = match build_shape_layer(id, @core.ShapeKind::Text, m) {
+    Ok(l) => l
+    Err(e) => return err(e)
+  }
+  let l2 = {
+    ..layer,
+    x: if x != 0.0 { x } else { layer.x },
+    y: if y != 0.0 { y } else { layer.y },
+    w: bw,
+    h: bh,
+    text,
+    font_size: fs,
+    fill: @core.Fill::Solid(0xFF000000),
+  }
+  snapshot(s, doc, "add text \{id}")
+  doc.layers.push(l2)
+  "{\"ok\":true,\"op\":\"add-text\",\"id\":\"\{id}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+}
+
+///|
+fn cmd_set_text(s : Session, tokens : Array[String]) -> String {
+  if tokens.length() < 2 {
+    return err("用法：set-text <id> <新内容>（下划线代替空格）")
+  }
+  let doc = match require_doc(s) {
+    Ok(d) => d
+    Err(e) => return err(e)
+  }
+  let id = tokens[1]
+  if @core.find_layer(doc.layers, id) is None {
+    return err("层不存在：\{id}")
+  }
+  snapshot(s, doc, "set-text \{id}")
+  let _ = update_layer(doc.layers, id, fn(l) { { ..l, text: tokens[2] } })
+  "{\"ok\":true,\"op\":\"set-text\",\"id\":\"\{id}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+}
+
+///|
+fn cmd_add_adjust(s : Session, tokens : Array[String]) -> String {
+  let doc = match require_doc(s) {
+    Ok(d) => d
+    Err(e) => return err(e)
+  }
+  let m = kv_args(tokens, 1)
+  let adj = match parse_adjust(m) {
+    Ok(a) => a
+    Err(e) => return err(e)
+  }
+  let id = match m.get("id") {
+    Some(i) => i
+    None => @core.alloc_layer_id(doc)
+  }
+  if @core.find_layer(doc.layers, id) is Some(_) {
+    return err("层 id 已存在：\{id}")
+  }
+  // 调整层置于栈顶（PSD 语义：作用于其下全部可见层）
+  let l = @core.default_layer(id, m.get("name").unwrap_or(id), 0.0, 0.0, doc.width.to_double(), doc.height.to_double())
+  let l2 = { ..l, kind: @core.ShapeKind::Adjust, fill: @core.Fill::NoFill, adjust: Some(adj) }
+  snapshot(s, doc, "add adjust \{id}")
+  doc.layers.push(l2)
+  "{\"ok\":true,\"op\":\"add-adjust\",\"id\":\"\{id}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+}
+
+///|
+fn cmd_add_mask(s : Session, tokens : Array[String]) -> String {
+  if tokens.length() < 2 {
+    return err("用法：add-mask <id> kind=rect|ellipse x= y= w= h= [radius=] [invert=true]")
+  }
+  let doc = match require_doc(s) {
+    Ok(d) => d
+    Err(e) => return err(e)
+  }
+  let id = tokens[1]
+  if @core.find_layer(doc.layers, id) is None {
+    return err("层不存在：\{id}")
+  }
+  let m = kv_args(tokens, 2)
+  let kind = match m.get("kind") {
+    Some("ellipse") => @core.ShapeKind::Ellipse
+    Some("rect") => @core.ShapeKind::Rect
+    Some(other) => return err("蒙版 kind 应为 rect|ellipse，got \{other}")
+    None => return err("add-mask 需要 kind=rect|ellipse")
+  }
+  let x = match to_d(m.get("x").unwrap_or("0")) {
+    Some(v) => v
+    None => return err("x 非法")
+  }
+  let y = match to_d(m.get("y").unwrap_or("0")) {
+    Some(v) => v
+    None => return err("y 非法")
+  }
+  let w = match to_d(m.get("w").unwrap_or("0")) {
+    Some(v) => if v > 0.0 { v } else { return err("蒙版 w 必须为正") }
+    None => return err("add-mask 需要 w=")
+  }
+  let h = match to_d(m.get("h").unwrap_or("0")) {
+    Some(v) => if v > 0.0 { v } else { return err("蒙版 h 必须为正") }
+    None => return err("add-mask 需要 h=")
+  }
+  let radius = match to_d(m.get("radius").unwrap_or("0")) {
+    Some(v) => v
+    None => 0.0
+  }
+  let invert = match m.get("invert") {
+    Some("true") | Some("1") => true
+    _ => false
+  }
+  snapshot(s, doc, "add-mask \{id}")
+  let _ = update_layer(doc.layers, id, fn(l) {
+    { ..l, mask: Some({ kind, x, y, w, h, radius, invert }) }
+  })
+  "{\"ok\":true,\"op\":\"add-mask\",\"id\":\"\{id}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+}
+
+///|
+fn cmd_set_mask(s : Session, tokens : Array[String]) -> String {
+  // set-mask <id> invert=true|false（几何修改走 remove + add）
+  if tokens.length() < 3 {
+    return err("用法：set-mask <id> invert=true|false")
+  }
+  let doc = match require_doc(s) {
+    Ok(d) => d
+    Err(e) => return err(e)
+  }
+  let id = tokens[1]
+  snapshot(s, doc, "set-mask \{id}")
+  let inv = tokens[2] == "true" ||
+    tokens[2] == "1" ||
+    tokens[2] == "invert=true"
+  let ok = update_layer(doc.layers, id, fn(l) {
+    match l.mask {
+      Some(m) => { ..l, mask: Some({ ..m, invert: inv }) }
+      None => l
+    }
+  })
+  if ok {
+    "{\"ok\":true,\"op\":\"set-mask\",\"id\":\"\{id}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+  } else {
+    err("层不存在：\{id}")
+  }
+}
+
+///|
+fn cmd_remove_mask(s : Session, tokens : Array[String]) -> String {
+  if tokens.length() < 2 {
+    return err("用法：remove-mask <id>")
+  }
+  let doc = match require_doc(s) {
+    Ok(d) => d
+    Err(e) => return err(e)
+  }
+  let id = tokens[1]
+  snapshot(s, doc, "remove-mask \{id}")
+  let _ = update_layer(doc.layers, id, fn(l) { { ..l, mask: None } })
+  "{\"ok\":true,\"op\":\"remove-mask\",\"id\":\"\{id}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
 }
 
 ///|

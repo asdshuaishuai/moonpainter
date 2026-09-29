@@ -36,6 +36,8 @@ pub(all) enum ShapeKind {
   Polygon
   Image
   Group
+  Text
+  Adjust
 }
 
 ///|
@@ -73,6 +75,34 @@ pub(all) struct Stroke {
 }
 
 ///|
+/// 矢量蒙版：层局部坐标下的参数化形状，覆盖区内可见（invert 后反之）。
+pub(all) struct LayerMask {
+  kind : ShapeKind // Rect 或 Ellipse
+  x : Double
+  y : Double
+  w : Double
+  h : Double
+  radius : Double
+  invert : Bool
+}
+
+///|
+/// 调整算子（调整层作用于其下全部可见层的合成结果；PSD 语义）。
+pub(all) enum AdjustOp {
+  Brightness // value: -1..1（加光）
+  Contrast // value: -1..1
+  Saturation // value: -1..1（负=去饱和）
+  Invert
+  Grayscale
+}
+
+///|
+pub(all) struct Adjust {
+  op : AdjustOp
+  value : Double
+}
+
+///|
 /// 层记录：结构事实源的原子单元。
 pub(all) struct Layer {
   id : String
@@ -89,6 +119,10 @@ pub(all) struct Layer {
   corner_radius : Double // Rect 圆角
   flip_h : Bool // 水平翻转（局部坐标镜像；先翻转后旋转）
   flip_v : Bool // 垂直翻转
+  text : String // Text 层内容（ASCII 真字形；非 ASCII 盒形占位，诚实边界）
+  font_size : Double // Text 层字号（像素，5x7 点阵缩放基准 7）
+  mask : LayerMask? // 矢量蒙版（与层同变换；None=无）
+  adjust : Adjust? // Adjust 层的算子参数；其余恒 None
   points : Array[(Double, Double)] // Line/Polygon 顶点（局部坐标，0..w / 0..h）
   fill : Fill
   stroke : Stroke
@@ -175,6 +209,10 @@ pub fn default_layer(
     corner_radius: 0.0,
     flip_h: false,
     flip_v: false,
+    text: "",
+    font_size: 16.0,
+    mask: None,
+    adjust: None,
     points: [],
     fill: Solid(0xFF808080),
     stroke: { color: 0xFF000000, width: 0.0 },

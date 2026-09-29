@@ -477,6 +477,8 @@ fn kind_str(k : ShapeKind) -> String {
     Polygon => "polygon"
     Image => "image"
     Group => "group"
+    Text => "text"
+    Adjust => "adjust"
   }
 }
 
@@ -503,6 +505,38 @@ fn fill_json(f : Fill) -> String {
 }
 
 ///|
+fn mask_json(m : LayerMask?) -> String {
+  match m {
+    None => "null"
+    Some(mask) => {
+      let kind = match mask.kind {
+        Rect => "rect"
+        Ellipse => "ellipse"
+        _ => "rect"
+      }
+      "{\"kind\":\"\{kind}\",\"x\":\{fmt_num(mask.x)},\"y\":\{fmt_num(mask.y)},\"w\":\{fmt_num(mask.w)},\"h\":\{fmt_num(mask.h)},\"radius\":\{fmt_num(mask.radius)},\"invert\":\{mask.invert}}"
+    }
+  }
+}
+
+///|
+fn adjust_json(a : Adjust?) -> String {
+  match a {
+    None => "null"
+    Some(adj) => {
+      let op = match adj.op {
+        Brightness => "brightness"
+        Contrast => "contrast"
+        Saturation => "saturation"
+        Invert => "invert"
+        Grayscale => "grayscale"
+      }
+      "{\"op\":\"\{op}\",\"value\":\{fmt_num(adj.value)}}"
+    }
+  }
+}
+
+///|
 fn layer_json(l : Layer) -> String {
   let sb = StringBuilder()
   sb.write_string("{\"id\":\"\{l.id}\",\"name\":\"")
@@ -512,6 +546,11 @@ fn layer_json(l : Layer) -> String {
   sb.write_string(",\"opacity\":\{fmt_num(l.opacity)},\"blend\":\"\{blend_str(l.blend)}\"")
   sb.write_string(",\"x\":\{fmt_num(l.x)},\"y\":\{fmt_num(l.y)},\"w\":\{fmt_num(l.w)},\"h\":\{fmt_num(l.h)}")
   sb.write_string(",\"rot\":\{fmt_num(l.rotation_deg)},\"radius\":\{fmt_num(l.corner_radius)},\"flip_h\":\{l.flip_h},\"flip_v\":\{l.flip_v}")
+  sb.write_string(",\"text\":\"\{json_escape(l.text)}\",\"font_size\":\{fmt_num(l.font_size)}")
+  sb.write_string(",\"mask\":")
+  sb.write_string(mask_json(l.mask))
+  sb.write_string(",\"adjust\":")
+  sb.write_string(adjust_json(l.adjust))
   sb.write_string(",\"points\":[")
   let mut first = true
   for pt in l.points {
@@ -634,6 +673,8 @@ fn kind_of(s : String) -> Result[ShapeKind, String] {
     "polygon" => Ok(Polygon)
     "image" => Ok(Image)
     "group" => Ok(Group)
+    "text" => Ok(Text)
+    "adjust" => Ok(Adjust)
     _ => Err("未知节点类型: \{s}")
   }
 }
@@ -678,6 +719,93 @@ fn fill_of(v : JValue) -> Result[Fill, String] {
 }
 
 ///|
+fn mask_of(v : JValue) -> LayerMask? {
+  match v.get("mask") {
+    Some(mv) =>
+      match str_field(mv, "kind") {
+        Some("rect") =>
+          Some(
+            {
+              kind: Rect,
+              x: num_f(mv, "x"),
+              y: num_f(mv, "y"),
+              w: num_f(mv, "w"),
+              h: num_f(mv, "h"),
+              radius: num_f(mv, "radius"),
+              invert: bool_field(mv, "invert"),
+            },
+          )
+        Some("ellipse") =>
+          Some(
+            {
+              kind: Ellipse,
+              x: num_f(mv, "x"),
+              y: num_f(mv, "y"),
+              w: num_f(mv, "w"),
+              h: num_f(mv, "h"),
+              radius: num_f(mv, "radius"),
+              invert: bool_field(mv, "invert"),
+            },
+          )
+        _ => None
+      }
+    None => None
+  }
+}
+
+///|
+fn str_field(v : JValue, key : String) -> String? {
+  match v.get(key) {
+    Some(s) => s.as_str()
+    None => None
+  }
+}
+
+///|
+fn bool_field(v : JValue, key : String) -> Bool {
+  match v.get(key) {
+    Some(b) => match b.as_bool() {
+      Some(t) => t
+      None => false
+    }
+    None => false
+  }
+}
+
+///|
+fn num_f(v : JValue, key : String) -> Double {
+  match v.get(key) {
+    Some(n) => match n.as_num() {
+      Some(d) => d
+      None => 0.0
+    }
+    None => 0.0
+  }
+}
+
+///|
+fn adjust_of(v : JValue) -> Adjust? {
+  match v.get("adjust") {
+    Some(av) =>
+      match str_field(av, "op") {
+        Some(op) => {
+          let value = num_f(av, "value")
+          match op {
+            "brightness" => Some({ op: Brightness, value })
+            "contrast" => Some({ op: Contrast, value })
+            "saturation" => Some({ op: Saturation, value })
+            "invert" => Some({ op: Invert, value })
+            "grayscale" => Some({ op: Grayscale, value })
+            _ => None
+          }
+        }
+        _ => None
+      }
+    None => None
+  }
+}
+
+///|
 fn layer_of(v : JValue) -> Result[Layer, String] {
   let id = str_of(v, "id")
   let name = str_of(v, "name")
@@ -699,6 +827,16 @@ fn layer_of(v : JValue) -> Result[Layer, String] {
   let radius = num_of(v, "radius")
   let flip_h = bool_of(v, "flip_h")
   let flip_v = bool_of(v, "flip_v")
+  let text = match str_of(v, "text") {
+    Ok(t) => Some(t)
+    Err(_) => None
+  }
+  let font_size = match num_of(v, "font_size") {
+    Ok(n) => Some(n)
+    Err(_) => None
+  }
+  let mask = mask_of(v)
+  let adjust = adjust_of(v)
   let fill = match v.get("fill") {
     Some(f) => fill_of(f)
     None => return Err("缺 fill")
@@ -758,7 +896,7 @@ fn layer_of(v : JValue) -> Result[Layer, String] {
   }
   // 逐字段拼装（元组匹配 15 个字段太长，按序检查）
   match
-    (id, name, kind, visible, opacity, blend, x, y, w, h, rot, radius, flip_h, flip_v, fill, stroke_c, stroke_w, asset) {
+    (id, name, kind, visible, opacity, blend, x, y, w, h, rot, radius, flip_h, flip_v, text, font_size, mask, adjust, fill, stroke_c, stroke_w, asset) {
     (
       Ok(i),
       Ok(n),
@@ -774,6 +912,10 @@ fn layer_of(v : JValue) -> Result[Layer, String] {
       Ok(rc),
       Ok(flip_h),
       Ok(flip_v),
+      Some(txt),
+      Some(fs),
+      mask,
+      adjust,
       Ok(fi),
       Ok(sc),
       Ok(sw),
@@ -794,6 +936,10 @@ fn layer_of(v : JValue) -> Result[Layer, String] {
         corner_radius: rc,
         flip_h,
         flip_v,
+        text: txt,
+        font_size: fs,
+        mask,
+        adjust,
         points,
         fill: fi,
         stroke: { color: sc, width: sw },
