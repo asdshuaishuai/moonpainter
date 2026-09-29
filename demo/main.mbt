@@ -512,6 +512,7 @@ async fn main {
       "{\"headless_selftest\":true,\"tool_calls\":\{tc},\"tool_ok\":\{tok},\"renders\":\{images},\"saved_mpd\":\{saved},\"summary\":\"\{esc_summary}\",\"log\":\{log_str}}",
     )
   } else {
+    ensure_engine()
     inject_css()
     inject_html()
     register_globals()

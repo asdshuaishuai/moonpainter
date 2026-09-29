@@ -103,11 +103,40 @@ fn engine() -> WasmEngine {
 }
 
 ///|
-/// 确保 wasm 引擎已加载（幂等）。
-pub async fn ensure_engine() -> Unit raise {
-  if g_engine.val is None {
-    let e : WasmEngine = load_engine_wasm("moonpainter.wasm")
-    g_engine.val = Some(e)
+extern "js" fn js_load_wasm_node(url : String) -> WasmEngine =
+  #| (url) => {
+  #|   const fs = require('fs');
+  #|   const path = require('path');
+  #|   const candidates = [url,
+  #|     path.resolve('_build/wasm/debug/build/wasm/wasm.wasm'),
+  #|     path.resolve('../../_build/wasm/debug/build/wasm/wasm.wasm'),
+  #|     path.resolve('moonpainter.wasm')];
+  #|   for (const p of candidates) {
+  #|     try { if (fs.existsSync(p)) { return new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync(p)), {}).exports; } } catch (_) {}
+  #|   }
+  #|   throw new Error('moonpainter.wasm not found');
+  #| }
+
+///|
+extern "js" fn js_load_wasm_browser(url : String) -> WasmEngine =
+  #| (url) => {
+  #|   const xhr = new XMLHttpRequest();
+  #|   xhr.open('GET', url, false);
+  #|   xhr.send();
+  #|   const inst = new WebAssembly.Instance(new WebAssembly.Module(xhr.response), {});
+  #|   return inst.exports;
+  #| }
+
+///|
+/// 确保 wasm 引擎已加载（同步——浏览器 XHR / Node fs，无 async 运行时依赖）。
+pub fn ensure_engine() -> Unit {
+  if g_engine.val is Some(_) {
+    return
+  }
+  if js_is_node() {
+    g_engine.val = Some(js_load_wasm_node("moonpainter.wasm"))
+  } else {
+    g_engine.val = Some(js_load_wasm_browser("moonpainter.wasm"))
   }
 }
 
