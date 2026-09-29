@@ -450,7 +450,9 @@ pub fn inflate(input : Bytes) -> InflateResult {
       break
     }
     if bfinal == 1 {
-      complete = true
+      if !br.eof {
+        complete = true
+      }
       break
     }
     if br.eof {

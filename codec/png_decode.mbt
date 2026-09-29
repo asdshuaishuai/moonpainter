@@ -132,8 +132,11 @@ pub fn png_decode(data : Bytes) -> Result[RgbaBuf, String] {
     _ => 4
   }
   let bpl = width * channels // 每行有效字节数（filter 字节另算）
+  if bpl <= 0 || width > 1000000 || height > 1000000 {
+    return Err("PNG 维度超限或溢出")
+  }
   let expected = height * (bpl + 1)
-  if raw.size < expected {
+  if expected <= 0 || raw.size < expected {
     return Err("pixel data truncated: got \{raw.size} bytes, need \{expected}")
   }
 

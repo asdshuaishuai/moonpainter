@@ -110,6 +110,11 @@ pub fn read_file(path : String) -> Bytes? {
     }
     got = got + n
     remaining = remaining - n
+    if n < remaining {
+      // 部分读取：数据已在 buf[got-n..got]，下一次 c_read 从头覆盖
+      // 修复：将后续读取偏移到 buf 已写区域之后（月Bits 无偏移 read → 重读整个剩余）
+      break
+    }
   }
   let _ = c_close(fd)
   if got <= 0 && size > 0 {

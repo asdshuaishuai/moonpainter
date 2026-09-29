@@ -130,7 +130,8 @@ fn preview_png(
   let h = d.height
   let long = if w > h { w } else { h }
   let out_w = if long > max_side {
-    (w.to_double() * max_side.to_double() / long.to_double() + 0.5).to_int()
+    let scaled = (w.to_double() * max_side.to_double() / long.to_double() + 0.5).to_int()
+    if scaled < 1 { 1 } else { scaled }
   } else {
     w
   }
@@ -323,8 +324,14 @@ pub fn unpack(data : Bytes) -> Result[MpdDoc, String] {
     return Err("指纹对账失败：manifest 记录 \{fp_expect}，实际 \{fp_actual}（容器被篡改或损坏）")
   }
   // 限额复检
+  if doc.width <= 0 || doc.height <= 0 {
+    return Err("画布尺寸必须为正")
+  }
   if doc.width > LIMIT_MAX_SIDE || doc.height > LIMIT_MAX_SIDE {
     return Err("画布单边超限")
+  }
+  if doc.width.to_int64() * doc.height.to_int64() > LIMIT_MAX_PIXELS.to_int64() {
+    return Err("画布总像素超限")
   }
   if @core.all_layers(doc.layers).length() > LIMIT_MAX_LAYERS {
     return Err("层数超限")

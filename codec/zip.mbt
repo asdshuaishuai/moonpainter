@@ -340,8 +340,10 @@ pub fn crc32(b : Bytes) -> Int {
 /// 保留 1 位小数的数字格式化（诊断字符串用，deepOffice core.trim_num 的
 /// 本地替身；本包内取值恒 ≥ 0）。
 fn trim_num1(v : Double) -> String {
-  let rounded = (v * 10.0 + 0.5).to_int()
+  let neg = v < 0.0
+  let av = if neg { -v } else { v }
+  let rounded = (av * 10.0 + 0.5).to_int()
   let whole = rounded / 10
   let frac = rounded % 10
-  "\{whole}.\{frac}"
+  (if neg { "-" } else { "" }) + "\{whole}.\{frac}"
 }

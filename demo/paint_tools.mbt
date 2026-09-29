@@ -303,6 +303,20 @@ pub impl @posoco.ToolProvider for PaintTools with fn execute(
     }
     "pick" => "pick \{arg(call, "x")} \{arg(call, "y")}"
     "group" => {
+      let gid = arg(call, "gid")
+      let ids = arg(call, "ids")
+      "group \{gid} \{ids}"
+    }
+    "ungroup" => {
+      let gid = arg(call, "gid")
+      "ungroup \{gid}"
+    }
+    "tag" => {
+      let tid = arg(call, "id")
+      "tag \{tid} \{arg(call, "tag")}"
+    }
+    "undo" => "undo"
+    "group" => {
       let ids = arg(call, "ids")
       "group \{arg(call, "gid")} \{ids.replace(old=",", new=" ")}"
     }

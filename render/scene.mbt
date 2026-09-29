@@ -556,8 +556,8 @@ fn render_view_impl(
   }
   let out_w = out_width
   let out_h = (ch.to_double() * out_w.to_double() / cw.to_double() + 0.5).to_int()
-  if out_h < 1 {
-    return Err("输出高度为 0")
+  if out_h < 1 || out_h > RENDER_MAX_SIDE {
+    return Err("输出高度越界（\{out_h}）")
   }
   let out = @codec.rgba_new(out_w, out_h)
   let mut y = 0

@@ -51,15 +51,23 @@ extern "js" fn js_download(filename : String, b64 : String) -> Unit =
   #|   }
 
 ///|
-extern "js" fn js_on_click(id : String, f : JsValue) -> Unit =
-  #| (id, f) => {
+///|
+/// 点击处理器：globalThis[name]() 每次 click 触发新协程（非 eager）。
+extern "js" fn js_on_click_global(id : String, fn_name : String) -> Unit =
+  #| (id, fnName) => {
   #|     const el = document.getElementById(id);
-  #|     if (el) el.addEventListener('click', () => f());
+  #|     if (el) el.addEventListener('click', async () => {
+  #|       try { await globalThis[fnName](); } catch (e) {
+  #|         console.error('MoonPainter:', e);
+  #|         const log = document.getElementById('mp-log');
+  #|         if (log) { const d = document.createElement('div'); d.textContent = '❌ ' + String(e); d.style.color = '#f66'; log.appendChild(d); }
+  #|       }
+  #|     });
   #|   }
 
 ///|
-extern "js" fn js_async_fn(f : @js_async.Promise[Unit]) -> JsValue =
-  #| (p) => () => p.catch((err) => console.error(err))
+extern "js" fn js_register_global_fn(name : String, f : () -> @js_async.Promise[Unit]) -> Unit =
+  #| (name, f) => { globalThis[name] = f; }
 
 ///|
 async fn paint_once_async() -> Unit {
@@ -69,6 +77,7 @@ async fn paint_once_async() -> Unit {
     return
   }
   js_set_disabled("mp-run", true)
+  errdefer js_set_disabled("mp-run", false)
   let provider = js_get_value("mp-provider")
   let base_url_input = js_get_value("mp-baseurl")
   let model = js_get_value("mp-model")
@@ -184,12 +193,13 @@ async fn paint_save_async() -> Unit {
     js_append_log("mp-log", "⚠ 尚未开始修图，无容器可保存")
     return
   }
-  let _ = engine_exec_line("save-mpd-b64")
-  if g_last_mpd_b64.val != "" {
-    js_download("moonpainter-demo.mpd", g_last_mpd_b64.val)
+  let envelope = engine_exec_line("save-mpd-b64")
+  let b64 = extract_json_string(envelope, "mpd_b64")
+  if b64 != "" {
+    js_download("moonpainter-demo.mpd", b64)
     js_append_log("mp-log", "📦 .mpd 容器已下载")
   } else {
-    js_append_log("mp-log", "⚠ 打包失败")
+    js_append_log("mp-log", "⚠ 打包失败：\{shorten_str(envelope, 200)}")
   }
 }
 
@@ -231,8 +241,14 @@ async fn main {
     )
   } else {
     build_page()
-    js_on_click("mp-run", js_async_fn(@js_async.Promise::from_async(async fn() { paint_once_async() })))
-    js_on_click("mp-save", js_async_fn(@js_async.Promise::from_async(async fn() { paint_save_async() })))
+    js_register_global_fn("__mp_run", fn() -> @js_async.Promise[Unit] {
+      @js_async.Promise::from_async(async fn() { paint_once_async() })
+    })
+    js_register_global_fn("__mp_save", fn() -> @js_async.Promise[Unit] {
+      @js_async.Promise::from_async(async fn() { paint_save_async() })
+    })
+    js_on_click_global("mp-run", "__mp_run")
+    js_on_click_global("mp-save", "__mp_save")
     js_set_textcontent(
       "mp-log",
       "提示：Mock 端点离线即可演示（AI 脚本模型逐工具修图）；接真实模型请选端点并填 Key。",

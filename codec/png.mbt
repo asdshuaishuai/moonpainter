@@ -65,10 +65,9 @@ pub fn fill_rect_rgba(
 /// 颜色解析：#RGB 形如 #RRGGBB / #RRGGBBAA（缺省不透明）。
 /// 非法输入按 0 处理（AgentGate 在入口就应拒绝非法色值，这里是兜底）。
 pub fn color_from_hex(hex : String) -> Int {
-  let body = if hex.has_prefix("#") {
-    hex[1:].to_owned()
-  } else {
-    hex
+  let body = if hex.has_prefix("#") { hex[1:].to_owned() } else { hex }
+  if body.length() != 6 && body.length() != 8 {
+    return 0
   }
   let r = hex2(body, 0)
   let g = hex2(body, 2)

@@ -78,8 +78,10 @@ pub fn exec(s : Session, line : String) -> String {
   let trimmed = line[b:e].to_owned()
   let tokens : Array[String] = []
   for t in trimmed.split(" ") {
-    if t.length() > 0 {
-      tokens.push(t.to_owned())
+    for t2 in t.split("	") {
+      if t2.length() > 0 {
+        tokens.push(t2.to_owned())
+      }
     }
   }
   if tokens.length() == 0 {

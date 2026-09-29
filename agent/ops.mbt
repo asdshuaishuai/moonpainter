@@ -3,8 +3,10 @@
 
 ///|
 pub fn to_d(s : String) -> Double? {
-  Some(@string.parse_double(s)) catch {
-    _ => None
+  let v = Some(@string.parse_double(s)) catch { _ => None }
+  match v {
+    Some(d) => if d != d || (d * 2.0 == d && d != 0.0) { None } else { Some(d) }
+    None => None
   }
 }
 
