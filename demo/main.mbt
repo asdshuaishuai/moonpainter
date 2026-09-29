@@ -477,18 +477,17 @@ fn register_globals() -> Unit {
   js_reg2s("__drop", fn(b64 : String, name : String) { do_import(b64, name) })
 }
 
-async fn main {
+fn main {
   if js_is_node() {
-    // Node headless：MoonBit async runtime 正常，跑简短验证
+    // Node headless：同步 wasm 加载 + 引擎验证
     ensure_engine()
-    let ver = @core.ENGINE_VERSION
     let r0 = engine_exec_line("session-open full_image")
     let r1 = engine_exec_line("new 400 300 uuid=headless")
     let r2 = engine_exec_line("add-rect x=0 y=0 w=400 h=300 fill=#2C3E6BFF name=card")
     let r3 = engine_exec_line("render 400")
     let ok = r0.contains("ok") && r1.contains("ok") && r2.contains("ok") && r3.contains("png_b64")
     let ok_val : Json = Json::boolean(ok)
-    let ver_val : Json = Json::string(ver)
+    let ver_val : Json = Json::string(@core.ENGINE_VERSION)
     let result : Json = Json::object({
       "headless_selftest": Json::boolean(true),
       "engine_ok": ok_val,

@@ -31,7 +31,7 @@ cat > dist/index.html << 'HTML'
 <title>MoonPainter · AI 修图 Demo</title>
 <script src="demo.js" defer></script>
 </head>
-<body><div id="mp-root">加载中…（需从 HTTP 服务访问，见 README）</div></body>
+<body><div id="app">加载中…（需从 HTTP 服务访问，见 README）</div></body>
 </html>
 HTML
 ls -la dist | awk 'NR>1 {print $5, $9}'
