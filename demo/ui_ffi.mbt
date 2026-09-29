@@ -76,14 +76,21 @@ extern "js" fn js_html(id : String, html : String) -> Unit =
 extern "js" fn js_read_file_input(input_id : String) -> @js_async.Promise[Json] =
   #| (inputId) => (async () => {
   #|     const input = document.getElementById(inputId);
-  #|     if (!input || !input.files || input.files.length === 0) return { ok: false, error: 'no file' };
+  #|     if (!input || !input.files || input.files.length === 0) return { ok: false, error: 'no file selected' };
   #|     const file = input.files[0];
-  #|     if (!file.type.startsWith('image/')) return { ok: false, error: 'not image: ' + file.type };
-  #|     const buf = await file.arrayBuffer();
-  #|     const bytes = new Uint8Array(buf);
-  #|     let binary = '';
-  #|     for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  #|     return { ok: true, b64: btoa(binary), name: file.name, size: file.size };
+  #|     input.value = '';
+  #|     if (!file.type.startsWith('image/')) return { ok: false, error: 'not an image: ' + file.type };
+  #|     const img = new Image();
+  #|     const url = URL.createObjectURL(file);
+  #|     await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = () => reject(new Error('image decode failed')); img.src = url; });
+  #|     URL.revokeObjectURL(url);
+  #|     const cv = document.createElement('canvas');
+  #|     cv.width = img.naturalWidth;
+  #|     cv.height = img.naturalHeight;
+  #|     cv.getContext('2d').drawImage(img, 0, 0);
+  #|     const dataUrl = cv.toDataURL('image/png');
+  #|     const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+  #|     return { ok: true, b64, name: file.name.replace(/\.[^.]+$/, '.png'), size: b64.length };
   #|   })()
 
 ///|
@@ -99,11 +106,18 @@ extern "js" fn js_setup_drop(target_id : String, global_fn : String) -> Unit =
   #|       if (!files || files.length === 0) return;
   #|       const file = files[0];
   #|       if (!file.type.startsWith('image/')) return;
-  #|       const buf = await file.arrayBuffer();
-  #|       const bytes = new Uint8Array(buf);
-  #|       let binary = '';
-  #|       for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  #|       globalThis[fnName](btoa(binary), file.name);
+  #|       try {
+  #|         const img = new Image();
+  #|         const url = URL.createObjectURL(file);
+  #|         await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+  #|         URL.revokeObjectURL(url);
+  #|         const cv = document.createElement('canvas');
+  #|         cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+  #|         cv.getContext('2d').drawImage(img, 0, 0);
+  #|         const dataUrl = cv.toDataURL('image/png');
+  #|         const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+  #|         globalThis[fnName](b64, file.name);
+  #|       } catch (err) { console.error('drop import failed:', err); }
   #|     });
   #|   }
 
