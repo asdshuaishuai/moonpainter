@@ -57,6 +57,170 @@ test "pack → unpack 往返保真（结构/指纹/资产/档案）" {
 }
 
 ///|
+fn sample_mvsl_program() -> @core.EditProgram {
+  let op : @core.EditOp = {
+    id: "e1",
+    kind: @core.Recolor,
+    sel: {
+      basis: @core.Base,
+      expr: @core.Atom(
+        @core.Geo({ x: 0.0, y: 0.0, w: 60.0, h: 80.0, feather: 2.0 }, "rect"),
+      ),
+    },
+    amount: 0.75,
+    hue_deg: 120.0,
+    temp_kelvin: 0.0,
+    relight_gain: 1.0,
+    refine: [@core.Feather(1.0)],
+    note: "调色",
+    evidence: Some({
+      label: "背景",
+      pos_seeds: [(4.0, 4.0)],
+      neg_seeds: [(100.0, 4.0)],
+    }),
+  }
+  let prot : @core.Guard = {
+    id: "g1",
+    sel: {
+      basis: @core.Base,
+      expr: @core.Atom(
+        @core.Geo({ x: 60.0, y: 0.0, w: 60.0, h: 80.0, feather: 0.0 }, "rect"),
+      ),
+    },
+    max_de: 0.02,
+    max_changed_ratio: 0.1,
+  }
+  { ops: [op], guards: [prot] }
+}
+
+///|
+test "MVSL：编辑表随容器往返，版本块自洽（list 条目 + manifest 声明）" {
+  let m = sample_mpd()
+  m.mvsl = sample_mvsl_program()
+  let packed = match @mpd.pack(m) {
+    Ok(b) => b
+    Err(e) => abort("pack 失败: \{e}")
+  }
+  // 条目存在且是 canonical 形式
+  let z = @codec.Zip::open(packed)
+  assert_true(z.has("meta/mvsl.json"), msg="容器缺 meta/mvsl.json")
+  assert_eq(z.read_text("meta/mvsl.json"), @core.program_to_json(m.mvsl))
+  // manifest 版本块
+  let manifest = z.read_text("manifest.json")
+  assert_true(manifest.contains("\"render_contract\":1"), msg=manifest)
+  assert_true(manifest.contains("\"selector_algo\":\"mvsl-sel-1\""), msg=manifest)
+  assert_true(manifest.contains("\"color_semantics\":\"oklch-1\""), msg=manifest)
+  assert_true(manifest.contains("\"op_semantics\":\"mvsl-op-1\""), msg=manifest)
+  assert_true(manifest.contains("\"program_sha256\":\"\{@mpd.program_hash(m)}\""), msg=manifest)
+  // 往返：结构 + 证据 + 指纹
+  let back = match @mpd.unpack(packed) {
+    Ok(x) => x
+    Err(e) => abort("unpack 失败: \{e}")
+  }
+  assert_eq(@core.program_to_json(back.mvsl), @core.program_to_json(m.mvsl))
+  assert_eq(@mpd.program_hash(back), @mpd.program_hash(m))
+  assert_eq(back.mvsl.ops[0].note, "调色")
+  match back.mvsl.ops[0].evidence {
+    Some(ev) => assert_eq(ev.label, "背景")
+    None => abort("证据丢失")
+  }
+  // 重打包字节一致
+  let again = match @mpd.pack(back) {
+    Ok(b) => b
+    Err(e) => abort("repack 失败: \{e}")
+  }
+  assert_eq(@base.sha256_hex(again), @base.sha256_hex(packed))
+}
+
+///|
+test "MVSL 拒绝：编辑表被改写 / 半截状态 / 更高 render contract" {
+  let m = sample_mpd()
+  m.mvsl = sample_mvsl_program()
+  let canonical = @core.program_to_json(m.mvsl)
+  // 编辑表字节被改（内容有效但指纹对不上）
+  let loosened = canonical.replace(old=",\"guards\"", new=", \"guards\"")
+  assert_true(loosened != canonical)
+  let t1 = repack_with(m, [("meta/mvsl.json", loosened)])
+  match @mpd.unpack(t1) {
+    Err(msg) => assert_true(msg.has_prefix("meta/mvsl.json 不是 canonical 形式"), msg=msg)
+    Ok(_) => abort("非 canonical 编辑表不该通过")
+  }
+  // 编辑表内容被换成另一个合法程序（指纹对账必须抓到）
+  let swapped = @core.program_to_json({ ops: [], guards: [] })
+  let t2 = repack_with(m, [("meta/mvsl.json", swapped)])
+  match @mpd.unpack(t2) {
+    Err(msg) => assert_true(msg.has_prefix("编辑表指纹对账失败"), msg=msg)
+    Ok(_) => abort("换掉编辑表不该通过")
+  }
+  // manifest 声明了 mvsl 但没有对应条目（半截状态）
+  let packed = match @mpd.pack(m) {
+    Ok(b) => b
+    Err(e) => abort("pack 失败: \{e}")
+  }
+  let z = @codec.Zip::open(packed)
+  let entries : Array[@codec.ZipOutEntry] = []
+  for e in z.entries {
+    if !e.is_dir && e.name != "meta/mvsl.json" {
+      entries.push(@codec.ZipOutEntry::new(e.name, z.read(e.name), compress=false))
+    }
+  }
+  match @mpd.unpack(@codec.build_zip(entries)) {
+    Err(msg) =>
+      assert_true(msg.has_prefix("manifest 声明了 mvsl 但缺 meta/mvsl.json"), msg=msg)
+    Ok(_) => abort("半截状态不该通过")
+  }
+  // 更高 render contract
+  let manifest = z.read_text("manifest.json")
+  let higher = manifest.replace(
+    old="\"render_contract\":1",
+    new="\"render_contract\":99",
+  )
+  assert_true(higher != manifest, msg="render_contract 字段未找到")
+  match @mpd.unpack(repack_with(m, [("manifest.json", higher)])) {
+    Err(msg) => assert_true(msg.has_prefix("render contract 版本"), msg=msg)
+    Ok(_) => abort("更高 render contract 不该通过")
+  }
+  // selector 算法版本不符（微调过的编辑表会漂移，必须拒绝）
+  let other_algo = manifest.replace(
+    old="\"selector_algo\":\"mvsl-sel-1\"",
+    new="\"selector_algo\":\"mvsl-sel-2\"",
+  )
+  assert_true(other_algo != manifest)
+  match @mpd.unpack(repack_with(m, [("manifest.json", other_algo)])) {
+    Err(msg) => assert_true(msg.has_prefix("selector 算法版本"), msg=msg)
+    Ok(_) => abort("异版本 selector 不该通过")
+  }
+}
+
+///|
+test "MVSL pack 源头拒绝：坏程序不进容器" {
+  let m = sample_mpd()
+  // amount 越界
+  let bad : @core.EditOp = {
+    id: "e1",
+    kind: @core.Recolor,
+    sel: {
+      basis: @core.Base,
+      expr: @core.Atom(
+        @core.Geo({ x: 0.0, y: 0.0, w: 1.0, h: 1.0, feather: 0.0 }, "rect"),
+      ),
+    },
+    amount: 1.5,
+    hue_deg: 10.0,
+    temp_kelvin: 0.0,
+    relight_gain: 1.0,
+    refine: [],
+    note: "",
+    evidence: None,
+  }
+  m.mvsl = { ops: [bad], guards: [] }
+  match @mpd.pack(m) {
+    Err(msg) => assert_true(msg.has_prefix("MVSL 编辑表校验失败"), msg=msg)
+    Ok(_) => abort("越界 amount 不该 pack")
+  }
+}
+
+///|
 test "pack 确定性：同状态两次打包字节一致" {
   let a = match @mpd.pack(sample_mpd()) {
     Ok(b) => b
@@ -186,8 +350,12 @@ test "拒绝：坏 format / 前向版本 / 缺部件" {
     Err(msg) => assert_true(msg.has_prefix("容器格式不符"))
     Ok(_) => abort("坏 format 不该通过")
   }
-  // 前向版本
-  let bad_ver = manifest.replace(old="\"version\":1", new="\"version\":99")
+  // 前向版本（不写死版本号：容器规范会随格式演进升版）
+  let bad_ver = manifest.replace(
+    old="\"version\":\{@core.MPD_VERSION}",
+    new="\"version\":99",
+  )
+  assert_true(bad_ver != manifest, msg="前向版本构造失败：manifest 里没找到 version 字段")
   match @mpd.unpack(repack_with(m, [("manifest.json", bad_ver)])) {
     Err(msg) => assert_true(msg.has_prefix("容器版本"))
     Ok(_) => abort("前向版本不该通过")

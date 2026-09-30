@@ -46,14 +46,17 @@ macOS 原生类 Photoshop 编辑器。对本工程最有价值的三块遗产：
 
 ```
 宿主    cli（native 行协议 + 文件 FFI + 原子落盘）
-交互    agent（34 命令 · vision 闸 · undo/redo · P0–P2 lint · 工具字典）
-容器    mpd（pack/unpack · manifest/params/agent · 指纹对账 · 限额 · 预览生成）
+交互    agent（54 命令 · vision 闸 · undo/redo · P0–P2 lint · MVSL 闭环 · 工具字典）
+容器    mpd（pack/unpack · manifest/params/agent/mvsl · 指纹对账 · 限额 · 预览生成）
 渲染    render（RGBA 画布 · 2×2 子采样 AA · W3C 混合 · 旋转 · 取景 · pick · stats）
-核心    core（IR 层树 · canonical JSON 双向 · 指纹 · 层定位原语）
+核心    core（IR 层树 · canonical JSON 双向 · 指纹 · 层定位原语 · MVSL 编辑表 IR）
+编辑    pixel（选择子软场 · 有序算子程序 · 数值证书 · 覆盖预览 · OKLab/OKLCh）
 基座    codec（ZIP 读写 · DEFLATE/inflate · PNG 编解码 · 颜色） + base（SHA-256）
 ```
 
-依赖严格单向无环：`base ← codec ← core ← render ← mpd ← agent ← cli`。
+依赖严格单向无环：`base ← codec ← core ← pixel/render ← mpd ← agent ← cli`
+（`pixel` 与 `render` 目前互不依赖——编辑表还没接进渲染管线，见 §8 边界；
+两者都只依赖 core/codec，方向仍然无环）。
 
 ## 3. IR 文档模型（core/document.mbt）
 
@@ -64,27 +67,64 @@ macOS 原生类 Photoshop 编辑器。对本工程最有价值的三块遗产：
 - Image 层引用 `assets/sha256/<hash>` 内容寻址资产，置入矩形拉伸绘制（最近邻，诚实边界）；
 - 文档：uuid/画布(可变，set-canvas 用)/dpi/profile("srgb")/layers/assets/params/next_layer_no。
 
-## 4. `.mpd` 容器 v1（mpd/mpd.mbt）
+## 4. `.mpd` 容器 v2（mpd/mpd.mbt）
 
 ```
 foo.mpd (ZIP, deflate)
-├── manifest.json        # format/version/engine/uuid/canvas/counts/fingerprint/asset_index（固定字段序）
+├── manifest.json        # format/version/engine/uuid/canvas/counts/fingerprint/mvsl/asset_index
 ├── meta/
 │   ├── design.json      # 结构事实源（canonical：固定字段序 + 固定数字格式）
 │   ├── params.json      # 命名元参数（纯元数据；live 绑定属下轮）
 │   ├── vision.json      # 预览注册表 + 视觉锚点（本轮锚点为空占位）
-│   └── agent.json       # 编辑历史摘要 + engine 版本
+│   ├── agent.json       # 编辑历史摘要 + engine 版本（**轨迹**）
+│   └── mvsl.json        # 当前 MVSL 编辑表（canonical program，**状态/渲染真值输入**）
 ├── previews/flat.png    # 保存时渲染（长边 ≤2048）
 ├── previews/thumb.png   # 缩略图（长边 ≤512）
 └── assets/sha256/<hash> # 内容寻址 PNG 资产（stored 条目）
 ```
 
+**v1 → v2 升版理由**：MVSL 编辑表是渲染的真值输入。若只追加条目而不升版，
+不认识它的旧引擎会「打开成功但少渲染一批编辑」——正是 PLAN-MVSL 明令禁止的
+静默错渲。升版后旧引擎按「版本高于支持范围」在入口直接拒绝。
+
+manifest 的 `mvsl` 版本块 pin 住四个独立版本号（`render_contract` /
+`selector_algo` / `color_semantics` / `op_semantics`）与 `program_sha256`：
+**选择子算法变了，微调过的编辑表会漂移**，所以算法版本必须随容器走、
+不匹配即拒绝，而不是「尽量渲染」。
+
 **纪律**（全部有测试守护）：
 
 - **确定性 pack**：固定条目顺序 + 固定 ZIP 时间戳（DOS 纪元）+ canonical JSON → 同状态两次 pack 字节一致、pack→unpack→pack 字节一致；
 - **拒绝式 unpack**：垃圾/截断 ZIP、路径穿越（`..`/绝对路径）、逐条目 CRC、manifest 缺失/坏 format/前向版本、design.json 非法 UTF-8 或解析失败、**manifest 指纹与 design.json 实际 sha256 对账**、资产名字与字节 sha256 对账、文档引用的资产必须存在、限额复检；
+- **MVSL 拒绝式 unpack**：`meta/mvsl.json` 非 canonical 形式、manifest `program_sha256` 与编辑表字节对账失败、更高 `render_contract`、`selector_algo`/`color_semantics` 与引擎不符、manifest 声明了 `mvsl` 却缺条目（或反之）——半截状态一律拒绝；
 - **限额**：单边 ≤30000、总像素 ≤1e8、层 ≤10000、meta 层总量 ≤4MiB、单资产 ≤512MiB；
 - **原子落盘**（cli）：完整写 `<path>.mpd-tmp` → `rename`；Windows rename 失败时退化为覆盖写（窗口期已知，README 注明）。
+
+## 4.5 MVSL 编辑表（core/mvsl.mbt + pixel/）
+
+**定位**：面向 agentic image editing 的确定性声明式编辑 IR —— 不可变内容寻址
+底图 + 谓词选择子（软权重场 [0,1]）+ 有序算子程序 + AI 感知-行动 affordance。
+规划与 8 份外部评审的比对见 [PLAN-MVSL.md](./PLAN-MVSL.md)。
+
+- **选择子**：`color`（OKLCh 色相**环** + 饱和度 + 亮度三维软窗）/`luma`（OKLab L，
+  **不是** HSV V）/`geo`（rect 到**边界**的距离/ellipse）/`geograd`/`comp`
+  （种子连通域，同色异义干扰的出口）/`assetmask`（外部 mask 资产，引擎零依赖）；
+  组合 `Union`(max)/`And`(prod)/`Diff`(clamp 差)，组合后仍是软场；
+- **算子**：`recolor`（OKLCh 改 h、preserve OKLab L、gamut 在 chroma 上收）/
+  `temperature`（蓝↔黄轴平移，与色相重映射**明确分家**）/`relight`（L 增益）；
+  一律 `out = lerp(in, op(in), w)`，`w=0` 处逐位保持原像素（零泄漏）；
+- **精修**：`grow/shrink/feather/fill_holes/keep_largest/guided`（guided filter
+  把颜色谓词得到的软场对齐到图像真实边缘）；
+- **语义三决定**：求值基准默认 `base`（显式 `stage:n` 才允许，且**拒绝前视引用**）；
+  算子顺序即语义（canonical 化只做序列化契约，**绝不重排**）；版本化拒绝；
+- **数值证书**：覆盖率 / bbox / 连通域事实（id/bbox/质心/面积/均值色/环平均色相）/
+  ΔE / 选区外泄漏率；AI 当色度计禁止，收敛判据全部是确定性数值；
+- **affordance 命令**：`select-preview`（overlay PNG + 证书）、`mvsl-impact`
+  （逐算子 diff 证书 + 结果 PNG）、`mvsl-assert`（保护断言，违反即信封 fail）、
+  `mvsl-set/show/clear`。`base = 当前文档渲染`，由文档指纹隐式内容寻址，
+  信封回传 `base_sha256` 供显式 pin；
+- **覆盖预览顺序**：**先全分辨率生成 overlay，再盒平均降采样**——反过来会把
+  发丝级软边界平均掉，VLM 看到干净背景就判「没选中」。
 
 ## 5. 视觉多模态交互协议（agent/session.mbt）
 
@@ -94,12 +134,14 @@ foo.mpd (ZIP, deflate)
 - 归一化坐标协议：viewport 用 `[0,1]` 表述，消除分辨率歧义；
 - P0–P2 谓词（lint）：画布限额（P0）、重复 id/幽灵资产引用（P1）、零尺寸/完全越界/opacity 越界（P2）。
 
-## 6. 命令集（34 个；字典 = agent/tools.mbt 单一事实源）
+## 6. 命令集（54 个；字典 = agent/tools.mbt 单一事实源）
 
 会话：`session-open` `list-tools` `help`；文档：`new` `set-canvas` `list-layers` `query-layer` `lint`；
 绘制：`add-rect/ellipse/polygon/line` `add-image`（b64）`set-style` `move` `resize` `rotate` `rename` `tag` `delete` `visible` `reorder` `group` `ungroup`；
 元参数：`list-params` `set-param`；视觉：`render` `pick` `stats`；
-历史/容器：`fingerprint` `edits` `undo` `redo` `save-mpd-b64` `open-mpd-b64`；
+修图：`add-paint` `brush` `erase` `crop` `sample` `add-adjust` `add-mask` `set-mask` `remove-mask`；
+MVSL：`mvsl-set` `mvsl-show` `mvsl-clear` `select-preview` `mvsl-impact` `mvsl-assert`；
+历史/容器：`fingerprint` `inspect` `edits` `undo` `redo` `save-mpd-b64` `open-mpd-b64`；
 cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
 
 ## 7. 远期路线（本轮明确不做，排期见 PLAN.md §8）
@@ -115,7 +157,16 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
 - 2×2 子采样 AA 是"够用"级：椭圆/斜线边缘在 1px 尺度可见锯齿（golden 锁定当前行为，升级 AA 需同步更新 golden）；
 - 大画布全量渲染 + 取景后再缩放（简单正确优先）；4096 渲染护栏；
 - Windows 原子写退化路径存在窗口期（README 已注明）；
-- params 为纯元数据（无 live 绑定）——DESIGN 与 README 双处声明。
+- params 为纯元数据（无 live 绑定）——DESIGN 与 README 双处声明；
+- **MVSL 编辑表尚未参与最终渲染**：`render` 与 `previews/` 仍只画 `design.json` 的层；
+  编辑表目前能被安装、求值、出图（`mvsl-impact`）、断言、随容器落盘，但
+  「MVSL 层」接进渲染管线（新增层类型 + `pixel ← render` 依赖）是下一步。
+  在此之前 `mvsl-impact` 的结果图是编辑表的**唯一**可视化出口；
+- MVSL 的 `census` 升级（hue×sat 桶、`within=`、`components()`）与 `probe` 升级
+  （batch + 5×5 邻域 + membership + component id）尚未落地；
+- 外部 mask 资产只能引用：引擎不内置分割模型，未登记即报精确错误（不降级）；
+- 软 mask 的 12MP < 2s 性能证伪线尚未实测（当前实现是逐像素 + O(N) 盒滤波，
+  未做分块/惰性派生，见 PLAN-MVSL §5 风险清单）。
 
 ## 附录：与家族的协同
 

@@ -2,16 +2,18 @@
 # MoonPainter 一键验证门（AGENTS.md 口径）：
 #   1. moon check 零错误零警告（-W error 由 moon check 默认把 warning 计数呈现，这里断言输出无 Warning）
 #   2. moon test --target native 全绿
-#   3. CLI 子进程端到端：管道喂命令 → 落盘 .mpd
-#   4. 独立外部验证：系统 unzip 校验容器（不用引擎自证）
-#   5. open→save 字节一致（确定性 pack 的进程级闭环）
+#   3. wasm-gc 可检 + 可测（引擎纯字节进出的背书）
+#   4. CLI 子进程端到端：管道喂命令 → 落盘 .mpd
+#   5. 独立外部验证：系统 unzip 校验容器（不用引擎自证）
+#   6. open→save 字节一致（确定性 pack 的进程级闭环）
+#   7. MVSL 编辑表命令面：安装 → impact → 断言 fail → 随容器往返
 # 任何一步失败即非零退出。
 set -e
 cd "$(dirname "$0")"
 OUT=$(mktemp -d /tmp/moonpainter-verify.XXXXXX)
 trap 'rm -rf "$OUT"' EXIT
 
-echo "== 1/6 moon check =="
+echo "== 1/7 moon check =="
 CHECK_OUT=$(moon check 2>&1)
 echo "$CHECK_OUT" | tail -1
 if echo "$CHECK_OUT" | grep -q "Warning"; then
@@ -20,14 +22,14 @@ if echo "$CHECK_OUT" | grep -q "Warning"; then
   exit 1
 fi
 
-echo "== 2/6 moon test --target native =="
+echo "== 2/7 moon test --target native =="
 moon test --target native 2>&1 | tail -1
 
-echo "== 3/6 wasm-gc 可检 + 测试（引擎纯字节进出的背书） =="
+echo "== 3/7 wasm-gc 可检 + 测试（引擎纯字节进出的背书） =="
 moon check --target wasm-gc 2>&1 | tail -1
 moon test --target wasm-gc 2>&1 | tail -1
 
-echo "== 4/6 CLI 子进程端到端 =="
+echo "== 4/7 CLI 子进程端到端 =="
 # 生成最小 2×2 RGBA PNG（python3 标准库，zlib+struct 手工构造）作为位图资产
 PNG_B64=$(python3 -c "
 import zlib, struct, base64
@@ -64,7 +66,7 @@ grep -q '"op":"lint","violations":0' "$OUT/cli.log" || { echo "FAIL: lint 非零
 grep -q '"op":"save-mpd"' "$OUT/cli.log" || { echo "FAIL: save-mpd 未成功"; cat "$OUT/cli.log"; exit 1; }
 test -f "$OUT/verify.mpd" || { echo "FAIL: 落盘文件不存在"; exit 1; }
 
-echo "== 5/6 独立外部验证（系统 unzip，非引擎自证） =="
+echo "== 5/7 独立外部验证（系统 unzip，非引擎自证） =="
 unzip -t "$OUT/verify.mpd" > /dev/null && echo "unzip -t: 容器完整性 OK"
 unzip -l "$OUT/verify.mpd" | grep -q "meta/design.json"  || { echo "FAIL: 缺 meta/design.json"; exit 1; }
 unzip -l "$OUT/verify.mpd" | grep -q "previews/flat.png" || { echo "FAIL: 缺 flat 预览"; exit 1; }
@@ -74,7 +76,7 @@ echo "manifest/预览/资产三件套齐全"
 # 元参数层可直接文本阅读（双层容器的核心承诺）
 unzip -p "$OUT/verify.mpd" meta/design.json | head -c 200; echo " …"
 
-echo "== 6/6 open → save 字节一致（进程级确定性闭环） =="
+echo "== 6/7 open → save 字节一致（进程级确定性闭环） =="
 printf '%s\n' \
   'session-open full_image' \
   "open-mpd $OUT/verify.mpd" \
@@ -88,6 +90,53 @@ else
   echo "FAIL: reopen 后再打包字节不一致"
   exit 1
 fi
+
+echo "== 7/7 MVSL 编辑表命令面（子进程 e2e：安装 → impact → 断言 → 容器往返） =="
+# canonical 编辑表由引擎自己产出（不手写 JSON——少一个大括号就会得到
+# 指不到病根的解析错误）。这里用固定文本：字段序即 canonical 字段序。
+MVSL_PROG='{"version":1,"ops":[{"id":"e1","kind":"recolor","sel":{"basis":"base","expr":{"t":"geo","shape":"rect","w":{"x":0,"y":0,"w":160,"h":240,"feather":0}}},"amount":1,"hue_deg":120,"temp_kelvin":0,"relight_gain":1,"refine":[],"note":"","evidence":null}],"guards":[{"id":"g1","sel":{"basis":"base","expr":{"t":"geo","shape":"rect","w":{"x":160,"y":0,"w":160,"h":240,"feather":0}}},"max_de":0.001,"max_changed_ratio":0}]}'
+MVSL_B64=$(printf '%s' "$MVSL_PROG" | base64 | tr -d '\n')
+printf '%s\n' \
+  'session-open full_image' \
+  'new 320 240 uuid=mvsl-verify' \
+  'add-rect x=0 y=0 w=320 h=240 fill=#1E5ACCFF name=bg' \
+  "mvsl-set $MVSL_B64" \
+  'mvsl-impact max=160' \
+  'mvsl-assert' \
+  "save-mpd $OUT/mvsl.mpd" \
+  ':exit' \
+  | moon run --target native cli > "$OUT/mvsl.log"
+grep -q '"op":"mvsl-set"' "$OUT/mvsl.log" || { echo "FAIL: mvsl-set 未成功"; exit 1; }
+grep -q '"op":"mvsl-impact"' "$OUT/mvsl.log" || { echo "FAIL: mvsl-impact 未成功"; exit 1; }
+# 左半边 160x240 必须被改动，且几何硬边 + 去污染 → 选区外泄漏率 0
+grep -q '"changed":38400' "$OUT/mvsl.log" || { echo "FAIL: impact 改动像素数不对"; exit 1; }
+grep -q '"leak_ratio":0' "$OUT/mvsl.log" || { echo "FAIL: 选区外有泄漏"; exit 1; }
+# 保护断言命中右半边（未改动）→ 通过；再验一条必然违反的断言
+grep -q '"op":"mvsl-assert","guards":1,"violations":0' "$OUT/mvsl.log" || { echo "FAIL: 合法程序被断言拦下"; exit 1; }
+MVSL_BAD='{"version":1,"ops":[{"id":"e1","kind":"recolor","sel":{"basis":"base","expr":{"t":"geo","shape":"rect","w":{"x":0,"y":0,"w":320,"h":240,"feather":0}}},"amount":1,"hue_deg":120,"temp_kelvin":0,"relight_gain":1,"refine":[],"note":"","evidence":null}],"guards":[{"id":"g1","sel":{"basis":"base","expr":{"t":"geo","shape":"rect","w":{"x":0,"y":0,"w":160,"h":240,"feather":0}}},"max_de":0.001,"max_changed_ratio":0}]}'
+MVSL_BAD_B64=$(printf '%s' "$MVSL_BAD" | base64 | tr -d '\n')
+printf '%s\n' \
+  'session-open full_image' \
+  'new 320 240 uuid=mvsl-verify-bad' \
+  'add-rect x=0 y=0 w=320 h=240 fill=#1E5ACCFF name=bg' \
+  "mvsl-set $MVSL_BAD_B64" \
+  'mvsl-assert' \
+  ':exit' \
+  | moon run --target native cli > "$OUT/mvsl_bad.log"
+grep -q '"error":"断言未通过（2 条）' "$OUT/mvsl_bad.log" || { echo "FAIL: 侵犯保护区的程序未被断言拦下"; exit 1; }
+# 编辑表随容器往返（状态不是历史：重开后必须原样在编辑表里）
+unzip -p "$OUT/mvsl.mpd" meta/mvsl.json | grep -q '"hue_deg":120' || { echo "FAIL: 容器缺编辑表"; exit 1; }
+unzip -p "$OUT/mvsl.mpd" manifest.json | grep -q '"render_contract":1' || { echo "FAIL: manifest 缺 MVSL 版本块"; exit 1; }
+printf '%s\n' \
+  'session-open full_image' \
+  "open-mpd $OUT/mvsl.mpd" \
+  'mvsl-show' \
+  "save-mpd $OUT/mvsl-resave.mpd" \
+  ':exit' \
+  | moon run --target native cli > "$OUT/mvsl_reopen.log"
+grep -q '"ops":1' "$OUT/mvsl_reopen.log" || { echo "FAIL: 重开后编辑表丢失"; exit 1; }
+cmp -s "$OUT/mvsl.mpd" "$OUT/mvsl-resave.mpd" || { echo "FAIL: 带编辑表的容器 open→save 字节不一致"; exit 1; }
+echo "MVSL：安装/impact/断言/容器往返 全部 OK"
 
 echo ""
 echo "ALL VERIFY PASS ✓"

@@ -28,17 +28,23 @@ pub const LIMIT_META_BYTES : Int = 4194304 // 4 MiB
 pub const LIMIT_ASSET_BYTES : Int = 536870912 // 512 MiB
 
 ///|
-/// 打包输入：文档 + 资产字节（hash 必须是字节的 sha256）+ Agent 档案行。
+/// 打包输入：文档 + 资产字节（hash 必须是字节的 sha256）+ Agent 档案行
+/// + 当前 canonical MVSL 编辑表（`meta/mvsl.json`）。
+///
+/// **编辑表是状态，edits 是轨迹**（PLAN-MVSL §3 ChatGPT 条目）：mvsl 是
+/// 当前程序（渲染的真值输入），edits 只是历史日志，两者分离。
 pub(all) struct MpdDoc {
   doc : @core.Document
   assets : Array[(String, Bytes)]
   /// agent.json 的编辑历史摘要（按时间序）
   edits : Array[String]
+  /// 当前 MVSL 编辑表（canonical program；空程序 = 逐位还原 base）
+  mut mvsl : @core.EditProgram
 }
 
 ///|
 pub fn MpdDoc::new(doc : @core.Document) -> MpdDoc {
-  { doc, assets: [], edits: [] }
+  { doc, assets: [], edits: [], mvsl: @core.EditProgram::new() }
 }
 
 ///|
@@ -54,6 +60,13 @@ pub fn fingerprint(m : MpdDoc) -> String {
 }
 
 ///|
+/// 当前编辑表的指纹（= sha256(canonical mvsl.json)）。与文档指纹并列：
+/// 人改结构、AI 改编辑表，两条指纹各自可对账。
+pub fn program_hash(m : MpdDoc) -> String {
+  @base.sha256_hex(@utf8.encode(@core.program_to_json(m.mvsl)))
+}
+
+///|
 /// manifest.json 文本（固定字段序——canonical）。
 fn manifest_json(m : MpdDoc) -> String {
   let d = m.doc
@@ -65,6 +78,18 @@ fn manifest_json(m : MpdDoc) -> String {
   sb.write_string(",\"canvas\":{\"w\":\{d.width},\"h\":\{d.height},\"dpi\":\{d.dpi},\"profile\":\"\{d.profile}\"}")
   sb.write_string(",\"counts\":{\"layers\":\{layers_n},\"assets\":\{d.assets.length()},\"params\":\{d.params.length()}}")
   sb.write_string(",\"fingerprint\":\"\{fingerprint(m)}\"")
+  // MVSL 语义三决定 + 三个算法版本 pin（PLAN-MVSL §1.7）：
+  // 选择子求值基准、算子有序性、色彩语义版本必须随容器走，
+  // 旧引擎遇不认识的 render_contract 一律拒绝，不静默错渲。
+  sb.write_string(",\"mvsl\":{")
+  sb.write_string("\"ir\":\{@core.MVSL_IR_VERSION}")
+  sb.write_string(",\"render_contract\":\{@core.RENDER_CONTRACT_VERSION}")
+  sb.write_string(",\"selector_algo\":\"\{@core.SELECTOR_ALGO_VERSION}\"")
+  sb.write_string(",\"color_semantics\":\"\{@core.COLOR_SEMANTICS_VERSION}\"")
+  sb.write_string(",\"op_semantics\":\"\{@core.OP_SEMANTICS_VERSION}\"")
+  sb.write_string(",\"ops\":\{m.mvsl.ops.length()}")
+  sb.write_string(",\"guards\":\{m.mvsl.guards.length()}")
+  sb.write_string(",\"program_sha256\":\"\{program_hash(m)}\"}")
   sb.write_string(",\"asset_index\":[")
   let mut f = true
   for a in d.assets {
@@ -175,6 +200,11 @@ pub fn pack(m : MpdDoc) -> Result[Bytes, String] {
   if @core.all_layers(d.layers).length() > LIMIT_MAX_LAYERS {
     return Err("层数超限（>\{LIMIT_MAX_LAYERS}）")
   }
+  // 编辑表：坏程序在源头拒绝（限额护栏 + 参数范围 + 未知算子）
+  match @core.validate_program(m.mvsl) {
+    Ok(_) => ()
+    Err(e) => return Err("MVSL 编辑表校验失败：\{e}")
+  }
   // 资产对账 + 限额
   for pair in m.assets {
     let (hash, bytes) = pair
@@ -216,11 +246,13 @@ pub fn pack(m : MpdDoc) -> Result[Bytes, String] {
   let params_text = params_json(d)
   let vision_text = vision_json()
   let agent_text = agent_json(m)
+  let mvsl_text = @core.program_to_json(m.mvsl)
   let meta_total = @utf8.encode(manifest_text).length() +
     @utf8.encode(design_text).length() +
     @utf8.encode(params_text).length() +
     @utf8.encode(vision_text).length() +
-    @utf8.encode(agent_text).length()
+    @utf8.encode(agent_text).length() +
+    @utf8.encode(mvsl_text).length()
   if meta_total > LIMIT_META_BYTES {
     return Err("元参数层总量超限（>\{LIMIT_META_BYTES} 字节）")
   }
@@ -231,6 +263,7 @@ pub fn pack(m : MpdDoc) -> Result[Bytes, String] {
   entries.push(@codec.ZipOutEntry::of_text("meta/params.json", params_text))
   entries.push(@codec.ZipOutEntry::of_text("meta/vision.json", vision_text))
   entries.push(@codec.ZipOutEntry::of_text("meta/agent.json", agent_text))
+  entries.push(@codec.ZipOutEntry::of_text("meta/mvsl.json", mvsl_text))
   // PNG 已压缩：存储条目
   entries.push(@codec.ZipOutEntry::new("previews/flat.png", flat, compress=false))
   entries.push(@codec.ZipOutEntry::new("previews/thumb.png", thumb, compress=false))
@@ -379,6 +412,81 @@ pub fn unpack(data : Bytes) -> Result[MpdDoc, String] {
       }
       Err(_) => () // agent.json 损坏不阻断打开（非权威部件），如实丢空
     }
+  }
+  // MVSL 编辑表（权威部件：渲染的真值输入，损坏或版本不符一律拒绝）
+  let mvsl_decl = manifest.get("mvsl")
+  if z.has("meta/mvsl.json") {
+    let mvsl_text = z.read_text("meta/mvsl.json")
+    let prog = match @core.program_from_json(mvsl_text) {
+      Ok(p) => p
+      Err(e) => return Err("meta/mvsl.json：\{e}")
+    }
+    match @core.validate_program(prog) {
+      Ok(_) => ()
+      Err(e) => return Err("meta/mvsl.json 校验失败：\{e}")
+    }
+    // canonical 形式是容器契约的一部分：非 canonical 字节会让
+    // open→save 不再逐字节一致，属损坏而非「可容忍的格式差异」。
+    let recanon = @core.program_to_json(prog)
+    if recanon != mvsl_text {
+      return Err("meta/mvsl.json 不是 canonical 形式（容器被改写或非本引擎产出）")
+    }
+    // manifest 声明的两个摘要必须与实际一致（篡改检测）
+    match mvsl_decl {
+      Some(mv) => {
+        let declared = match mv.get("program_sha256") {
+          Some(v) => match v.as_str() {
+            Some(s) => s
+            None => return Err("manifest.mvsl.program_sha256 不是字符串")
+          }
+          None => return Err("manifest.mvsl 缺 program_sha256")
+        }
+        let actual = @base.sha256_hex(@utf8.encode(mvsl_text))
+        if declared != actual {
+          return Err("编辑表指纹对账失败：manifest 记录 \{declared}，实际 \{actual}")
+        }
+        let rc = match mv.get("render_contract") {
+          Some(v) => match v.as_num() {
+            Some(n) => n
+            None => return Err("manifest.mvsl.render_contract 不是数字")
+          }
+          None => return Err("manifest.mvsl 缺 render_contract")
+        }
+        if rc > @core.RENDER_CONTRACT_VERSION.to_double() {
+          return Err(
+            "render contract 版本 \{@core.fmt_num(rc)} 高于引擎支持的 \{@core.RENDER_CONTRACT_VERSION}，拒绝打开（不静默错渲）",
+          )
+        }
+        let sa = match mv.get("selector_algo") {
+          Some(v) => match v.as_str() {
+            Some(s) => s
+            None => return Err("manifest.mvsl.selector_algo 不是字符串")
+          }
+          None => return Err("manifest.mvsl 缺 selector_algo")
+        }
+        if sa != @core.SELECTOR_ALGO_VERSION {
+          return Err(
+            "selector 算法版本 \{sa} 与引擎的 \{@core.SELECTOR_ALGO_VERSION} 不符，拒绝打开（选择子算法变了，微调过的编辑表会漂移）",
+          )
+        }
+        let cs = match mv.get("color_semantics") {
+          Some(v) => match v.as_str() {
+            Some(s) => s
+            None => return Err("manifest.mvsl.color_semantics 不是字符串")
+          }
+          None => return Err("manifest.mvsl 缺 color_semantics")
+        }
+        if cs != @core.COLOR_SEMANTICS_VERSION {
+          return Err(
+            "色彩语义版本 \{cs} 与引擎的 \{@core.COLOR_SEMANTICS_VERSION} 不符，拒绝打开",
+          )
+        }
+      }
+      None => return Err("容器带 meta/mvsl.json 但 manifest 无 mvsl 版本块（拒绝半截状态）")
+    }
+    m.mvsl = prog
+  } else if mvsl_decl is Some(_) {
+    return Err("manifest 声明了 mvsl 但缺 meta/mvsl.json（拒绝半截状态）")
   }
   Ok(m)
 }

@@ -72,6 +72,13 @@ pub fn list_tools() -> Array[AgentTool] {
   add("redo", "重做", "meta")
   add("save-mpd-b64", "会话打包为 .mpd 容器字节（base64）", "meta")
   add("open-mpd-b64", "open-mpd-b64 <b64>：载入容器（拒绝式校验）", "meta")
+  // MVSL 编辑表（确定性编辑 IR）：人机同一张表，AI 与 GUI 同一撤销栈
+  add("mvsl-set", "mvsl-set <base64(canonical program json)>：安装 MVSL 编辑表（校验+规范化，空 ops 表示逐位还原底图）", "meta")
+  add("mvsl-show", "当前 MVSL 编辑表 canonical 全文 + program_sha256 + 三个算法版本 pin", "meta")
+  add("mvsl-clear", "清空 MVSL 编辑表（渲染逐位还原底图）", "meta")
+  add("select-preview", "select-preview <base64(sel json)> [max=1024]：选择子 → overlay PNG（洋红覆盖）+ 覆盖率/bbox/连通域事实（AI 选 ID 不报坐标）", "both")
+  add("mvsl-impact", "mvsl-impact [max=1024]：执行编辑表 → 逐算子 diff 证书（改动数/ΔE/选区外泄漏率）+ 结果 PNG", "both")
+  add("mvsl-assert", "保护断言检查：保护区 ΔE / 改动比例超限则命令信封直接 fail（别动人物 = 机器可验证约束）", "both")
   t
 }
 

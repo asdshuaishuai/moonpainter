@@ -17,6 +17,9 @@ pub(all) struct Session {
   redo_stack : Array[String]
   /// 最近一次 render 的 png sha256（vision 通道注册）
   mut last_render_hash : String
+  /// 当前 MVSL 编辑表（人机同一 IR：GUI 操作与 AI 工具调用走同一张表、
+  /// 同一撤销栈；渲染的真值输入，随 .mpd 的 meta/mvsl.json 落盘）
+  mut mvsl : @core.EditProgram
 }
 
 ///|
@@ -43,6 +46,7 @@ pub fn Session::new() -> Session {
     undo_stack: [],
     redo_stack: [],
     last_render_hash: "",
+    mvsl: @core.EditProgram::new(),
   }
 }
 
@@ -148,6 +152,13 @@ pub fn exec(s : Session, line : String) -> String {
     "edits" => cmd_edits(s)
     "undo" => cmd_undo(s)
     "redo" => cmd_redo(s)
+    // MVSL 编辑表（PLAN-MVSL §4 P1 闭环 affordance）
+    "mvsl-set" => cmd_mvsl_set(s, tokens)
+    "mvsl-show" => cmd_mvsl_show(s)
+    "mvsl-clear" => cmd_mvsl_clear(s)
+    "select-preview" => cmd_select_preview(s, tokens)
+    "mvsl-impact" => cmd_mvsl_impact(s, tokens)
+    "mvsl-assert" => cmd_mvsl_assert(s)
     "save-mpd-b64" => cmd_save_b64(s)
     "open-mpd-b64" => cmd_open_b64(s, tokens)
     _ => err("未知命令 \{verb}（help 查看全量）")
@@ -1427,6 +1438,7 @@ pub fn pack_current(s : Session) -> Result[Bytes, String] {
     None => return Err("尚未创建文档：先执行 new <w> <h>")
   }
   let m = @mpd.MpdDoc::new(doc)
+  m.mvsl = s.mvsl
   for pair in s.assets {
     m.add_asset(pair.0, pair.1)
   }
@@ -1458,6 +1470,7 @@ pub fn load_mpd(s : Session, bytes : Bytes) -> Result[String, String] {
     Err(e) => return Err(e)
   }
   s.doc = Some(m.doc)
+  s.mvsl = m.mvsl
   s.assets.clear()
   for pair in m.assets {
     s.assets.push(pair)

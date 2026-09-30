@@ -126,6 +126,63 @@ affordance，人机同一编辑表、同一撤销栈。
   指标：IoU、选区外泄漏率 <1%、目标色相误差、交互轮数、token 成本；
   门槛：A4 易/中难度成功率 ≥80% 且显著优于 A0，中位 ≤4 轮。
 
+## 4.5 实施进度（每轮更新；未勾选 = 尚未落地）
+
+### P0 钉语义 —— 已完成
+
+- [x] 编辑表 IR（core/mvsl.mbt）：选择子/算子/断言 + canonical JSON 双向；
+      求值基准默认 `base`、显式 `stage:n` 且**拒绝前视引用**；
+      算子顺序即语义、canonical 化不重排；`MVSL_IR_VERSION` /
+      `RENDER_CONTRACT_VERSION` / `SELECTOR_ALGO_VERSION` /
+      `COLOR_SEMANTICS_VERSION` / `OP_SEMANTICS_VERSION` 五个版本 pin。
+- [x] 空编辑表逐位还原短路（`run_program` 在 ops 为空时直接返回 base 本身）。
+- [x] 参数定点格式化：复用 `@core.fmt_num`（禁 -0/NaN 入容器），
+      并做范围校验（amount/hue/temp/gain/refine 半径与 eps）。
+
+### P1 闭环 affordance —— 部分完成
+
+- [x] `select-preview`：选择子 → overlay PNG（洋红软覆盖）+ 覆盖率/bbox/
+      连通域事实（id/bbox/质心/面积/均值色/环平均色相）。**先全分辨率生成
+      overlay 再盒平均降采样**（防发丝级软边界被抹掉误判）。
+- [x] `mvsl-impact`：逐算子 diff 证书（改动像素数 / 平均与最大 ΔE /
+      目标区 ΔE / 选区外泄漏率）+ 结果 PNG。
+- [x] `mvsl-assert`：保护断言违反 → 命令信封直接 fail 并带全部明细。
+- [x] 编辑表随容器持久化（`meta/mvsl.json` + manifest `mvsl` 版本块，
+      容器升版 v2，篡改/半截状态/更高 render contract 一律拒绝）。
+- [ ] `census` 升级：hue×sat 桶 + `within=` 选择子参数 + `components()`。
+- [ ] `probe` 升级：batch + 5×5 邻域统计 + membership + component id。
+
+### P2 算子与选择子 —— 部分完成
+
+- [x] `recolor`（OKLCh 改 h、preserve OKLab L、gamut 在 chroma 上收、
+      softstep 软窗、环距）、`temperature`（蓝↔黄轴，与 recolor 分家）、
+      `relight`（L 增益）。
+- [x] guided filter 精修原语（盒滤波积分近似，O(N)）。
+- [x] `component_of(colorSel, seed, ΔEtol)` 种子连通域选择子。
+- [x] 选区精修：grow/shrink/feather/fill_holes/keep_largest。
+- [ ] `recolor` 的边界带去污染（`I = αF + (1−α)B` 只改 F）——当前是
+      软权重的线性插值，未做「只改前景」的显式去污染。
+- [ ] 参数化蒙版系统（矢量蒙版 roughen/feather 与 MVSL 选择子的统一）。
+
+### P3 最小验证 —— 部分完成
+
+- [x] **Phase 0 引擎不变量**（无 AI）：identity（空程序逐位还原）/
+      parse→canonicalize→render 重放逐位一致 / undo 逐位回底 /
+      A∘B≠B∘A 显式入规范并有测试 / 色相环 wrap-around / 软窗单调性。
+- [x] **Phase 1 表达力上限**（无 AI）：colorSel 暴力搜索 vs 真值 mask，
+      IoU ≥ 0.9 门槛（pixel/mvsl_wbtest.mbt）。
+- [ ] **Phase 2 真 VLM 消融**：合成对抗集（红苹果+红桌布 h 差 2°、双苹果、
+      阴影偏棕、高光偏白）+ 30–50 张带真值图；arms A0→A4；门槛
+      A4 易/中难度成功率 ≥80% 且显著优于 A0，中位 ≤4 轮。
+
+### 下一步（按价值排序）
+
+1. **把 MVSL 层接进渲染管线**：新增层类型引用「底图资产 + 编辑表」，
+   引入 `pixel ← render` 依赖（AGENTS 铁律 5），让 `render`/`previews/`
+   真正体现编辑结果——这是当前最大的诚实缺口。
+2. `census`/`probe` 升级（AI 定位区域的最短路径）。
+3. Phase 2 的对抗集与消融实验（需要真实 VLM）。
+
 ## 5. 风险清单（评审原话摘要，实现时对照自查）
 
 - 预览与终渲染不一致（低分辨率预览丢发丝 → 同管线渲染后再降采样）。

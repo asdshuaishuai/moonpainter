@@ -1199,6 +1199,37 @@ fn guard_of(v : JValue) -> Result[Guard, String] {
 }
 
 ///|
+/// 单条 `SelSpec` 的 canonical 序列化（affordance 命令的入参格式，
+/// 与 `selspec_from_json` 严格互逆）。
+///
+/// 有它调用方就不必手写选择子 JSON——手写少一个大括号就会得到
+/// 「json: 第 N 字符后有多余内容」这种指不到病根的报错。
+pub fn selspec_to_json(s : SelSpec) -> String {
+  selspec_json(s)
+}
+
+///|
+/// 单条 `SelSpec` 的反解入口。
+///
+/// affordance 命令（select-preview / probe / census within=）要能直接喂
+/// 一条选择子，不该被迫裹一张完整编辑表——「先造一条假编辑」是调用方
+/// 最容易出错的地方。
+pub fn selspec_from_json(text : String) -> Result[SelSpec, String] {
+  let v = match parse_json(text) {
+    Ok(x) => x
+    Err(e) => return Err("选择子解析失败：\{e}")
+  }
+  let s = match selspec_of(v) {
+    Ok(x) => x
+    Err(e) => return Err(e)
+  }
+  match validate_sel(s, "选择子") {
+    Ok(_) => Ok(s)
+    Err(e) => Err(e)
+  }
+}
+
+///|
 /// 编辑表反解。缺字段 → 空编辑表（旧容器可开）。
 /// 更高 IR 版本 / 未知算子 / 未知选择子一律拒绝。
 pub fn program_from_json(text : String) -> Result[EditProgram, String] {

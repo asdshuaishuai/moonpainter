@@ -205,3 +205,46 @@ native **59/59**、js **58/58**、wasm-gc **57/57**；`./verify.sh` 六步 ✓�
 native **67/67**、js **66/66**、wasm-gc **65/65**；`moon check` 0 错误
 （native 0 警告，js 1 条 main 包黑盒测试形态提示——工具链迁移预告，非代码问题）；
 `./verify.sh` 六步 ✓、`./build_demo.sh` 五步 ✓。
+
+## 补遗 5：MVSL 确定性编辑 IR 轮（2026-09-30，"按当前进度继续完成任务"）
+
+### 做了什么
+
+1. **MVSL 编辑引擎入库并修复**（`core/mvsl.mbt` + `pixel/`）：
+   工作区里的这份 WIP 此前 `moon check` 62 条 warning、4 个测试失败、
+   2 个测试无限自递归。修掉六处真实的数值/几何缺陷（sRGB 传递函数指数
+   写成 3 而非 2.4、`mexp` 归约用 ln2 放缩却乘 e、gamut compress 在
+   线性 RGB 上等比缩放导致纯红被压成黑、`rect_dist` 算的是到中心的距离、
+   `evidence:null` 反解成空证据破坏 canonical 幂等、`msin` 归约区间过大
+   带来 3e-8 截断误差），并为每一条补了回归测试。
+2. **测试口径修正**：`*_test.mbt` 是 blackbox，包内符号必须写 `@pkg.x`；
+   需要直接访问私有符号的用 `*_wbtest.mbt`。pixel 与 cli 的测试文件按此
+   归位，`moon check` 与 `moon test` 双双 0 警告。
+3. **affordance 命令面**（PLAN-MVSL §P1）：`select-preview`（overlay PNG +
+   覆盖率/bbox/连通域事实）、`mvsl-impact`（逐算子 diff 证书 + 结果 PNG）、
+   `mvsl-assert`（保护断言违反即信封 fail）、`mvsl-set/show/clear`；
+   覆盖预览遵守「先全分辨率生成再降采样」。
+4. **编辑表随容器持久化**：新增权威条目 `meta/mvsl.json` + manifest `mvsl`
+   版本块（render_contract / selector_algo / color_semantics / op_semantics
+   + program_sha256）；容器 **v1 → v2 升版**（不认识编辑表的旧引擎必须在
+   入口拒绝，而不是少渲染一批编辑）；非 canonical 编辑表、指纹对账失败、
+   半截状态一律拒绝。
+5. **验证门升 7 步**：新增 MVSL 子进程 e2e（安装 → impact 校验改动像素数与
+   泄漏率 → 合法程序放行/侵权程序被断言拦下 → 编辑表随容器往返且
+   开→存字节一致）。
+
+### 验收口径
+
+`moon check` 0 error / 0 warning；`moon test --target native` **118/118**、
+`--target wasm-gc` **116/116**；`./verify.sh` **七步全过**。
+（对比补遗 4：native 67 → 118。）
+
+### 仍未落地（诚实边界，详见 README 与 DESIGN §8）
+
+- **MVSL 编辑表还没接进渲染管线**：`render` / `previews/` 仍只画
+  `design.json` 的层，`mvsl-impact` 的结果图是编辑表当前唯一的可视化出口。
+  接进管线需要新增层类型并显式引入 `pixel ← render` 依赖。
+- `census` 升级（hue×sat 桶 / `within=` / `components()`）与 `probe` 升级
+  （batch / 5×5 邻域 / membership / component id）未落地。
+- `recolor` 的边界带去污染（`I = αF + (1−α)B` 只改前景）未做。
+- PLAN-MVSL §P3 Phase 2 的真 VLM 消融实验未做（需要真实多模态模型）。

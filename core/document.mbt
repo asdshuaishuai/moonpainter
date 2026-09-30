@@ -18,7 +18,14 @@ pub const ENGINE_VERSION : String = "0.1.0"
 pub const MPD_FORMAT_ID : String = "moonpainter.mpd"
 
 ///|
-pub const MPD_VERSION : Int = 1
+/// 容器规范版本。
+///
+/// v1 → v2：新增权威条目 `meta/mvsl.json`（当前 MVSL 编辑表）与
+/// manifest 的 `mvsl` 版本块。**必须升版**而不是静默追加：MVSL 编辑表
+/// 是渲染的真值输入，不认识它的旧引擎会「打开成功但少渲染一批编辑」，
+/// 那正是 PLAN-MVSL 明令禁止的静默错渲。升版后旧引擎按
+/// 「版本高于支持范围」直接拒绝打开，把问题暴露在入口。
+pub const MPD_VERSION : Int = 2
 
 ///|
 /// design.json 的文档格式标识（区别于容器标识，允许独立演进）。
