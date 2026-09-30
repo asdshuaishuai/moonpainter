@@ -52,7 +52,7 @@ test "census within：区域收窄 + 覆盖率/bbox/连通域事实" {
   let s = two_tone("census-within")
   let r = run(s, "census within=\{b64_sel(rect_sel(0.0, 0.0, 160.0, 240.0))} components=4")
   assert_true(r.contains("\"counted\":38400"), msg=r)
-  assert_true(r.contains("\"coverage\":0.5"), msg=r)
+  assert_true(near(jnum_field(r, "coverage"), 0.5), msg=r)
   assert_true(r.contains("\"components\":1"), msg=r)
   assert_true(r.contains("\"bbox\":[0,0,159,239]"), msg=r)
   assert_true(r.contains("\"component_facts\":[{\"id\":1"), msg=r)

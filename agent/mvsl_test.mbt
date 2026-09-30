@@ -103,7 +103,7 @@ test "MVSL：select-preview 返回数值证书 + 覆盖图（图与数一并给�
   let r = run(s, "select-preview \{b64_of(sel)} max=120")
   assert_true(r.contains("\"op\":\"select-preview\""), msg=r)
   // 左半边 = 320×240 的一半 → 覆盖率 ≈ 0.5
-  assert_true(r.contains("\"coverage\":0.5"), msg=r)
+  assert_true(near(jnum_field(r, "coverage"), 0.5), msg=r)
   assert_true(r.contains("\"components\":1"), msg=r)
   assert_true(r.contains("\"bbox\":[0,0,159,239]"), msg=r)
   assert_true(r.contains("\"component_facts\":[{\"id\":1"), msg=r)
@@ -123,6 +123,104 @@ test "MVSL：select-preview 返回数值证书 + 覆盖图（图与数一并给�
 }
 
 ///|
+/// 取回包里 `per_op[idx]` 的数值字段。
+///
+/// **为什么不能用 `contains("\"leak_ratio\":0")`**：那是子串匹配，而
+/// `"leak_ratio":0.0279` 以 `"leak_ratio":0` 开头——泄漏率在 `[0,1)` 的
+/// 任何值都能通过。本仓库曾有 5 处 leak 断言栽在这上面，看起来在守护
+/// "选区外零泄漏"，实际只拒绝 ≥ 1 的泄漏率。数值字段一律精确解析。
+fn per_op_num(text : String, idx : Int, key : String) -> Double {
+  let obj = match @core.parse_json(text) {
+    Ok(o) => o
+    Err(e) => abort("回包不是 JSON（\{e}）：\{text}")
+  }
+  let arr = match obj.get("per_op") {
+    Some(@core.JValue::JArr(a)) => a
+    _ => abort("回包缺 per_op 数组：\{text}")
+  }
+  if idx >= arr.length() {
+    abort("per_op 只有 \{arr.length()} 项，取不到第 \{idx} 项")
+  }
+  let v = match arr[idx].get(key) {
+    Some(x) => x
+    None => abort("per_op[\{idx}] 缺字段 \{key}：\{text}")
+  }
+  match v.as_num() {
+    Some(x) => x
+    None => abort("per_op[\{idx}].\{key} 不是数字：\{text}")
+  }
+}
+
+///|
+/// 浮点近似相等（coverage 之类由权重求和得出，别用 ==）。
+fn near(a : Double, b : Double) -> Bool {
+  let d = if a > b { a - b } else { b - a }
+  d < 0.000000001
+}
+
+///|
+test "MVSL：软色彩窗落在真实渐变上时，过渡带不算泄漏" {
+  // 上面那条用的是几何硬边选择子（权重非 0 即 1）。这里换**真实渐变**：
+  // 色相连续变化，任何色窗都必然带软过渡带（0 < w < 0.5 的像素）。
+  //
+  // 这曾是一个概念错误：leak 判据原为 `w >= 0.5`，把过渡带算成"选区外"，
+  // 于是软选择子一律报出非零"泄漏率"（实测 8.5%），模型会据此去收缩
+  // 选择子——而过渡带本来就是要改的区域。
+  let s = scene("mvsl-impact-soft")
+  let _ = run(
+    s,
+    "add-rect x=0 y=0 w=160 h=180 lgrad=#F2C14EFF,#A8221AFF,0,0,1,1 name=g",
+  )
+  let sel : @core.SelSpec = {
+    basis: @core.Base,
+    expr: @core.Atom(
+      @core.Color({
+        h_center: 50.0,
+        h_half: 30.0,
+        s_center: 0.14,
+        s_half: 0.10,
+        l_center: 0.64,
+        l_half: 0.25,
+        feather: 0.4,
+      }),
+    ),
+  }
+  let op : @core.EditOp = {
+    id: "e1",
+    kind: @core.Recolor,
+    sel,
+    amount: 1.0,
+    hue_deg: -70.0,
+    temp_kelvin: 0.0,
+    relight_gain: 1.0,
+    refine: [],
+    note: "",
+    evidence: None,
+  }
+  let prog : @core.EditProgram = { ops: [op], guards: [] }
+  let set = run(s, "mvsl-set \{b64_of(@core.program_to_json(prog))}")
+  assert_true(set.contains("\"ops\":1"), msg=set)
+  // 前提自检：这个选择子必须真的带软边界（覆盖率不是整数比 = 权重非全 0/1）
+  let pv = run(s, "select-preview \{b64_of(@core.selspec_to_json(sel))}")
+  let cov = jnum_field(pv, "coverage")
+  assert_true(cov > 0.0, msg="色窗应命中渐变中段：\{pv}")
+  // 前提自检：必须真的带软边界。软选择子的 coverage 不会是 0/1 之类的
+  // 整数比（那是"权重非 0 即 1"的硬边特征）——否则这条测试没测到过渡带。
+  assert_true(
+    !near(cov, 0.0) && !near(cov, 1.0),
+    msg="该选择子没产生软边界，测不到过渡带：coverage=\{cov}",
+  )
+  let imp = run(s, "mvsl-impact max=120")
+  let leak = per_op_num(imp, 0, "leak_ratio")
+  assert_true(leak == 0.0, msg="过渡带被误判成泄漏：leak_ratio=\{leak}")
+  // 且确实改了东西（不是空操作在"通过"）
+  assert_true(
+    jnum_field(imp, "changed_total") > 0.0,
+    msg="该编辑表本应产生改动：\{imp}",
+  )
+}
+
+///|
 test "MVSL：mvsl-impact 逐算子证书（改动数/ΔE/选区外泄漏率）" {
   let s = scene("mvsl-impact")
   let text = @core.program_to_json(recolor_program([]))
@@ -132,8 +230,9 @@ test "MVSL：mvsl-impact 逐算子证书（改动数/ΔE/选区外泄漏率）" 
   assert_true(r.contains("\"stages\":1"), msg=r)
   // 左半边 160×240 = 38400 像素被改
   assert_true(r.contains("\"changed\":38400"), msg=r)
-  // 几何谓词硬边 + 去污染：选区外泄漏率必须是 0
-  assert_true(r.contains("\"leak_ratio\":0"), msg=r)
+  // 去污染 + 支撑集判据：选区外泄漏率必须精确为 0
+  let leak0 = per_op_num(r, 0, "leak_ratio")
+  assert_true(leak0 == 0.0, msg="选区外泄漏 \{leak0}：\{r}")
   // 目标区平均 ΔE > 0（确实改了色）
   assert_true(r.contains("\"sel_de\":"), msg=r)
   // 空编辑表：stages 0、零改动

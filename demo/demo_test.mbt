@@ -125,7 +125,8 @@ async test "AI 修图端到端：mock 模型 × wasm 引擎 × 全程可见 × u
   let fp_edited = @demo.engine_exec_line("fingerprint")
   let _ = fp_edited
   let impact = @demo.engine_exec_line("mvsl-impact")
-  assert_true(impact.contains("\"leak_ratio\":0"), msg=impact)
+  // 精确取值：子串匹配 `"leak_ratio":0` 会被 `0.0279` 这样的值骗过
+  assert_true(impact.contains("\"leak_ratio\":0}"), msg=impact)
   assert_true(summary3.contains("精准改色"), msg=summary3)
   // 清空编辑表 → 渲染回到未编辑状态
   let cleared = @demo.engine_exec_line("mvsl-clear")

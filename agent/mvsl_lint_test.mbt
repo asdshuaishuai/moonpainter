@@ -85,7 +85,10 @@ test "lint：装了表却什么都没改 = P0（这是唯一会说出真相的�
     s,
     "select-preview \{b64_of(@core.selspec_to_json(dead_green_sel()))}",
   )
-  assert_true(preview.contains("\"coverage\":0"), msg="该选择子本就不该命中：\{preview}")
+  assert_true(
+    jnum_field(preview, "coverage") == 0.0,
+    msg="该选择子本就不该命中：\{preview}",
+  )
   let r = lint_install(s, prog)
   assert_true(r.contains("P0 mvsl"), msg=r)
   assert_true(r.contains("整张图逐位未变"), msg=r)

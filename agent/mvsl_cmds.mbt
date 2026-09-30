@@ -234,6 +234,9 @@ fn cmd_mvsl_impact(s : Session, tokens : Array[String]) -> String {
   sb.write_string(",\"per_op\":[")
   let mut first = true
   let mut prev = base
+  // 整表支撑集 = 各算子权重场的逐点并集。**不能用零场**：零场里每个像素都在
+  // 支撑集之外，total 的 leak_ratio 会退化成 changed/total（语义全错）。
+  let mut total_field = @pixel.field_new(base.width, base.height)
   let mut i = 0
   while i < s.mvsl.ops.length() {
     let op = s.mvsl.ops[i]
@@ -241,6 +244,7 @@ fn cmd_mvsl_impact(s : Session, tokens : Array[String]) -> String {
       Ok(w) => w
       Err(e) => return err(e)
     }
+    total_field = @pixel.field_union(total_field, wf)
     let after = stages[i]
     let rep = @pixel.diff_report(prev, after, wf)
     if first {
@@ -255,11 +259,7 @@ fn cmd_mvsl_impact(s : Session, tokens : Array[String]) -> String {
     i = i + 1
   }
   sb.write_string("]")
-  let total_rep = @pixel.diff_report(
-    base,
-    out,
-    @pixel.field_new(base.width, base.height),
-  )
+  let total_rep = @pixel.diff_report(base, out, total_field)
   sb.write_string(",\"changed_total\":\{total_rep.changed}")
   sb.write_string(",\"mean_de_total\":\{@core.fmt_num(total_rep.mean_de)}")
   sb.write_string(

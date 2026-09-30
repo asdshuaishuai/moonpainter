@@ -105,7 +105,8 @@ pub fn paint_system_prompt() -> String {
     "      {\"id\":\"e1\",\"kind\":\"recolor\",\"sel\":<选择子>,\"amount\":1,\"hue_deg\":120,\"temp_kelvin\":0,\"relight_gain\":1,\"refine\":[],\"note\":\"\",\"evidence\":null}；",
     "      kind 可选 recolor（改色相）/temperature（暖冷）/relight（明暗）；",
     "      选择子形如 {\"basis\":\"base\",\"expr\":{\"t\":\"geo\",\"shape\":\"rect\",\"w\":{\"x\":0,\"y\":0,\"w\":200,\"h\":200,\"feather\":0}}}；",
-    "   d) mvsl_impact 看影响证书：**leak_ratio 必须为 0**（否则说明改到了选区外）；",
+    "   d) mvsl_impact 看影响证书：**leak_ratio 必须为 0**。它查的是算子有没有写到",
+    "      选择子支撑集之外——软过渡带内的改动**不算**泄漏，所以柔边选择子也是 0；",
     "   e) 用户说「别动 XX」时把它写成 guards 里的保护断言，再用 mvsl_assert 验证；",
     "   f) 最后 render 渲染确认。编辑表会随 .mpd 落盘，是渲染的真值输入。",
   ]

@@ -44,14 +44,24 @@
    `test_unqualified_package` 警告，且在文件内定义同名 fn 会变成无限自递归）；
    需要直接访问包内私有符号时用 `*_wbtest.mbt`。两类测试都在 `moon check` 口径内。
 
+11. **数值断言必须精确解析，禁止子串匹配**：`contains("\"leak_ratio\":0")`
+    会被 `"leak_ratio":0.0279` **骗过**——泄漏率在 `[0,1)` 的任何值都能通过，
+    断言看起来在守护「选区外零泄漏」，实际只拒绝 ≥ 1 的泄漏率。本仓库曾有
+    5 处栽在这里（含 `verify.sh` 的 e2e 门），所以一个真实的判据 bug 藏了
+    好几轮没人发现。取值一律走 `@core.parse_json` + `as_num`
+    （辅助见 `agent/mvsl_test.mbt` 的 `per_op_num` / `near`）；shell 里用
+    `grep -E '"k":0[,}]'` 锚住字段值结尾。整数计数字段（`violations`/`count`）
+    碰巧不受影响，但一视同仁更省心。
+
 ## 快速命令
 
 ```bash
 ./verify.sh                     # 一键验证门：check / native 测试 / wasm-gc 测试 /
                                 # CLI 子进程 e2e / 独立 unzip 验证 / open→save 字节一致 /
                                 # MVSL 编辑表命令面 + 渲染管线闭环（安装→
-                                # render≡impact 同一张图→断言→lint 空操作/
-                                # 违约→容器往返→预览走编辑表）
+                                # render≡impact 同一张图→断言→软过渡带不
+                                # 算泄漏→lint 空操作/违约→容器往返→预览
+                                # 走编辑表）；渐变端点单位等静默失败也在此拦
 ./build_demo.sh                 # AI 修图 demo 构建 + Node headless 自检 + npm SDK 冒烟
                                 # + demo 测试（工具面与 MVSL 闭环可达，需 Node）
 moon run --target native cli    # stdin 行协议；help 查看全部 57 个命令

@@ -78,6 +78,25 @@ pub fn field_max(f : Field) -> Double {
 }
 
 ///|
+/// 逐点并集（取 max）：把多个算子的权重场合成"整表支撑集"。
+///
+/// 用途：整表级的 diff 证书。**别拿零场冒充整表权重场**——零场会让每个像素
+/// 都落在支撑集之外，于是 `leak_ratio` 退化成 `changed/total`、"选区外泄漏"
+/// 变成"改动比例"的另一个写法，语义全错（见 `DiffReport.leak_ratio`）。
+pub fn field_union(a : Field, b : Field) -> Field {
+  let out = field_new(a.w, a.h)
+  let mut i = 0
+  let n = out.v.length()
+  while i < n {
+    let x = a.v[i]
+    let y = b.v[i]
+    out.v[i] = if x > y { x } else { y }
+    i = i + 1
+  }
+  out
+}
+
+///|
 /// 盒模糊均值（可分离滑动窗，O(N)）。
 pub fn field_box_blur(f : Field, r : Double) -> Field {
   box_mean(f, trunc_pos(r))

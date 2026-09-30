@@ -103,7 +103,7 @@ else
   exit 1
 fi
 
-echo "== 7/7 MVSL 编辑表命令面 + 渲染管线闭环（安装 → render/impact 同图 → 断言 → lint 空操作/违约 → 容器往返） =="
+echo "== 7/7 MVSL 编辑表命令面 + 渲染管线闭环（安装 → render/impact 同图 → 断言 → 软边界/空操作/违约 lint → 容器往返） =="
 # canonical 编辑表由引擎自己产出（不手写 JSON——少一个大括号就会得到
 # 指不到病根的解析错误）。这里用固定文本：字段序即 canonical 字段序。
 MVSL_PROG='{"version":1,"ops":[{"id":"e1","kind":"recolor","sel":{"basis":"base","expr":{"t":"geo","shape":"rect","w":{"x":0,"y":0,"w":160,"h":240,"feather":0}}},"amount":1,"hue_deg":120,"temp_kelvin":0,"relight_gain":1,"refine":[],"note":"","evidence":null}],"guards":[{"id":"g1","sel":{"basis":"base","expr":{"t":"geo","shape":"rect","w":{"x":160,"y":0,"w":160,"h":240,"feather":0}}},"max_de":0.001,"max_changed_ratio":0}]}'
@@ -123,7 +123,9 @@ grep -q '"op":"mvsl-set"' "$OUT/mvsl.log" || { echo "FAIL: mvsl-set 未成功"; 
 grep -q '"op":"mvsl-impact"' "$OUT/mvsl.log" || { echo "FAIL: mvsl-impact 未成功"; exit 1; }
 # 左半边 160x240 必须被改动，且几何硬边 + 去污染 → 选区外泄漏率 0
 grep -q '"changed":38400' "$OUT/mvsl.log" || { echo "FAIL: impact 改动像素数不对"; exit 1; }
-grep -q '"leak_ratio":0' "$OUT/mvsl.log" || { echo "FAIL: 选区外有泄漏"; exit 1; }
+# 精确匹配：子串 `"leak_ratio":0` 会被 `"leak_ratio":0.0279` 骗过
+# （泄漏率在 [0,1) 的任何值都能通过），必须锚住字段值的结尾。
+grep -Eq '"leak_ratio":0[,}]' "$OUT/mvsl.log" || { echo "FAIL: 选区外有泄漏"; exit 1; }
 # **编辑表真的进了渲染管线**：render 与 mvsl-impact 必须给出同一张最终图。
 # 这是本轮最要紧的一条断言——它把"编辑表只是一份被存下来的数据"和
 # "编辑表真的改变了渲染结果"区分开。
@@ -175,6 +177,23 @@ if cmp -s "$OUT/flat_prog.png" "$OUT/flat_noprog.png"; then
   echo "FAIL: 带/不带编辑表的预览字节相同——预览漏渲染了编辑表"
   exit 1
 fi
+# 软选择子的过渡带**不是泄漏**：leak 判据是选择子支撑集（w>0），不是连通域
+# 证书阈值 0.5。用真实渐变 + 柔边色彩窗覆盖这一条——上面那个泄漏断言用的是
+# 几何硬边选择子（权重非 0 即 1），旧判据下也是 0，**根本测不到软边界**。
+MVSL_SOFT_SEL='{"t":"color","w":{"h":50,"hw":30,"s":0.14,"sh":0.1,"l":0.64,"lh":0.25,"feather":0.4}}'
+MVSL_SOFT='{"version":1,"ops":[{"id":"e1","kind":"recolor","sel":{"basis":"base","expr":'"$MVSL_SOFT_SEL"'},"amount":1,"hue_deg":-70,"temp_kelvin":0,"relight_gain":1,"refine":[],"note":"","evidence":null}],"guards":[]}'
+MVSL_SOFT_B64=$(printf '%s' "$MVSL_SOFT" | base64 | tr -d '\n')
+printf '%s\n' \
+  'session-open full_image' \
+  'new 320 240 uuid=mvsl-soft' \
+  'add-rect x=0 y=0 w=320 h=240 fill=#1E5ACCFF name=bg' \
+  'add-rect x=0 y=0 w=160 h=180 lgrad=#F2C14EFF,#A8221AFF,0,0,1,1 name=g' \
+  "mvsl-set $MVSL_SOFT_B64" \
+  'mvsl-impact max=120' \
+  ':exit' \
+  | moon run --target native cli > "$OUT/mvsl_soft.log"
+grep -Eq '"leak_ratio":0[,}]' "$OUT/mvsl_soft.log" || { echo "FAIL: 软过渡带被误判成泄漏"; exit 1; }
+grep -Eq '"changed_total":[1-9]' "$OUT/mvsl_soft.log" || { echo "FAIL: 软窗场景本应产生改动（断言在拿空操作通过）"; exit 1; }
 # 编辑表 lint 必须说出「装了却什么都没改」——这是一类**每个命令都返回 ok**
 # 的失败：mvsl-set ok、impact ok、assert 0 违规、render ok，只有 lint 会报。
 # 用一条必然不命中的色窗（绿，而画布只有蓝）。
@@ -201,7 +220,7 @@ printf '%s\n' \
   ':exit' \
   | moon run --target native cli > "$OUT/mvsl_lintbad.log"
 grep -q '保护断言被违反' "$OUT/mvsl_lintbad.log" || { echo "FAIL: lint 未报出被违反的保护断言"; exit 1; }
-echo "MVSL：安装/render≡impact/断言/容器往返/预览走编辑表/lint 空操作与违约 全部 OK"
+echo "MVSL：安装/render≡impact/断言/软过渡带不算泄漏/容器往返/预览走编辑表/lint 空操作与违约 全部 OK"
 
 echo ""
 echo "ALL VERIFY PASS ✓"

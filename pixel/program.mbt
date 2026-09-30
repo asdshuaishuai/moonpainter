@@ -412,8 +412,18 @@ pub(all) struct DiffReport {
   total : Int
   mean_de : Double // 全图平均 ΔE
   max_de : Double
-  sel_de : Double // 选择子内平均 ΔE
-  leak_ratio : Double // 选区外（membership < 阈值）改动像素占比
+  sel_de : Double // 选择子**核心区**（membership ≥ CERT_THRESHOLD）平均 ΔE
+  /// 支撑集之外（membership 精确为 0）被改动的像素占比。
+  ///
+  /// **这是一个不变量，结构上恒为 0**：算子写成 `out = lerp(in, op(in), w)`，
+  /// w=0 处逐位取原像素，任何算子都不可能写到选择子支撑集之外。所以它不度量
+  /// "选择子有多软"，而是兜住"某个算子的实现越界写了"这类引擎 bug。
+  ///
+  /// 曾经这里是按 `CERT_THRESHOLD`（0.5）判"选区内"的：那会把软选择子的
+  /// 过渡带（0 < w < 0.5）算成"选区外"，于是每个带柔边的选择子都报出非零
+  /// "泄漏率"——而过渡带本来就是要改的区域。这既是错的，又会把模型引向
+  /// "我改到了选区外，得收缩选择子"的错误结论。
+  leak_ratio : Double
 }
 
 ///|
@@ -439,13 +449,19 @@ pub fn diff_report(
     if de > max_de {
       max_de = de
     }
-    let inside = w.v[i] >= CERT_THRESHOLD
     if c0 != c1 {
       changed = changed + 1
     }
-    if inside {
+    // 两个判据服务于两件事，别合并：
+    //   core       —— "选择子核心区"，给 sel_de 用（核心区才是「要改的地方」）
+    //   in_support —— "选择子支撑集"，给 leak_ratio 用（支撑集外必须逐位不变）
+    // 合并成一个 0.5 判据就会把软过渡带误报成泄漏，见 DiffReport.leak_ratio。
+    if w.v[i] >= CERT_THRESHOLD {
       sel_de_sum = sel_de_sum + de
       sel_n = sel_n + 1
+    }
+    if w.v[i] > 0.0 {
+      ()
     } else {
       out_n = out_n + 1
       if c0 != c1 {

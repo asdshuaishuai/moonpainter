@@ -425,6 +425,66 @@ test "diff 证书：选区外泄漏率为 0（软边界不越界）" {
 }
 
 ///|
+test "diff 证书：软过渡带不算泄漏（leak 判据是支撑集，不是 0.5 核心阈值）" {
+  // 这条测试锁住一个已经被踩过的概念错误：leak 的判据曾经是
+  // `w >= CERT_THRESHOLD`（0.5），于是**软选择子的过渡带（0 < w < 0.5）
+  // 被算成"选区外"**，每个带柔边的选择子都报出非零"泄漏率"——而过渡带
+  // 本来就是要改的区域。模型看到这个数字会去收缩选择子，方向完全错了。
+  //
+  // 事实：算子写成 out = lerp(in, op(in), w)，w=0 处逐位不变，
+  // 所以"支撑集之外被改动"结构上只能是 0 —— 它是安全网，不是软硬指标。
+  let base = mk_buf(16, 16)
+  fill(base, 0, 0, 16, 16, argb(200, 90, 40))
+  // 手工造一个"中间 1、两侧渐隐到 0"的软权重场：过渡带里 0 < w < 0.5
+  let w = field_new(16, 16)
+  let mut y = 0
+  while y < 16 {
+    let mut x = 0
+    while x < 16 {
+      // 中心 (8,8) 起，按切比雪夫距离线性衰减到 0
+      let d = if x > 8 { x - 8 } else { 8 - x }
+      let dy = if y > 8 { y - 8 } else { 8 - y }
+      let dd = if d > dy { d } else { dy }
+      let v = 1.0 - dd.to_double() / 6.0
+      w.v[y * 16 + x] = if v > 0.0 { v } else { 0.0 }
+      x = x + 1
+    }
+    y = y + 1
+  }
+  // 前提自检：这个场必须真的有过渡带（存在 0 < w < 0.5 的像素）
+  let mut band = 0
+  for v in w.v {
+    if v > 0.0 && v < CERT_THRESHOLD {
+      band = band + 1
+    }
+  }
+  assert_true(band > 0, msg="测试自身的软场没有过渡带，测不到目标")
+  let op : @core.EditOp = op_recolor("e1", sel_geo(0.0, 0.0, 16.0, 16.0), 200.0)
+  let after = apply_op(base, op, w)
+  let rep = diff_report(base, after, w)
+  assert_true(rep.changed > 0, msg="软场内应有改动")
+  assert_true(
+    rep.leak_ratio == 0.0,
+    msg="软过渡带被误判成泄漏：leak_ratio=\{rep.leak_ratio}",
+  )
+  // 反向对照：支撑集之外**真的**被改动时必须报出来。
+  // 这保证 leak 判据不是"永远返回 0"的假安全网。
+  let after_tampered = mk_buf(16, 16)
+  let mut i = 0
+  while i < 256 {
+    after_tampered.pixels[i] = after.pixels[i]
+    i = i + 1
+  }
+  // (0,0) 在支撑集之外（w=0），手工改掉它
+  after_tampered.pixels[0] = argb(0, 0, 0)
+  let rep2 = diff_report(base, after_tampered, w)
+  assert_true(
+    rep2.leak_ratio > 0.0,
+    msg="支撑集外被改动却报 0 泄漏——安全网失效",
+  )
+}
+
+///|
 test "STAGE(n) 基准：前视引用被拒绝" {
   let base = mk_buf(8, 8)
   fill(base, 0, 0, 8, 8, argb(50, 50, 50))

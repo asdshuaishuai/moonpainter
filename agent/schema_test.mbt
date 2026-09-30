@@ -147,7 +147,10 @@ test "闭环：用 probe 报出来的数字拼选择子，精确命中该区域�
   let rep = run(s, "select-preview \{b64_of(sel)} max=64")
   assert_true(rep.contains("\"ok\":true"), msg=rep)
   // 3) 命中面积必须正好是左半（0.5），且只有一个连通域
-  assert_true(rep.contains("\"coverage\":0.5"), msg="从引擎数值拼出的选择子没命中左半：\{rep}")
+  assert_true(
+    near(jnum_field(rep, "coverage"), 0.5),
+    msg="从引擎数值拼出的选择子没命中左半：\{rep}",
+  )
   assert_true(rep.contains("\"components\":1"), msg=rep)
   assert_true(rep.contains("\"bbox\":[0,0,159,239]"), msg=rep)
   // 4) 同一条选择子装进编辑表后，改动像素数必须等于该区域面积
@@ -156,7 +159,8 @@ test "闭环：用 probe 报出来的数字拼选择子，精确命中该区域�
   assert_true(set.contains("\"ops\":1"), msg=set)
   let imp = run(s, "mvsl-impact")
   assert_true(imp.contains("\"changed\":38400"), msg="改动像素数应为 160×240：\{imp}")
-  assert_true(imp.contains("\"leak_ratio\":0"), msg="选区外不得有泄漏：\{imp}")
+  let leak = per_op_num(imp, 0, "leak_ratio")
+  assert_true(leak == 0.0, msg="选区外泄漏 \{leak}：\{imp}")
 }
 
 ///|
