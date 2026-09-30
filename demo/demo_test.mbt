@@ -154,4 +154,31 @@ async test "AI 修图端到端：mock 模型 × wasm 引擎 × 全程可见 × u
   // 清空编辑表 → 渲染回到未编辑状态
   let cleared = @demo.engine_exec_line("mvsl-clear")
   assert_true(cleared.contains("\"ops\":0"), msg=cleared)
+  // ── 回合 4：文字 + 可见性（前端有按钮，AI 工具面此前够不着）──
+  // 和 redo 一样的不对称：前端一直有「加文字」与「👁 可见性」按钮，引擎也有
+  // add-text/visible 命令，但工具面没有对应工具。补上后要验证的是**行为**，
+  // 不只是"接得上"——所以这里让文字**带空格**：那正是"下划线代替空格"
+  // 从未实现时会静默出错的地方（会存成 Hello_MoonPainter）。
+  let _ = @demo.engine_exec_line("new 320 200")
+  let renders_before4 = renders
+  let summary4 = @demo.run_edit_turn(
+    "给这张图加个文字标题",
+    {
+      provider: "mock",
+      base_url: "",
+      model: "mock-script",
+      api_key: "",
+    },
+    log=fn(line) { log_lines.val.push(line) },
+    on_image=fn(_png) { renders = renders + 1 },
+  )
+  let t1 = @demo.engine_exec_line("query-layer l1")
+  assert_true(
+    t1.contains("\"text\":\"Hello MoonPainter\""),
+    msg="含空格的文字没有原样进文档（分词或工具拼串有问题）：\{t1}",
+  )
+  // 回合里的第二步把 l1 切成不可见
+  assert_true(t1.contains("\"visible\":false"), msg="visible 工具未生效：\{t1}")
+  assert_eq(renders - renders_before4, 1, msg="文字回合的图像附件数")
+  assert_true(summary4.contains("标题"), msg=summary4)
 }

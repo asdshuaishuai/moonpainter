@@ -521,6 +521,9 @@ fn PaintModel::mock_chat(
   }
 
   let wants_badge = request.contains("徽章") || request.contains("圆")
+  // 文字回合：故意让文字里**带空格**——那正是"下划线代替空格"从未实现时
+  // 会静默出错的地方（曾经存进去会变成 Hello_MoonPainter）
+  let wants_text = request.contains("文字") || request.contains("标题")
   let wants_cool = request.contains("冷") || request.contains("蓝")
   let wants_precise = request.contains("精准") || request.contains("编辑表")
   // 脚本：精准改色 = MVSL 闭环 5 轮（先看语法再取数值）；
@@ -577,7 +580,35 @@ fn PaintModel::mock_chat(
       }
     }
   }
-  if wants_badge {
+  if wants_text {
+    match step {
+      0 =>
+        return with_calls(
+          "好的，先加一行文字标题。",
+          [
+            call(
+              "t1",
+              "add_text",
+              "{\"x\":24,\"y\":24,\"text\":\"Hello MoonPainter\",\"font_size\":28,\"fill\":\"#1B2A41FF\",\"name\":\"标题\"}",
+            ),
+          ],
+        )
+      1 =>
+        return with_calls(
+          "再确认一下可见性开关能关掉这一层。",
+          [call("t2", "visible", "{\"id\":\"l1\",\"visible\":\"false\"}")],
+        )
+      2 =>
+        return with_calls("渲染看一眼。", [call("t3", "render", "{\"w\":400}")])
+      _ => {
+        self.mock_step = 0
+        return {
+          completion: say("标题加好了，可见性也验证过（该层已切到隐藏）。"),
+          processed_messages: [],
+        }
+      }
+    }
+  } else if wants_badge {
     match step {
       0 =>
         return with_calls(

@@ -101,6 +101,9 @@ fn tool_cmd(name : String) -> String? {
     // 它们当初只加进了 `line` match，**没加进这张表**，于是 `cmd` 求值阶段
     // 就直接返回"未知工具"——9 个工具在工具面上一直是坏的（人类走前端按钮，
     // 而这些工具的端到端回合从来没写过，所以没人发现）。
+    "add_text" => Some("add-text")
+    "set_text" => Some("set-text")
+    "visible" => Some("visible")
     "group" => Some("group")
     "ungroup" => Some("ungroup")
     "tag" => Some("tag")
@@ -254,6 +257,28 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
     make_tool("tag", "给图层打语义标签（如 hero/background/logo）", [("id", "string:req:图层 id"), ("tag", "string:req:标签")]),
     make_tool("undo", "撤销上一次修改（工具出错后自我纠正用）", []),
     make_tool("redo", "重做被撤销的修改（undo 的对偶；撤销过头时恢复）", []),
+    make_tool(
+      "add_text",
+      "加文本层（ASCII 真字形）。文字可含空格（命令行层会自动加引号）",
+      [
+        ("x", "integer:req:左上 x（像素）"),
+        ("y", "integer:req:左上 y（像素）"),
+        ("text", "string:req:文字内容，可含空格"),
+        ("font_size", "integer:字号 px（默认 16）"),
+        ("fill", "string:颜色 #RRGGBB[AA]（默认黑）"),
+        ("name", "string:图层名"),
+      ],
+    ),
+    make_tool(
+      "set_text",
+      "改文本层的内容（保留位置/字号/颜色）",
+      [("id", "string:req:文本层 id"), ("text", "string:req:新内容，可含空格")],
+    ),
+    make_tool(
+      "visible",
+      "切换图层可见性（`visible=false` 的层不参与渲染，但仍留在文档里）",
+      [("id", "string:req:图层 id"), ("visible", "string:req:true 或 false")],
+    ),
     make_tool("save_mpd", "把当前文档打包为 .mpd 容器（页面会提供下载）", []),
     // 修图操作（B4.5）
     make_tool("add_paint_layer", "新建画笔层（自由手绘/涂抹的载体）", [("name", "string:图层名")]),
@@ -467,6 +492,20 @@ pub impl @posoco.ToolProvider for PaintTools with fn execute(
       "query-layer \{id}"
     }
     "pick" => "pick \{arg(call, "x")} \{arg(call, "y")}"
+    "add_text" => {
+      let x = arg(call, "x")
+      let y = arg(call, "y")
+      let txt = quote_arg(arg(call, "text"))
+      let fs = opt(call, "font_size", "16")
+      let fill = opt(call, "fill", "#000000FF")
+      let name = quote_arg(opt(call, "name", "文本"))
+      "add-text x=\{x} y=\{y} text=\{txt} font_size=\{fs} fill=\{fill} name=\{name}"
+    }
+    "set_text" => {
+      let id = arg(call, "id")
+      "set-text \{id} \{quote_arg(arg(call, "text"))}"
+    }
+    "visible" => "visible \{arg(call, "id")} \{arg(call, "visible")}"
     "group" => {
       let ids = arg(call, "ids")
       "group \{arg(call, "gid")} \{ids.replace(old=",", new=" ")}"

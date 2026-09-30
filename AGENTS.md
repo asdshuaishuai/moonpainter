@@ -91,7 +91,14 @@ moon run --target native cli    # stdin 行协议；help 查看全部 57 个命�
   浏览器 demo 不可用）；
 - 工具回包给 LLM 一律截断（shorten），render 的 PNG 走 attachments 不走文本
   （`render` / `select_preview` / `mvsl_impact` 三个图像类工具同规）；
-- demo 工具面是 agent 命令面的**手写子集**（当前 40 个）：引擎新增命令后，
+- **自由文本参数必须用双引号包裹**：`text="Hello World"`、`name="My Layer"`。
+  命令行协议按空白分词，`tokenize_line` 支持双引号（引号内的空格不参与切分，
+  `\"` 表示字面引号）。原先协议里只有"下划线代替空格"一说——它写在
+  `add-text` 的错误提示里、前端 `do_text_add` 也真的把空格换成了下划线，
+  **但引擎从未实现还原**，于是用户输入 "Hello World"，存进去和渲染出来的
+  都是 `Hello_World`。现在 `_` 保持**字面下划线**（历史行为完全不变），
+  含空格靠引号。新增自由文本参数时，走 `quote_arg`（demo/main.mbt）拼串。
+- demo 工具面是 agent 命令面的**手写子集**（当前 43 个）：引擎新增命令后，
   要用到就该同步加进 `paint_tools.mbt` 的 `paint_tool_defs` + `tool_cmd` +
   `catalog.mbt` 的 system prompt，否则"引擎有能力"不等于"产品里的 AI 用得上"。
   模型侧只写 JSON，base64 由 SDK 的 `b64_text` 转。
