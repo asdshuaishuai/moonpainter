@@ -174,9 +174,13 @@ manifest 的 `mvsl` 版本块 pin 住四个独立版本号（`render_contract` /
   「底图 + 编辑表」。让模型看底图等于让它基于错图决策；
 - **编辑唯一写入通道是元参数层的结构化命令**——保证 canonical、可撤销、可门禁；视觉通道负责 grounding 与验收；
 - 归一化坐标协议：viewport 用 `[0,1]` 表述，消除分辨率歧义；
-- P0–P2 谓词（lint）：画布限额（P0）、重复 id/幽灵资产引用（P1）、零尺寸/完全越界/opacity 越界（P2）。
+- P0–P2 谓词（lint）：画布限额（P0）、重复 id/幽灵资产引用（P1）、零尺寸/完全越界/opacity 越界（P2）；
+- **lint 也检查编辑表**：编辑表有一整类「所有命令都返回 ok」的失败，只有 lint 会说出来——
+  装了非空表却整张图逐位未变（P0）、保护断言被违反（P0）、编辑表执行失败如 mask 资产未登记（P0）、
+  某条算子的选择子没命中（P1）、构造性空算子如 `hue_deg=0`/`temp_kelvin=0`/`relight_gain=1`/`amount=0`（P1）。
+  空编辑表是合法状态，不报条目——lint 不该对「我还没改任何东西」报警。
 
-## 6. 命令集（56 个；字典 = agent/tools.mbt 单一事实源）
+## 6. 命令集（57 个；字典 = agent/tools.mbt 单一事实源）
 
 会话：`session-open` `list-tools` `help`；文档：`new` `set-canvas` `list-layers` `query-layer` `lint`；
 绘制：`add-rect/ellipse/polygon/line` `add-image`（b64）`set-style` `move` `resize` `rotate` `rename` `tag` `delete` `visible` `reorder` `group` `ungroup`；

@@ -1,7 +1,7 @@
 # MoonPainter — Agent 驱动的图层绘制引擎
 
 > 状态：**0.1.0（.mpd 容器 v2 + 参数化绘制 + AI 修图 demo + MVSL 确定性编辑 IR 引擎已落地：
-> native 140 项 / wasm-gc 138 项测试全绿；`./verify.sh` 七步验证门全过）**。
+> native 145 项 / wasm-gc 143 项测试全绿；`./verify.sh` 七步验证门全过）**。
 > 设计书 [DESIGN.md](./DESIGN.md) · 方案与验收 [PLAN.md](./PLAN.md) ·
 > MVSL 规划与评审对照 [PLAN-MVSL.md](./PLAN-MVSL.md) · AI 修图 demo 见下节。
 
@@ -100,6 +100,11 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   `sel_h≈28, sel_c≈0.20` 而 `hsv_h=0, hsv_s=0.85`——拿错一套的表现是
   「命令成功但一个像素都没选中」；彩度窗整条高于 sRGB 可达上限 0.3225
   会在装表前被**拒绝**（而不是静默返回空选）；
+- **`lint` 会检查编辑表**（编辑表有一整类「每个命令都返回 ok」的失败）：
+  P0 装了表却整张图逐位未变（选择子没命中）、P0 保护断言被违反、
+  P1 某条算子白装、P1 构造性空算子（`hue_deg=0` / `temp_kelvin=0` /
+  `relight_gain=1` / `amount=0`）、P0 编辑表执行失败（如 mask 资产未登记）。
+  只报 `changed_total=0` 是不够的——那需要调用方先知道 0 意味着"我什么都没改"；
 - agent 层用 mooncakes 的 **colmugx/posoco**（六边形端口框架：ModelPort /
   ToolProvider / Observer 三端口扩展；Observer 即"全程可见"的官方通道）。
   评估记录：moonllm（DC-Z-lab）锁 `+native` 不适用浏览器，弃用。

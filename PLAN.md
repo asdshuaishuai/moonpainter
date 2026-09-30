@@ -235,9 +235,9 @@ native **67/67**、js **66/66**、wasm-gc **65/65**；`moon check` 0 错误
 
 ### 验收口径
 
-`moon check` 0 error / 0 warning；`moon test --target native` **140/140**、
-`--target wasm-gc` **138/138**；`./verify.sh` **七步全过**。
-（对比补遗 4：native 67 → 140。）
+`moon check` 0 error / 0 warning；`moon test --target native` **145/145**、
+`--target wasm-gc` **143/143**；`./verify.sh` **七步全过**。
+（对比补遗 4：native 67 → 145。）
 
 ### 补遗 5 追加：区域级 affordance（census / probe）
 
@@ -361,6 +361,42 @@ coverage 0**——一个像素都没选中，而且命令返回 `ok:true`。
 → 往返稳定），**能否在具体画布上求值**另有 `precondition`——`comp` 的种子
 必须落在色窗内、`assetmask` 的资产必须已登记。「语法合法」与「在此画布上
 有效」是两件事，含糊过去就是骗调用方。
+
+### 补遗 5 追加七：lint 接上编辑表（让「引擎知道自己没干活」说出来）
+
+坐标系与空选窗修完之后，我顺着同一条思路找还有哪些"静默成功"。答案是
+**编辑表的"自我否定"状态**：装了非空编辑表，但整张图逐位未变。实测一路
+命令全都返回 ok：
+
+    select-preview → coverage 0（只是数字，不是告警）
+    mvsl-set       → ok, ops 1
+    mvsl-impact    → ok, changed_total=0
+    mvsl-assert    → ok, 0 违规
+    render         → ok（图没变）
+    lint           → **0 违规**
+
+只有 `changed_total=0` 这一个数字在暗示出了事，而它需要调用方先知道
+"0 意味着我的编辑什么都没做"。模型装完表、渲染、看图，只会觉得"怎么没变化"，
+然后在错误的假设下继续。
+
+修法：`lint` 接上编辑表（`agent/mvsl_lint.mbt`），五类条目——
+
+- **P0** 装了非空表却整张图逐位未变（归因到选择子：用 census/probe 重取
+  `sel_*`，或先 select-preview 确认选区）；
+- **P0** 保护断言被违反（用户的「别动 XX」被破坏——`render` 本身不查断言，
+  没有 lint 就永远没人查）；
+- **P0** 编辑表执行失败（静态校验过得了、求值才失败，例如 mask 资产未登记）；
+- **P1** 某条算子未改动任何像素（其余算子正常时点名是哪一条，而不是只报整表）；
+- **P1** 构造性空算子（`hue_deg=0` / `temp_kelvin=0` / `relight_gain=1` /
+  `amount=0`）——与画布无关，一眼可判。
+
+两处刻意的分寸：**空编辑表不报**（= 未编辑是合法状态，lint 不该对我还没改
+任何东西报警）；**归因要准**——全是构造性空算子时说"选择子没命中"是误导，
+所以分开报。
+
+`verify.sh` 第 7 步加入硬断言：必然空选的编辑表必须被 lint 报出
+「整张图逐位未变」，被违反的保护断言必须被 lint 报出——e2e 门从此也守住
+"静默成功"这条线。demo 的收工检查里也加了 lint 调用并断言它被调到。
 
 ### 仍未落地（诚实边界，详见 README 与 DESIGN §8）
 

@@ -1318,6 +1318,16 @@ fn cmd_lint(s : Session) -> String {
     Err(e) => return err(e)
   }
   let v = lint_doc(doc)
+  // 编辑表也要 lint：装了表却什么都没改、断言被违反、某条算子白装——
+  // 这些状态每个命令都返回 ok，只有 lint 会说出来。
+  if s.mvsl.ops.length() > 0 || s.mvsl.guards.length() > 0 {
+    match mvsl_base(s) {
+      Ok(base) => for item in lint_mvsl(base, s.mvsl) {
+        v.push(item)
+      }
+      Err(e) => v.push("P0 mvsl 草稿无法光栅化：\{e}")
+    }
+  }
   let sb = StringBuilder()
   sb.write_string("{\"ok\":true,\"op\":\"lint\",\"violations\":\{v.length()},\"items\":[")
   let mut f = true

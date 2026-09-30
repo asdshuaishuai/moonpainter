@@ -91,7 +91,7 @@ else
   exit 1
 fi
 
-echo "== 7/7 MVSL 编辑表命令面 + 渲染管线闭环（安装 → render/impact 同图 → 断言 → 容器往返） =="
+echo "== 7/7 MVSL 编辑表命令面 + 渲染管线闭环（安装 → render/impact 同图 → 断言 → lint 空操作/违约 → 容器往返） =="
 # canonical 编辑表由引擎自己产出（不手写 JSON——少一个大括号就会得到
 # 指不到病根的解析错误）。这里用固定文本：字段序即 canonical 字段序。
 MVSL_PROG='{"version":1,"ops":[{"id":"e1","kind":"recolor","sel":{"basis":"base","expr":{"t":"geo","shape":"rect","w":{"x":0,"y":0,"w":160,"h":240,"feather":0}}},"amount":1,"hue_deg":120,"temp_kelvin":0,"relight_gain":1,"refine":[],"note":"","evidence":null}],"guards":[{"id":"g1","sel":{"basis":"base","expr":{"t":"geo","shape":"rect","w":{"x":160,"y":0,"w":160,"h":240,"feather":0}}},"max_de":0.001,"max_changed_ratio":0}]}'
@@ -163,7 +163,33 @@ if cmp -s "$OUT/flat_prog.png" "$OUT/flat_noprog.png"; then
   echo "FAIL: 带/不带编辑表的预览字节相同——预览漏渲染了编辑表"
   exit 1
 fi
-echo "MVSL：安装/render≡impact/断言/容器往返/预览走编辑表 全部 OK"
+# 编辑表 lint 必须说出「装了却什么都没改」——这是一类**每个命令都返回 ok**
+# 的失败：mvsl-set ok、impact ok、assert 0 违规、render ok，只有 lint 会报。
+# 用一条必然不命中的色窗（绿，而画布只有蓝）。
+MVSL_DEAD='{"version":1,"ops":[{"id":"e1","kind":"recolor","sel":{"basis":"base","expr":{"t":"color","w":{"h":145,"hw":25,"s":0.18,"sh":0.08,"l":0.7,"lh":0.15,"feather":0.1}}},"amount":1,"hue_deg":120,"temp_kelvin":0,"relight_gain":1,"refine":[],"note":"","evidence":null}],"guards":[]}'
+MVSL_DEAD_B64=$(printf '%s' "$MVSL_DEAD" | base64 | tr -d '\n')
+printf '%s\n' \
+  'session-open full_image' \
+  'new 320 240 uuid=mvsl-dead' \
+  'add-rect x=0 y=0 w=320 h=240 fill=#1E5ACCFF name=bg' \
+  "mvsl-set $MVSL_DEAD_B64" \
+  'mvsl-impact' \
+  'lint' \
+  ':exit' \
+  | moon run --target native cli > "$OUT/mvsl_dead.log"
+grep -q '"changed_total":0' "$OUT/mvsl_dead.log" || { echo "FAIL: 该选择子本就不该命中"; exit 1; }
+grep -q '整张图逐位未变' "$OUT/mvsl_dead.log" || { echo "FAIL: lint 未报出空操作编辑表（静默失败）"; exit 1; }
+# 断言被违反时 lint 也必须报（用户的「别动 XX」不许静默失守）
+printf '%s\n' \
+  'session-open full_image' \
+  'new 320 240 uuid=mvsl-dead2' \
+  'add-rect x=0 y=0 w=320 h=240 fill=#1E5ACCFF name=bg' \
+  "mvsl-set $MVSL_BAD_B64" \
+  'lint' \
+  ':exit' \
+  | moon run --target native cli > "$OUT/mvsl_lintbad.log"
+grep -q '保护断言被违反' "$OUT/mvsl_lintbad.log" || { echo "FAIL: lint 未报出被违反的保护断言"; exit 1; }
+echo "MVSL：安装/render≡impact/断言/容器往返/预览走编辑表/lint 空操作与违约 全部 OK"
 
 echo ""
 echo "ALL VERIFY PASS ✓"

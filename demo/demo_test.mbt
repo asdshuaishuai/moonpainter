@@ -98,6 +98,7 @@ async test "AI 修图端到端：mock 模型 × wasm 引擎 × 全程可见 × u
     on_image=fn(_png) { renders = renders + 1 },
   )
   let mut mvsl_tools = 0
+  let mut lint_calls = 0
   for i = log_before; i < log_lines.val.length(); i = i + 1 {
     let l = log_lines.val[i]
     if l.contains("sel_schema") ||
@@ -108,8 +109,14 @@ async test "AI 修图端到端：mock 模型 × wasm 引擎 × 全程可见 × u
       l.contains("mvsl_assert") {
       mvsl_tools = mvsl_tools + 1
     }
+    // lint 必须在 MVSL 回合里被调到：它是唯一会报出「装了表却什么都没改」
+    // 与「保护断言被违反」的命令
+    if l.contains("lint") {
+      lint_calls = lint_calls + 1
+    }
   }
   assert_true(mvsl_tools >= 6, msg="MVSL 工具调用过少：\{mvsl_tools}")
+  assert_true(lint_calls >= 1, msg="MVSL 回合未调 lint（收工检查缺失）")
   // 图像附件：试选覆盖图 + 影响结果图 + 渲染 = 3 次
   assert_eq(renders - renders_before, 3, msg="MVSL 回合的图像附件数")
   // 编辑表真的装上了，且进了渲染管线

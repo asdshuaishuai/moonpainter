@@ -558,11 +558,12 @@ fn PaintModel::mock_chat(
         )
       4 =>
         return with_calls(
-          "看影响证书 + 校验保护断言 + 渲染确认。",
+          "看影响证书 + 校验保护断言 + lint 收工检查 + 渲染确认。",
           [
             call("p5", "mvsl_impact", "{\"max\":320}"),
             call("p6", "mvsl_assert", "{}"),
-            call("p7", "render", "{\"w\":480}"),
+            call("p7", "lint", "{}"),
+            call("p8", "render", "{\"w\":480}"),
           ],
         )
       _ => {

@@ -20,6 +20,10 @@
    重采样路径不许分叉：空编辑表必须走与"没有编辑表"逐位相同的代码路径。
 6. **工具字典同步**：改 agent/session.mbt 的命令分发必须同步 agent/tools.mbt
    （反之亦然）——它是 help/list-tools/文档的单一事实源。
+   **lint 必须覆盖编辑表的"自我否定"状态**：装了表却什么都没改、保护断言被
+   违反、某条算子白装、构造性空算子。这类状态 `mvsl-set`/`impact`/`assert`/
+   `render` **全都返回 ok**，只有 lint 会报——新增编辑表能力时同步把它接进
+   `lint_mvsl`，否则引擎知道自己没干活而没人告诉调用方。
 7. **确定性**：pack/canonical 序列化/渲染 sha256 必须可复现；禁止把时间戳、
    随机数、哈希表迭代序混进任何落盘字节。
    **三个指纹别混**：`fingerprint`（design.json，编辑表变了它不变）/
@@ -40,8 +44,9 @@
 ```bash
 ./verify.sh                     # 一键验证门：check / native 测试 / wasm-gc 测试 /
                                 # CLI 子进程 e2e / 独立 unzip 验证 / open→save 字节一致 /
-                                # MVSL 编辑表命令面 + 渲染管线闭环
-                                #（安装→render≡impact 同一张图→断言→容器往返→预览走编辑表）
+                                # MVSL 编辑表命令面 + 渲染管线闭环（安装→
+                                # render≡impact 同一张图→断言→lint 空操作/
+                                # 违约→容器往返→预览走编辑表）
 ./build_demo.sh                 # AI 修图 demo 构建 + Node headless 自检 + npm SDK 冒烟
                                 # + demo 测试（工具面与 MVSL 闭环可达，需 Node）
 moon run --target native cli    # stdin 行协议；help 查看全部 57 个命令
