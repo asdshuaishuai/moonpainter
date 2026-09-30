@@ -1,0 +1,8 @@
+// pixel：MVSL 执行引擎（选择子软场 + 有序算子程序 + 数值证书）。
+// 依赖 core（IR/canonical JSON）与 codec（RGBA 缓冲、颜色 hex），
+// 不依赖 render/mpd/agent——保持纯字节进出与零第三方依赖。
+
+import {
+  "moonpainter/core",
+  "moonpainter/codec",
+}
