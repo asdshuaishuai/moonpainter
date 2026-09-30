@@ -27,8 +27,15 @@ fn sch_sel(s : @core.SelSpec) -> String {
 }
 
 ///|
+///|
+/// schema 里的示例色窗。
+///
+/// 数值刻意为**真实可达**的量级：色相取 OKLCh 红区（≈28°），彩度取纯红量级
+/// （0.20 ± 0.10，sRGB 上限 0.3225），亮度取中间调。示例若用 HSV 的量纲
+/// （例如 s=0.85），它会是一条**必然空选**的选择子——照抄的调用方只会得到
+/// 一张没变的图。这类"文档合法、语义为空"的示例比没有示例更坏。
 fn sch_color() -> @core.ColorWindow {
-  { h_center: 25.0, h_half: 25.0, s_center: 0.85, s_half: 0.15, l_center: 0.55, l_half: 0.15, feather: 0.1 }
+  { h_center: 28.0, h_half: 25.0, s_center: 0.20, s_half: 0.10, l_center: 0.535, l_half: 0.15, feather: 0.1 }
 }
 
 ///|
@@ -82,7 +89,7 @@ fn cmd_sel_schema(s : Session, _tokens : Array[String]) -> String {
   sb.write_string("{\"ok\":true,\"op\":\"sel-schema\"")
   // 量纲说明：模型最容易錯的就是这里
   sb.write_string(
-    ",\"units\":\"color 选择子用的是 **OKLCh/OKLab** 坐标：h/hw = OKLCh 色相（度，0..360 环）；s/sh = **OKLCh 彩度**（0..0.5，纯色也才 0.2~0.32，**不是** 0..1 的 HSV 饱和度）；l/lh = OKLab 感知亮度（0..1，**不是** HSV 的 V、也不是 0..255）；feather = 0..1 的窗宽软化比例。geo 的 x/y/w/h 与 feather 是画布像素\"",
+    ",\"units\":\"color 选择子用的是 **OKLCh/OKLab** 坐标：h/hw = OKLCh 色相（度，0..360 环）；s/sh = **OKLCh 彩度**（sRGB 可达上限 0.3225，纯红 0.258 / 纯绿 0.295 / 纯蓝 0.313 / 纯洋红最高 —— **不是** 0..1 的 HSV 饱和度；整条窗高于上限会被直接拒绝，因为那必然空选）；l/lh = OKLab 感知亮度（0..1，**不是** HSV 的 V、也不是 0..255）；feather = 0..1 的窗宽软化比例。geo 的 x/y/w/h 与 feather 是画布像素\"",
   )
   sb.write_string(
     ",\"how_to_use\":\"每条 example 是给人看的嵌套对象；要传参时用同一行的 example_json 字段（字符串，直接粘进 select_preview 的 sel_json / mvsl_set 的 program_json，不需要自己转义）\"",

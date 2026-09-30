@@ -195,6 +195,18 @@ test "文档里的范围就是执行时的范围（文档不许漂移）" {
     run(s, "select-preview \{b64_of(luma_out)}").contains("luma 选择子参数越界"),
     msg="luma 范围必须与文档一致",
   )
+  // color 的彩度窗整条高于 sRGB 可达彩度 → 必然空选，必须在装表前拒绝。
+  // （这是"命令成功但一个像素都没选中"最典型的入口：把 HSV 饱和度填进来。）
+  let impossible_chroma = "{\"basis\":\"base\",\"expr\":{\"t\":\"color\",\"w\":{\"h\":28,\"hw\":25,\"s\":0.85,\"sh\":0.15,\"l\":0.535,\"lh\":0.15,\"feather\":0.1}}}"
+  let imp = run(s, "select-preview \{b64_of(impossible_chroma)}")
+  assert_true(imp.contains("必然空选"), msg="整条高于可达彩度的窗必须被拒绝：\{imp}")
+  assert_true(imp.contains("OKLCh 彩度"), msg="错误信息必须点明 s 是彩度：\{imp}")
+  // 宽窗覆盖到可达区间则是合法的（判据是窗的下沿，不是中心）
+  let wide_ok = "{\"basis\":\"base\",\"expr\":{\"t\":\"color\",\"w\":{\"h\":28,\"hw\":25,\"s\":0.4,\"sh\":0.2,\"l\":0.535,\"lh\":0.15,\"feather\":0.1}}}"
+  assert_true(
+    run(s, "select-preview \{b64_of(wide_ok)}").contains("\"ok\":true"),
+    msg="下沿落在可达区间内的宽窗不该被误拒",
+  )
   // comp：de_tol 0..1]
   let tol_out = "{\"basis\":\"base\",\"expr\":{\"t\":\"comp\",\"sx\":1,\"sy\":1,\"de_tol\":2.0,\"w\":{\"h\":0,\"hw\":10,\"s\":0.5,\"sh\":0.1,\"l\":0.5,\"lh\":0.1,\"feather\":0}}}"
   assert_true(

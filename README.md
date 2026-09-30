@@ -98,7 +98,8 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   （= OKLCh 色相 / OKLCh 彩度 / OKLab 亮度，**直接喂选择子的那三个数**）
   与 `hsv_h`/`hsv_s`/`hsv_v`（仅分析对照）。纯红 #C81E1E 的
   `sel_h≈28, sel_c≈0.20` 而 `hsv_h=0, hsv_s=0.85`——拿错一套的表现是
-  「命令成功但一个像素都没选中」；
+  「命令成功但一个像素都没选中」；彩度窗整条高于 sRGB 可达上限 0.3225
+  会在装表前被**拒绝**（而不是静默返回空选）；
 - agent 层用 mooncakes 的 **colmugx/posoco**（六边形端口框架：ModelPort /
   ToolProvider / Observer 三端口扩展；Observer 即"全程可见"的官方通道）。
   评估记录：moonllm（DC-Z-lab）锁 `+native` 不适用浏览器，弃用。

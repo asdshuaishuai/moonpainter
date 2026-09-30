@@ -497,6 +497,19 @@ fn validate_atom(a : AtomSel, owner : String) -> Result[Unit, String] {
 }
 
 ///|
+/// sRGB 全色域下 OKLCh 彩度的上确界。
+///
+/// 取值的来历：OKLab/OKLCh 的彩度是无量纲的，sRGB 立方体只能覆盖其中一段。
+/// 在 8bit sRGB 立方体上扫描（步长 17 + 全部 8 个顶点），最大值出现在洋红
+/// #FF00FF，C ≈ 0.3225（纯红 0.2577 / 纯绿 0.2948 / 纯蓝 0.3132）。
+/// 取 0.3225 作为判据：色窗完全落在这之上就**不可能**命中任何像素。
+///
+/// 为什么不直接把 s_center 限制在 0..0.3225：色窗是 `center ± half`，
+/// `center=0.4, half=0.2` 覆盖 0.2..0.6，与可达区间相交，是**合法**的宽窗；
+/// 只有「整条窗都在可达区间之上」才是必然空选。所以判据是下沿而非中心。
+const SRGB_MAX_CHROMA : Double = 0.3225
+
+///|
 fn validate_cwin(w : ColorWindow, owner : String) -> Result[Unit, String] {
   if !in_hue(w.h_center) {
     return Err("color 选择子 h_center 越界（\{owner}）")
@@ -506,6 +519,14 @@ fn validate_cwin(w : ColorWindow, owner : String) -> Result[Unit, String] {
   }
   if !in_unit(w.s_center) || !in_unit(w.s_half) {
     return Err("color 选择子 s_center/s_half 越界（0..1，\{owner}）")
+  }
+  // s 是 **OKLCh 彩度**（不是 HSV 饱和度）。窗整条高于 sRGB 可达彩度时，
+  // 权重恒为 0——命令会「成功」但一个像素都不选中。这种静默空选必须在
+  // 装表前就拒绝，并说明真实上限，否则调用方只会看到一张没变的图。
+  if w.s_center - w.s_half >= SRGB_MAX_CHROMA {
+    return Err(
+      "color 选择子的彩度窗 [\{fmt_num(w.s_center - w.s_half)}, \{fmt_num(w.s_center + w.s_half)}] 整条高于 sRGB 可达彩度上限 \{fmt_num(SRGB_MAX_CHROMA)}，必然空选——s 是 OKLCh 彩度（纯洋红最高 ≈0.3225），不是 0..1 的 HSV 饱和度（\{owner}）",
+    )
   }
   if !in_unit(w.l_center) || !in_unit(w.l_half) {
     return Err("color 选择子 l_center/l_half 越界（0..1，\{owner}）")
