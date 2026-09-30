@@ -91,7 +91,10 @@ foo.mpd (ZIP, deflate)
                         # **只写被层引用的**：`doc.assets` 是只增的元数据表，
                         # 不能拿它当"还有没有人引用"的判据——判据是层的
                         # `asset_hash`（`@core.referenced_asset_hashes`），
-                        # pack 与 unpack 两侧必须用同一把尺子
+                        # pack 与 unpack 两侧必须用同一把尺子。
+                        # **`delete` 会把它收敛到只剩被引用的**：`doc.assets`
+                        # 写进 design.json，留悬空引用会让外部读者照着找不到
+                        # 的字节去找；manifest 的 counts.assets 也读它
 ```
 
 **v1 → v2 升版理由**：MVSL 编辑表是渲染的真值输入。若只追加条目而不升版，

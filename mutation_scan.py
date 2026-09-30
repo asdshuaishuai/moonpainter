@@ -267,6 +267,14 @@ MUTS = [
         "killed",
     ),
     (
+        "R15",
+        "delete 不收敛资产引用（design.json 留悬空引用、manifest 自述撒谎）",
+        "agent/session.mbt",
+        """    let pruned = @core.prune_unreferenced_assets(doc)""",
+        """    let pruned = 0""",
+        "killed",
+    ),
+    (
         "R13",
         "pack 全量写入会话资产（孤儿资产进容器）",
         "agent/session.mbt",

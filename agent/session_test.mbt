@@ -607,7 +607,7 @@ test "remove-param：只有它是 set-param 的对偶，删不掉就删不掉" {
 /// 解开 `save-mpd-b64` 的回包，数一数容器里**真的**有几个资产条目。
 /// 这是"孤儿资产有没有被打包"的直接判据。
 fn container_assets(envelope : String) -> Int {
-  let bytes = @base64.decode(@agent.mp_b64(envelope)) catch {
+  let bytes : Bytes = @base64.decode(@agent.mp_b64(envelope)) catch {
     _ => abort("b64 解码失败")
   }
   match @mpd.unpack(bytes) {
@@ -664,4 +664,66 @@ test "孤儿资产不进容器：删掉图片层后，那份字节不该再被�
   // 容器仍然自洽：装得回来
   let back = run(s, "open-mpd-b64 \{@agent.mp_b64(after)}")
   assert_true(back.contains("\"op\":\"open-mpd-b64\""), msg=back)
+}
+
+///|
+test "容器自述不许撒谎：manifest 的 assets 计数 == design.json 的引用数 == 容器里的条目数" {
+  // 上一版只修了"孤儿字节不进容器"，容器里没有 asset 条目了，但**自述还写着 1**：
+  // `manifest.counts.assets` 与 `meta/design.json` 都来自只增的 `doc.assets`。
+  // DESIGN 说"文本层权威"，README 承诺外部工具能 `unzip` 后直接读元参数层——
+  // 那条悬空引用是给外部读者的，只有把三个数字摆在一起才看得见它撒谎。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 64 64")
+  let img = @codec.rgba_new(8, 8)
+  @codec.fill_rect_rgba(img, 0, 0, 8, 8, @codec.color_from_hex("#22AA66"))
+  let b64 = @base64.encode(@codec.png_encode(img))
+  let _ = run(s, "add-image x=0 y=0 w=32 h=32 b64=\{b64} name=A")
+  let del = run(s, "delete l1")
+  assert_true(del.contains("\"op\":\"delete\""), msg=del)
+  assert_true(del.contains("\"pruned_assets\":1"), msg="delete 应报出收敛掉的资产数：\{del}")
+  let saved = run(s, "save-mpd-b64")
+  let bytes : Bytes = @base64.decode(@agent.mp_b64(saved)) catch {
+    _ => abort("b64 解码失败")
+  }
+  let m = match @mpd.unpack(bytes) {
+    Ok(m) => m
+    Err(e) => abort("解容器失败: \{e}")
+  }
+  // 三项必须同时成立：自述的计数、权威文本层的引用、容器里的真实条目
+  assert_eq(m.doc.assets.length(), 0, msg="design.json 不该留悬空引用")
+  assert_eq(m.assets.length(), 0, msg="容器里不该有资产条目")
+  // 直接从容器字节里读 manifest.json——这是**外部读者**看到的那一份
+  let z = @codec.Zip::open(bytes)
+  let mf = match @core.parse_json(z.read_text("manifest.json")) {
+    Ok(v) => v
+    Err(e) => abort("manifest 解析失败: \{e}")
+  }
+  let counts = match mf.get("counts") {
+    Some(c) => c
+    None => abort("manifest 缺 counts")
+  }
+  let claimed = match counts.get("assets") {
+    Some(v) => match v.as_num() {
+      Some(n) => n.to_int()
+      None => abort("counts.assets 不是数字")
+    }
+    None => abort("manifest 缺 counts.assets")
+  }
+  assert_eq(
+    claimed,
+    m.assets.length(),
+    msg="manifest 自述的资产数与容器里真实条目数不一致——容器在撒谎",
+  )
+  // 而且撤销之后三者也必须同时回来
+  let _ = run(s, "undo")
+  let again_bytes : Bytes = @base64.decode(@agent.mp_b64(run(s, "save-mpd-b64"))) catch {
+    _ => abort("b64 解码失败")
+  }
+  let again = match @mpd.unpack(again_bytes) {
+    Ok(mm) => mm
+    Err(e) => abort("解容器失败: \{e}")
+  }
+  assert_eq(again.doc.assets.length(), 1, msg="undo 应把资产引用还回来")
+  assert_eq(again.assets.length(), 1, msg="undo 后容器里应重新有那份字节")
 }

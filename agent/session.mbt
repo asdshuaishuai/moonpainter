@@ -1022,7 +1022,12 @@ fn cmd_delete(s : Session, tokens : Array[String]) -> String {
   snapshot(s, doc, "delete \{id}")
   let removed = remove_layer(doc.layers, id)
   if removed {
-    "{\"ok\":true,\"op\":\"delete\",\"id\":\"\{id}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+    // 层没了，它引用的资产可能就成了孤儿。**在这里收敛，不在打包时**：
+    // `doc.assets` 是写进 canonical design.json 的权威元数据，留着悬空引用
+    // 会让外部读者（`unzip` 后直接看文本的人）照着找不到的字节去找。
+    // 会话的 `s.assets` 登记簿不动——撤销要把字节还回来。
+    let pruned = @core.prune_unreferenced_assets(doc)
+    "{\"ok\":true,\"op\":\"delete\",\"id\":\"\{id}\",\"pruned_assets\":\{pruned},\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
   } else {
     err("删除失败：\{id}")
   }

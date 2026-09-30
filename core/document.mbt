@@ -313,6 +313,35 @@ pub fn default_layer(
 ///
 /// 打包用它过滤会话的资产登记簿（`s.assets` 是内容寻址的登记簿，只增是对的
 /// ——撤销要把字节还回来）；`doc.assets` 里的元数据条目本身无害，留着不动。
+///|
+/// 把 `doc.assets` 收敛到"当前真的被引用的那些"。**返回值是删掉的 hash 数**。
+///
+/// 少了这一步，`design.json` 会留下**指向不存在字节的悬空引用**：
+/// `add-image` → `delete l1` 之后实测 `design.assets` 仍是 1 条、而容器里
+/// 0 个资产条目。而 DESIGN 说"文本层权威（canonical design.json）"，
+/// README 又承诺外部工具可以 `unzip` 后直接读元参数层——外部读者会照着
+/// 那条引用去找一份不存在的资产。同一张表还喂着 `manifest.json` 的
+/// `counts.assets`，于是**容器自述里写着 1 个资产、里面其实 0 个**。
+///
+/// 判据只有一处实现（`referenced_asset_hashes`，按层的 `asset_hash`）：
+/// 这张表是只增的，拿它自己判断引用等于没判断。
+pub fn prune_unreferenced_assets(doc : Document) -> Int {
+  let referenced = referenced_asset_hashes(doc)
+  let before = doc.assets.length()
+  let keep : Array[Asset] = []
+  for a in doc.assets {
+    if referenced.contains(a.hash) {
+      keep.push(a)
+    }
+  }
+  doc.assets.clear()
+  for a in keep {
+    doc.assets.push(a)
+  }
+  before - keep.length()
+}
+
+///|
 pub fn referenced_asset_hashes(doc : Document) -> Array[String] {
   let out : Array[String] = []
   for l in doc.layers {
