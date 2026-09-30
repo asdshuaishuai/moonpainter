@@ -1469,7 +1469,37 @@ fn paint_text(
 }
 
 ///|
+/// 圆角矩形内部判定（SDF；比较距离平方与半径平方，不开方）。
+/// `dx/dy` 是相对矩形左上角的偏移，调用方已保证落在 `[0,w)×[0,h)` 内。
+/// `radius` 超过半边长时按半边长夹住——正方形半径到极限就是一个圆。
+fn rounded_rect_inside(
+  dx : Double,
+  dy : Double,
+  w : Double,
+  h : Double,
+  radius : Double,
+) -> Bool {
+  let hw = w / 2.0
+  let hh = h / 2.0
+  let r0 = if radius > hw { hw } else { radius }
+  let r = if r0 > hh { hh } else { r0 }
+  let ax = if dx > hw { dx - hw } else { hw - dx }
+  let ay = if dy > hh { dy - hh } else { hh - dy }
+  let qx = ax - (hw - r)
+  let qy = ay - (hh - r)
+  if qx <= 0.0 && qy <= 0.0 {
+    true
+  } else {
+    let ox = if qx > 0.0 { qx } else { 0.0 }
+    let oy = if qy > 0.0 { qy } else { 0.0 }
+    ox * ox + oy * oy <= r * r
+  }
+}
+
+///|
 /// 蒙版覆盖度：画布坐标 (px,py) 在层蒙版内=1 外=0（invert 反选）。
+/// 矩形蒙版按 `radius` 切圆角；`radius <= 0` 时**走原先的硬直角分支**，
+/// 与"radius 还没被实现"之前的行为逐位相同。
 fn mask_cover_at(l : @core.Layer, px : Double, py : Double) -> Double {
   let mask = match l.mask {
     Some(m) => m
@@ -1487,7 +1517,14 @@ fn mask_cover_at(l : @core.Layer, px : Double, py : Double) -> Double {
         nx * nx + ny * ny <= 1.0
       }
     }
-    _ => dx >= 0.0 && dy >= 0.0 && dx < mask.w && dy < mask.h
+    _ =>
+      if dx < 0.0 || dy < 0.0 || dx >= mask.w || dy >= mask.h {
+        false
+      } else if mask.radius <= 0.0 {
+        true
+      } else {
+        rounded_rect_inside(dx, dy, mask.w, mask.h, mask.radius)
+      }
   }
   let cover = if inside { 1.0 } else { 0.0 }
   if mask.invert {

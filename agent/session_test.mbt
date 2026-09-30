@@ -414,3 +414,47 @@ test "蒙版反选的读-改-写往返（前端「蒙版反选」按钮依赖的
   let q3 = run(s, "query-layer r")
   assert_true(!q3.contains("\"mask\""), msg="去蒙版后不该再报 mask：\{q3}")
 }
+
+///|
+test "蒙版圆角：radius 真的切掉四角（曾经是存了不用的死参数）" {
+  // `radius` 曾经**存了、报了、序列化了，但渲染时完全没读**：写 radius=10
+  // 得到的是硬直角，而且**不报错**——这正是它藏了这么久的原因（用户看不出
+  // "圆角没生效"和"圆角很小"的区别）。这条从命令面一路断到渲染像素。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 20 20")
+  let _ = run(s, "add-rect x=0 y=0 w=20 h=20 fill=#FF0000FF id=r")
+  let env = @render.RenderEnv::new()
+  // 无 radius：四角都在蒙版内（硬直角）
+  let _ = run(s, "add-mask r kind=rect x=0 y=0 w=10 h=10")
+  let hard = @render.render_doc(unwrap_doc(s), env)
+  assert_eq(@codec.rgba_get(hard, 0, 0), 0xFFFF0000)
+  assert_eq(@codec.rgba_get(hard, 9, 9), 0xFFFF0000)
+  // radius=5（半边长，等价内切圆）：四角被切掉，中心与边中点保留
+  let _ = run(s, "remove-mask r")
+  let _ = run(s, "add-mask r kind=rect x=0 y=0 w=10 h=10 radius=5")
+  let round = @render.render_doc(unwrap_doc(s), env)
+  assert_eq(@codec.rgba_get(round, 0, 0), 0xFFFFFFFF) // 左上角被切
+  assert_eq(@codec.rgba_get(round, 9, 0), 0xFFFFFFFF) // 右上角被切
+  assert_eq(@codec.rgba_get(round, 0, 9), 0xFFFFFFFF)
+  assert_eq(@codec.rgba_get(round, 9, 9), 0xFFFFFFFF)
+  assert_eq(@codec.rgba_get(round, 5, 5), 0xFFFF0000) // 中心保留
+  assert_eq(@codec.rgba_get(round, 5, 0), 0xFFFF0000) // 边中点保留（圆角不该啃到边中）
+  assert_eq(@codec.rgba_get(round, 0, 5), 0xFFFF0000)
+  // 圆角之外的区域不受影响
+  assert_eq(@codec.rgba_get(round, 15, 15), 0xFFFFFFFF)
+  // 坏 radius 不再静默变 0（原先 radius=abc 悄悄当 0、radius=-5 也收下）
+  let e1 = run(s, "add-mask r kind=rect x=0 y=0 w=10 h=10 radius=abc")
+  assert_true(e1.contains("radius=abc 不是数字"), msg=e1)
+  let e2 = run(s, "add-mask r kind=rect x=0 y=0 w=10 h=10 radius=-5")
+  assert_true(e2.contains("不能为负"), msg=e2)
+  // 椭圆蒙版不吃 radius（kind 上就没这个语义），给了也不该改变结果
+  let _ = run(s, "remove-mask r")
+  let _ = run(s, "add-mask r kind=ellipse x=0 y=0 w=10 h=10")
+  let ell = @render.render_doc(unwrap_doc(s), env)
+  let _ = run(s, "remove-mask r")
+  let _ = run(s, "add-mask r kind=ellipse x=0 y=0 w=10 h=10 radius=5")
+  let ell_r = @render.render_doc(unwrap_doc(s), env)
+  assert_eq(@codec.rgba_get(ell_r, 0, 0), @codec.rgba_get(ell, 0, 0))
+  assert_eq(@codec.rgba_get(ell_r, 5, 5), @codec.rgba_get(ell, 5, 5))
+}

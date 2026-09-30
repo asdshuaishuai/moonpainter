@@ -219,6 +219,22 @@ MUTS = [
     ),
     # ---- 命令行分词（自由文本的空格靠它，见 tokenize_line）----
     (
+        "R3",
+        "蒙版 radius 又被忽略（存了不用，退回静默失败）",
+        "render/scene.mbt",
+        '      } else if mask.radius <= 0.0 {\n        true\n      } else {\n        rounded_rect_inside(dx, dy, mask.w, mask.h, mask.radius)\n      }',
+        '      } else {\n        true\n      }',
+        "killed",
+    ),
+    (
+        "R4",
+        "蒙版 radius 不按半边长夹住（超大半径让圆角整个失效）",
+        "render/scene.mbt",
+        '  let r0 = if radius > hw { hw } else { radius }\n  let r = if r0 > hh { hh } else { r0 }',
+        '  let r = radius',
+        "killed",
+    ),
+    (
         "R1",
         "probe 批量模式省掉 guards（与单点模式字段走样）",
         "agent/affordance_cmds.mbt",

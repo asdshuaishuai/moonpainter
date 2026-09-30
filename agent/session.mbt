@@ -813,7 +813,9 @@ fn cmd_add_adjust(s : Session, tokens : Array[String]) -> String {
 ///|
 fn cmd_add_mask(s : Session, tokens : Array[String]) -> String {
   if tokens.length() < 2 {
-    return err("用法：add-mask <id> kind=rect|ellipse x= y= w= h= [radius=] [invert=true]")
+    return err(
+      "用法：add-mask <id> kind=rect|ellipse x= y= w= h= [radius=<圆角 px，仅矩形，默认 0>] [invert=true]",
+    )
   }
   let doc = match require_doc(s) {
     Ok(d) => d
@@ -846,8 +848,20 @@ fn cmd_add_mask(s : Session, tokens : Array[String]) -> String {
     Some(v) => if v > 0.0 { v } else { return err("蒙版 h 必须为正") }
     None => return err("add-mask 需要 h=")
   }
-  let radius = match to_d(m.get("radius").unwrap_or("0")) {
-    Some(v) => v
+  // radius 曾经是"非法值静默变 0"——`radius=abc` 不报错、`radius=-5` 也收。
+  // 现在它真的参与渲染了（圆角矩形），静默降级会让"看起来加了圆角"和
+  // "圆角根本没生效"难以区分（这正是它藏了这么久的原因）。
+  let radius = match m.get("radius") {
+    Some(v) =>
+      match to_d(v) {
+        Some(d) =>
+          if d < 0.0 {
+            return err("蒙版 radius 不能为负：\{v}")
+          } else {
+            d
+          }
+        None => return err("radius=\{v} 不是数字")
+      }
     None => 0.0
   }
   let invert = match m.get("invert") {

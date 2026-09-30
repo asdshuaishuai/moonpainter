@@ -128,7 +128,12 @@ pub(all) struct Stroke {
 }
 
 ///|
-/// 矢量蒙版：层局部坐标下的参数化形状，覆盖区内可见（invert 后反之）。
+/// 矢量蒙版：参数化形状，覆盖区内可见（invert 后反之）。
+///
+/// 坐标是**画布坐标**（不是层局部坐标）：`render/scene.mbt` 的 `mask_cover_at`
+/// 直接拿画布点与 `x/y` 比，所以 `move`/`rotate` 图层时蒙版**不跟着走**
+/// （DESIGN §8 有实测记录）。`radius` 是矩形蒙版的圆角半径
+/// （`<=0` 为直角；超过半边长按半边长夹住）。
 pub(all) struct LayerMask {
   kind : ShapeKind // Rect 或 Ellipse
   x : Double
