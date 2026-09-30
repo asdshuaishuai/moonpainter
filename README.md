@@ -39,7 +39,10 @@
 | wasm SDK | `wasm/` 包：经典 wasm 零 import（默认会话面 `mp_version/mp_reset/mp_exec_in` + in 槽；多会话句柄面 `mp_open/mp_close/mp_exec_h`），Node/浏览器双宿主冒烟 + 合同测试；JS 宿主胶水 `npm/moonpainter-sdk/`（.d.ts 类型化门面） |
 | 底座 | 手写 ZIP 读写 / DEFLATE 压缩 / inflate 解压 / PNG 编解码 / SHA-256（NIST 向量验证）——zip/deflate/inflate 复用自 deepOffice（自有 MIT），PNG 编码复用自 moonviz（自有 MIT），余为本仓库新写 |
 
-**诚实边界**：蒙版只有**几何**的（矩形/椭圆 + 圆角 + 羽化 + 反选）——栅格蒙版（画笔涂抹）、live mask（引用下层 alpha）都未做；调整层是叠加式像素算子（不是可反复编辑参数的独立调整层）；文本层只有 ASCII 点阵字形（无 CJK、无字体文件，见 `demo` 的字形表）；其余未做：贝塞尔、图层样式 fx、PSD/AI 等外部格式兼容（远期，见 DESIGN 远期章节）、16/32-bit、CMYK、自由笔刷。线段层占位矩形 w/h 必须为正（水平线请给 h≥描边宽）。
+**诚实边界**：`params`（命名元参数，`set-param`/`list-params`）是**纯元数据，
+没有 live 绑定**——它会被存进容器、被 `list-params` 报出来、随 `inspect` 一起
+显示，但**不影响渲染**，改它不会改任何像素。这是声明过的边界，不是待办埋伏；
+蒙版只有**几何**的（矩形/椭圆 + 圆角 + 羽化 + 反选）——栅格蒙版（画笔涂抹）、live mask（引用下层 alpha）都未做；调整层是叠加式像素算子（不是可反复编辑参数的独立调整层）；文本层只有 ASCII 点阵字形（无 CJK、无字体文件，见 `demo` 的字形表）；其余未做：贝塞尔、图层样式 fx、PSD/AI 等外部格式兼容（远期，见 DESIGN 远期章节）、16/32-bit、CMYK、自由笔刷。线段层占位矩形 w/h 必须为正（水平线请给 h≥描边宽）。
 
 （这一行原先写着"文本层、蒙版、调整层不做"——那三项**后来都做了**却没人回来改，属于少报能力；顺手纠正。）
 
