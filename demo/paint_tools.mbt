@@ -118,6 +118,9 @@ fn tool_cmd(name : String) -> String? {
     "sample_color" => Some("sample")
     "undo" => Some("undo")
     "redo" => Some("redo")
+    "edits" => Some("edits")
+    "rename" => Some("rename")
+    "set_canvas" => Some("set-canvas")
     _ => None
   }
 }
@@ -260,6 +263,24 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
     make_tool("tag", "给图层打语义标签（如 hero/background/logo）", [("id", "string:req:图层 id"), ("tag", "string:req:标签")]),
     make_tool("undo", "撤销上一次修改（工具出错后自我纠正用）", []),
     make_tool("redo", "重做被撤销的修改（undo 的对偶；撤销过头时恢复）", []),
+    make_tool(
+      "edits",
+      "编辑历史摘要：每一步快照的操作名与序号。用来判断还能撤几步、以及刚才那几步各自做了什么（撤销过头时先看它再决定 redo 到哪）。",
+      [],
+    ),
+    make_tool(
+      "rename",
+      "给图层改名（只改显示名，不动 id 与渲染结果）。名字应当让用户一眼看懂这层是什么——它会进 list_layers 的输出，也是你自己后续决策的线索。",
+      [
+        ("id", "string:req:层 id"),
+        ("new_name", "string:req:新名字（含空格用双引号包起来）"),
+      ],
+    ),
+    make_tool(
+      "set_canvas",
+      "改画布尺寸。**只改画布，图层不会被移动或缩放**——尺寸变大就多出一块空白，变小就把超出的内容裁掉。想缩放内容请用各层自己的 resize/transform。",
+      [("w", "integer:req:新画布宽 px"), ("h", "integer:req:新高 px")],
+    ),
     make_tool(
       "add_mask",
       "给图层加几何蒙版（蒙版外不渲染）。改几何 = remove_mask + add_mask",
@@ -488,183 +509,14 @@ pub impl @posoco.ToolProvider for PaintTools with fn execute(
   name : String,
   call : @posoco.ToolCall,
 ) -> @posoco.ToolOutcome raise {
-  // 引擎命令行：工具名 → 命令名 + 参数
-  let cmd = match tool_cmd(name) {
-    Some(c) => c
-    None => return @posoco.ToolOutcome::ToolReportedError(content="未知工具 \{name}", structured=None)
+  // 未知工具在这里拦（`tool_line` 内部也会取一次命令名，那是给测试用的纯入口）
+  if tool_cmd(name) is None {
+    return @posoco.ToolOutcome::ToolReportedError(
+      content="未知工具 \{name}",
+      structured=None,
+    )
   }
-  let line = match name {
-    "list_layers" => "list-layers"
-    "stats" => "stats"
-    "lint" => "lint"
-    "save_mpd" => "save-mpd-b64"
-    "move" => {
-      let id = arg(call, "id")
-      "move \{id} \{arg(call, "x")} \{arg(call, "y")}"
-    }
-    "resize" => {
-      let id = arg(call, "id")
-      "resize \{id} \{arg(call, "w")} \{arg(call, "h")}"
-    }
-    "rotate" => {
-      let id = arg(call, "id")
-      "rotate \{id} \{arg(call, "deg")}"
-    }
-    "flip" => {
-      let id = arg(call, "id")
-      "flip \{id} \{arg(call, "how")}"
-    }
-    "delete" => {
-      let id = arg(call, "id")
-      "delete \{id}"
-    }
-    "reorder" => {
-      let id = arg(call, "id")
-      "reorder \{id} \{arg(call, "how")}"
-    }
-    "query_layer" => {
-      let id = arg(call, "id")
-      "query-layer \{id}"
-    }
-    "pick" => "pick \{arg(call, "x")} \{arg(call, "y")}"
-    "add_mask" => {
-      let id = arg(call, "id")
-      let kind = arg(call, "kind")
-      let tail = args_to_tail(call.arguments, ["x", "y", "w", "h", "radius", "feather", "invert"])
-      "add-mask \{id} kind=\{kind} \{tail}"
-    }
-    "set_mask" => "set-mask \{arg(call, "id")} \{arg(call, "invert")}"
-    "remove_mask" => "remove-mask \{arg(call, "id")}"
-    "add_text" => {
-      let x = arg(call, "x")
-      let y = arg(call, "y")
-      let txt = quote_arg(arg(call, "text"))
-      let fs = opt(call, "font_size", "16")
-      let fill = opt(call, "fill", "#000000FF")
-      let name = quote_arg(opt(call, "name", "文本"))
-      "add-text x=\{x} y=\{y} text=\{txt} font_size=\{fs} fill=\{fill} name=\{name}"
-    }
-    "set_text" => {
-      let id = arg(call, "id")
-      "set-text \{id} \{quote_arg(arg(call, "text"))}"
-    }
-    "visible" => "visible \{arg(call, "id")} \{arg(call, "visible")}"
-    "group" => {
-      let ids = arg(call, "ids")
-      "group \{arg(call, "gid")} \{ids.replace(old=",", new=" ")}"
-    }
-    "ungroup" => {
-      let gid = arg(call, "gid")
-      "ungroup \{gid}"
-    }
-    "tag" => "tag \{arg(call, "id")} \{arg(call, "tag")}"
-    "undo" => "undo"
-    "redo" => "redo"
-    "new_canvas" => "new \{arg(call, "w")} \{arg(call, "h")}"
-    "add_paint_layer" => {
-      let tail = args_to_tail(call.arguments, ["name"])
-      "add-paint \{tail}"
-    }
-    "paint_stroke" => {
-      let lid = arg(call, "layer")
-      let pts = arg(call, "pts")
-      let r = opt(call, "r", "6")
-      let color = opt(call, "color", "#222222FF")
-      "brush layer=\{lid} pts=\{pts} r=\{r} color=\{color}"
-    }
-    "erase_stroke" => {
-      let lid = arg(call, "layer")
-      let pts = arg(call, "pts")
-      let r = opt(call, "r", "10")
-      "erase layer=\{lid} pts=\{pts} r=\{r}"
-    }
-    "apply_filter" =>
-      "add-adjust op=\{arg(call, "op")} value=\{opt(call, "value", "0.5")}"
-    "crop_canvas" => "crop \{arg(call, "x")} \{arg(call, "y")} \{arg(call, "w")} \{arg(call, "h")}"
-    "sample_color" => "sample \{arg(call, "x")} \{arg(call, "y")}"
-    "set_style" => {
-      let id = arg(call, "id")
-      let tail = args_to_tail(
-        call.arguments,
-        [
-          "fill", "lgrad", "stroke", "stroke_w", "opacity", "blend", "radius",
-          "rot", "visible", "name",
-        ],
-      )
-      "set-style \{id} \{tail}"
-    }
-    "render" => {
-      let w = opt(call, "w", "640")
-      let mut l = "render \{w}"
-      match call.arguments {
-        Json::Object(m) =>
-          match m.get("overlay") {
-            Some(Json::String("1")) | Some(Json::True) => l = l + " overlay=1"
-            _ => ()
-          }
-        _ => ()
-      }
-      l
-    }
-    // MVSL：模型只写 JSON，base64 由 SDK 做（不该让 LLM 手搓 base64）
-    "sel_schema" => "sel-schema"
-    "census" => {
-      let mut l = "census"
-      let within = arg(call, "within_json")
-      if within != "" {
-        l = l + " within=" + b64_text(within)
-      }
-      let n = arg(call, "components")
-      if n != "" {
-        l = l + " components=" + n
-      }
-      l
-    }
-    "probe" => {
-      // 批量优先：给了 points 就不再看 x/y（引擎侧同此约定）
-      let mut l = if arg(call, "points") != "" {
-        "probe points=" + arg(call, "points")
-      } else {
-        "probe x=" + arg(call, "x") + " y=" + arg(call, "y")
-      }
-      let r = arg(call, "r")
-      if r != "" {
-        l = l + " r=" + r
-      }
-      l
-    }
-    "select_preview" => {
-      let mut l = "select-preview " + b64_text(arg(call, "sel_json"))
-      let mx = arg(call, "max")
-      if mx != "" {
-        l = l + " max=" + mx
-      }
-      l
-    }
-    "mvsl_set" => "mvsl-set " + b64_text(arg(call, "program_json"))
-    "mvsl_impact" => {
-      let mx = arg(call, "max")
-      if mx == "" {
-        "mvsl-impact"
-      } else {
-        "mvsl-impact max=" + mx
-      }
-    }
-    "mvsl_show" => "mvsl-show"
-    "mvsl_clear" => "mvsl-clear"
-    "mvsl_assert" => "mvsl-assert"
-    _ => {
-      // add-*：几何必带 + 样式可选
-      let tail = args_to_tail(
-        call.arguments,
-        [
-          "id", "x", "y", "w", "h", "fill", "lgrad", "stroke", "stroke_w",
-          "radius", "opacity", "blend", "points", "name",
-        ],
-      )
-      "\{cmd} \{tail}"
-    }
-  }
+  let line = tool_line(name, call.arguments)
   let envelope = engine_exec_line(line)
   if !envelope_ok(envelope) {
     return @posoco.ToolOutcome::ToolReportedError(
@@ -708,12 +560,202 @@ pub impl @posoco.ToolProvider for PaintTools with fn execute(
 }
 
 ///|
+/// 工具调用 → 引擎命令行（**第二张表**，与 `tool_cmd` 一样只此一处）。
+///
+/// 它原先藏在 `execute` 内部，于是"注册了工具、`tool_cmd` 里也接了、但这里
+/// 漏了"仍然只能靠人眼——`undispatched_tools()` 只查前一张表，而
+/// `engine_exec_line` 直接调引擎、**绕过**这里，两条测试路径都照不到。
+/// 提取成接受 `Json` 的纯函数后，测试可以直接喂参数进来断言拼出的命令行。
+pub fn tool_line(name : String, args : Json) -> String {
+  let cmd = tool_cmd(name).unwrap_or("")
+  let out = match name {
+    "list_layers" => "list-layers"
+    "stats" => "stats"
+    "lint" => "lint"
+    "save_mpd" => "save-mpd-b64"
+    "move" => {
+      let id = arg_of(args, "id")
+      "move \{id} \{arg_of(args, "x")} \{arg_of(args, "y")}"
+    }
+    "resize" => {
+      let id = arg_of(args, "id")
+      "resize \{id} \{arg_of(args, "w")} \{arg_of(args, "h")}"
+    }
+    "rotate" => {
+      let id = arg_of(args, "id")
+      "rotate \{id} \{arg_of(args, "deg")}"
+    }
+    "flip" => {
+      let id = arg_of(args, "id")
+      "flip \{id} \{arg_of(args, "how")}"
+    }
+    "delete" => {
+      let id = arg_of(args, "id")
+      "delete \{id}"
+    }
+    "reorder" => {
+      let id = arg_of(args, "id")
+      "reorder \{id} \{arg_of(args, "how")}"
+    }
+    "query_layer" => {
+      let id = arg_of(args, "id")
+      "query-layer \{id}"
+    }
+    "pick" => "pick \{arg_of(args, "x")} \{arg_of(args, "y")}"
+    "add_mask" => {
+      let id = arg_of(args, "id")
+      let kind = arg_of(args, "kind")
+      let tail = args_to_tail(args, ["x", "y", "w", "h", "radius", "feather", "invert"])
+      "add-mask \{id} kind=\{kind} \{tail}"
+    }
+    "set_mask" => "set-mask \{arg_of(args, "id")} \{arg_of(args, "invert")}"
+    "remove_mask" => "remove-mask \{arg_of(args, "id")}"
+    "add_text" => {
+      let x = arg_of(args, "x")
+      let y = arg_of(args, "y")
+      let txt = quote_arg(arg_of(args, "text"))
+      let fs = opt_of(args, "font_size", "16")
+      let fill = opt_of(args, "fill", "#000000FF")
+      let name = quote_arg(opt_of(args, "name", "文本"))
+      "add-text x=\{x} y=\{y} text=\{txt} font_size=\{fs} fill=\{fill} name=\{name}"
+    }
+    "set_text" => {
+      let id = arg_of(args, "id")
+      "set-text \{id} \{quote_arg(arg_of(args, "text"))}"
+    }
+    "visible" => "visible \{arg_of(args, "id")} \{arg_of(args, "visible")}"
+    "group" => {
+      let ids = arg_of(args, "ids")
+      "group \{arg_of(args, "gid")} \{ids.replace(old=",", new=" ")}"
+    }
+    "ungroup" => {
+      let gid = arg_of(args, "gid")
+      "ungroup \{gid}"
+    }
+    "tag" => "tag \{arg_of(args, "id")} \{arg_of(args, "tag")}"
+    "undo" => "undo"
+    "redo" => "redo"
+    "edits" => "edits"
+    "rename" => {
+      let id = arg_of(args, "id")
+      "rename \{id} \{quote_arg(arg_of(args, "new_name"))}"
+    }
+    "set_canvas" => "set-canvas \{arg_of(args, "w")} \{arg_of(args, "h")}"
+    "new_canvas" => "new \{arg_of(args, "w")} \{arg_of(args, "h")}"
+    "add_paint_layer" => {
+      let tail = args_to_tail(args, ["name"])
+      "add-paint \{tail}"
+    }
+    "paint_stroke" => {
+      let lid = arg_of(args, "layer")
+      let pts = arg_of(args, "pts")
+      let r = opt_of(args, "r", "6")
+      let color = opt_of(args, "color", "#222222FF")
+      "brush layer=\{lid} pts=\{pts} r=\{r} color=\{color}"
+    }
+    "erase_stroke" => {
+      let lid = arg_of(args, "layer")
+      let pts = arg_of(args, "pts")
+      let r = opt_of(args, "r", "10")
+      "erase layer=\{lid} pts=\{pts} r=\{r}"
+    }
+    "apply_filter" =>
+      "add-adjust op=\{arg_of(args, "op")} value=\{opt_of(args, "value", "0.5")}"
+    "crop_canvas" => "crop \{arg_of(args, "x")} \{arg_of(args, "y")} \{arg_of(args, "w")} \{arg_of(args, "h")}"
+    "sample_color" => "sample \{arg_of(args, "x")} \{arg_of(args, "y")}"
+    "set_style" => {
+      let id = arg_of(args, "id")
+      let tail = args_to_tail(
+        args,
+        [
+          "fill", "lgrad", "stroke", "stroke_w", "opacity", "blend", "radius",
+          "rot", "visible", "name",
+        ],
+      )
+      "set-style \{id} \{tail}"
+    }
+    "render" => {
+      let w = opt_of(args, "w", "640")
+      let mut l = "render \{w}"
+      match args {
+        Json::Object(m) =>
+          match m.get("overlay") {
+            Some(Json::String("1")) | Some(Json::True) => l = l + " overlay=1"
+            _ => ()
+          }
+        _ => ()
+      }
+      l
+    }
+    // MVSL：模型只写 JSON，base64 由 SDK 做（不该让 LLM 手搓 base64）
+    "sel_schema" => "sel-schema"
+    "census" => {
+      let mut l = "census"
+      let within = arg_of(args, "within_json")
+      if within != "" {
+        l = l + " within=" + b64_text(within)
+      }
+      let n = arg_of(args, "components")
+      if n != "" {
+        l = l + " components=" + n
+      }
+      l
+    }
+    "probe" => {
+      // 批量优先：给了 points 就不再看 x/y（引擎侧同此约定）
+      let mut l = if arg_of(args, "points") != "" {
+        "probe points=" + arg_of(args, "points")
+      } else {
+        "probe x=" + arg_of(args, "x") + " y=" + arg_of(args, "y")
+      }
+      let r = arg_of(args, "r")
+      if r != "" {
+        l = l + " r=" + r
+      }
+      l
+    }
+    "select_preview" => {
+      let mut l = "select-preview " + b64_text(arg_of(args, "sel_json"))
+      let mx = arg_of(args, "max")
+      if mx != "" {
+        l = l + " max=" + mx
+      }
+      l
+    }
+    "mvsl_set" => "mvsl-set " + b64_text(arg_of(args, "program_json"))
+    "mvsl_impact" => {
+      let mx = arg_of(args, "max")
+      if mx == "" {
+        "mvsl-impact"
+      } else {
+        "mvsl-impact max=" + mx
+      }
+    }
+    "mvsl_show" => "mvsl-show"
+    "mvsl_clear" => "mvsl-clear"
+    "mvsl_assert" => "mvsl-assert"
+    _ => {
+      // add-*：几何必带 + 样式可选
+      let tail = args_to_tail(
+        args,
+        [
+          "id", "x", "y", "w", "h", "fill", "lgrad", "stroke", "stroke_w",
+          "radius", "opacity", "blend", "points", "name",
+        ],
+      )
+      "\{cmd} \{tail}"
+    }
+  }
+  out
+}
+
+///|
 /// 最近一次 save_mpd 的容器 base64（页面下载用；不进模型上下文）。
 pub let g_last_mpd_b64 : Ref[String] = Ref("")
 
 ///|
-fn arg(call : @posoco.ToolCall, key : String) -> String {
-  match call.arguments {
+fn arg_of(args : Json, key : String) -> String {
+  match args {
     Json::Object(m) =>
       match m.get(key) {
         Some(Json::String(s)) => s
@@ -727,8 +769,8 @@ fn arg(call : @posoco.ToolCall, key : String) -> String {
 }
 
 ///|
-fn opt(call : @posoco.ToolCall, key : String, dflt : String) -> String {
-  let v = arg(call, key)
+fn opt_of(args : Json, key : String, dflt : String) -> String {
+  let v = arg_of(args, key)
   if v == "" {
     dflt
   } else {

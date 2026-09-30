@@ -182,3 +182,47 @@ async test "AI 修图端到端：mock 模型 × wasm 引擎 × 全程可见 × u
   assert_eq(renders - renders_before4, 1, msg="文字回合的图像附件数")
   assert_true(summary4.contains("标题"), msg=summary4)
 }
+
+///|
+test "工具面的第二张表：tool_line 真的拼得出命令行（含自由文本引号）" {
+  // "注册了工具"与"接得上引擎命令行"是两件事，而且是**两张手写表**。
+  // `undispatched_tools()` 守的是第一张（工具名 → 命令名）；这张（参数 →
+  // 完整命令行）此前藏在 `execute` 内部，两条测试路径都照不到它——
+  // `engine_exec_line` 直接调引擎、**绕过**参数拼接。提取成纯函数后，
+  // 这里可以直接喂参数进来断言拼出的那一行。
+  let empty : Json = Json::object(Map::from_array([]))
+  assert_eq(@demo.tool_line("edits", empty), "edits")
+  assert_eq(
+    @demo.tool_line(
+      "set_canvas",
+      Json::object(
+        Map::from_array([("w", Json::number(64.0)), ("h", Json::number(48.0))]),
+      ),
+    ),
+    "set-canvas 64 48",
+  )
+  // 自由文本必须走引号：名字含空格时裸拼会把它切成两个 token
+  assert_eq(
+    @demo.tool_line(
+      "rename",
+      Json::object(
+        Map::from_array([
+          ("id", Json::string("l1")),
+          ("new_name", Json::string("背景 层")),
+        ]),
+      ),
+    ),
+    "rename l1 \"背景 层\"",
+  )
+  // 顺手钉住一个老工具，证明这张表整体在用（也证明这条测试真的会红——
+  // 第一版我把工具名猜成了 resolve_color，它当场失败）
+  assert_eq(
+    @demo.tool_line(
+      "sample_color",
+      Json::object(
+        Map::from_array([("x", Json::number(8.0)), ("y", Json::number(8.0))]),
+      ),
+    ),
+    "sample 8 8",
+  )
+}

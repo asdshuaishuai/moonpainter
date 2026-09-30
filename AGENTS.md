@@ -108,7 +108,7 @@ moon run --target native cli    # stdin 行协议；help 查看全部 57 个命�
   **但引擎从未实现还原**，于是用户输入 "Hello World"，存进去和渲染出来的
   都是 `Hello_World`。现在 `_` 保持**字面下划线**（历史行为完全不变），
   含空格靠引号。新增自由文本参数时，走 `quote_arg`（demo/main.mbt）拼串。
-- demo 工具面是 agent 命令面的**手写子集**（当前 46 个）：引擎新增命令后，
+- demo 工具面是 agent 命令面的**手写子集**（当前 49 个）：引擎新增命令后，
   要用到就该同步加进 `paint_tools.mbt` 的 `paint_tool_defs` + `tool_cmd` +
   `catalog.mbt` 的 system prompt，否则"引擎有能力"不等于"产品里的 AI 用得上"。
   模型侧只写 JSON，base64 由 SDK 的 `b64_text` 转。
@@ -119,6 +119,10 @@ moon run --target native cli    # stdin 行协议；help 查看全部 57 个命�
   B4.5 起的画笔/橡皮/调整层/分组/标签/裁剪/采样）。现在 `undispatched_tools()`
   把它变成一条断言，`demo_test.mbt` 断言为空——新增工具时忘了接线会**立刻红**。
   人类前端有按钮、测试又直接调 `engine_exec_line`，这两条都会掩盖这类漏洞。
+  **第二张表现在是 `pub fn tool_line(name, args)`**：原先它藏在 `execute`
+  内部，`undispatched_tools()` 只查第一张表、`engine_exec_line` 又直接调引擎
+  绕过它，两条测试路径都照不到它。提取成接受 `Json` 的纯函数后，
+  `demo_test.mbt` 可以直接喂参数断言拼出的命令行（含自由文本的引号）。
 
 改动 canonical JSON 字段序、渲染管线或 pack 条目顺序时，golden sha256 与
 open→save 字节一致断言会变化——这必须是有意为之，并同步更新对应测试与文档。

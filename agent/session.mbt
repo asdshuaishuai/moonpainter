@@ -299,7 +299,9 @@ fn cmd_new(s : Session, tokens : Array[String]) -> String {
 ///|
 fn cmd_set_canvas(s : Session, tokens : Array[String]) -> String {
   if tokens.length() < 3 {
-    return err("用法：set-canvas <w> <h>")
+    return err(
+      "用法：set-canvas <w> <h>（**只改画布，图层不会被移动或缩放**：变大露空白，变小裁掉超出部分）",
+    )
   }
   let doc = match require_doc(s) {
     Ok(d) => d
@@ -954,7 +956,9 @@ fn cmd_remove_mask(s : Session, tokens : Array[String]) -> String {
 ///|
 fn cmd_rename(s : Session, tokens : Array[String]) -> String {
   if tokens.length() < 3 {
-    return err("用法：rename <id> <new-name>")
+    return err(
+      "用法：rename <id> <new-name>（名字含空格时必须用双引号包住：rename l1 \"背景 层\"）",
+    )
   }
   let doc = match require_doc(s) {
     Ok(d) => d
