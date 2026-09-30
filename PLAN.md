@@ -1,5 +1,8 @@
 # MoonPainter v0.1 开发方案（已批准并完成）
 
+> **后续规划**：v0.2（MVSL 确定性编辑 IR）见 [PLAN-MVSL.md](PLAN-MVSL.md)，
+> 评审依据见 docs/mvsl-reviews/ 与 docs/mvsl-synthesis.md。
+
 > 2026-09-29 批准稿 + 实施结果。工程名 MoonPainter（用户确认拼写）、
 > 全新 MoonBit 标准（moon.mod/新 moon.pkg）、本轮聚焦 .mpd + 绘制、
 > 外部格式兼容整体延后。复用策略：只用本工作区自有 MIT 代码并保留出处注释；
