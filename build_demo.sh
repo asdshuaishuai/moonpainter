@@ -10,11 +10,25 @@
 set -e
 cd "$(dirname "$0")"
 
+# 同 verify.sh：`moon test ... | tail -1` 在 set -e 下**不会**因测试失败而中止
+# （管道的退出码是 tail 的）。demo 测试曾经这样失败着，而脚本照样报 PASS。
+run_quiet() {
+  log=$(mktemp /tmp/moonpainter-demo-step.XXXXXX)
+  if ! "$@" > "$log" 2>&1; then
+    echo "FAIL: $*"
+    tail -30 "$log"
+    rm -f "$log"
+    exit 1
+  fi
+  tail -1 "$log"
+  rm -f "$log"
+}
+
 echo "== 1/6 引擎 wasm 构建 =="
-moon build --target wasm 2>&1 | tail -1
+run_quiet moon build --target wasm
 
 echo "== 2/6 demo（MoonBit js 后端）构建 =="
-moon build --target js 2>&1 | tail -1
+run_quiet moon build --target js
 
 echo "== 3/6 组装 dist/ =="
 rm -rf dist
@@ -81,7 +95,7 @@ echo "== 6/6 demo 测试（工具面 + MVSL 闭环可达；需 Node） =="
 # 这条守住"引擎有能力"与"产品里的 AI 用得上"之间的缝：mock 模型经真实
 # tool provider 驱动真实 wasm 引擎，跑完整 MVSL 闭环（普查→试选→装表→
 # 影响/断言→渲染），并断言图像类回包走附件。
-moon test --target js -p moonpainter/demo 2>&1 | tail -1
+run_quiet moon test --target js -p moonpainter/demo
 
 echo ""
 echo "DEMO BUILD PASS ✓   本地预览: cd dist && python3 -m http.server 8080 → http://localhost:8080"

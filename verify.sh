@@ -13,6 +13,22 @@ cd "$(dirname "$0")"
 OUT=$(mktemp -d /tmp/moonpainter-verify.XXXXXX)
 trap 'rm -rf "$OUT"' EXIT
 
+# 跑一条输出很长的命令，失败即中止。
+#
+# 为什么不直接写 `cmd | tail -1`：**管道的退出码是最后一个命令（tail）的**，
+# 所以哪怕 moon test 失败，`set -e` 也不会中止——门禁会带着失败的测试报 PASS。
+# 本仓库真的踩过这个坑：demo 测试明明断言失败，build_demo.sh 照样打印
+# "DEMO BUILD PASS ✓"。这类"假门禁"比没有门禁更坏，因为它给的是虚假的安心。
+run_quiet() {
+  log="$OUT/step.log"
+  if ! "$@" > "$log" 2>&1; then
+    echo "FAIL: $*"
+    tail -30 "$log"
+    exit 1
+  fi
+  tail -1 "$log"
+}
+
 echo "== 1/7 moon check =="
 CHECK_OUT=$(moon check 2>&1)
 echo "$CHECK_OUT" | tail -1
@@ -23,11 +39,11 @@ if echo "$CHECK_OUT" | grep -q "Warning"; then
 fi
 
 echo "== 2/7 moon test --target native =="
-moon test --target native 2>&1 | tail -1
+run_quiet moon test --target native
 
 echo "== 3/7 wasm-gc 可检 + 测试（引擎纯字节进出的背书） =="
-moon check --target wasm-gc 2>&1 | tail -1
-moon test --target wasm-gc 2>&1 | tail -1
+run_quiet moon check --target wasm-gc
+run_quiet moon test --target wasm-gc
 
 echo "== 4/7 CLI 子进程端到端 =="
 # 生成最小 2×2 RGBA PNG（python3 标准库，zlib+struct 手工构造）作为位图资产
