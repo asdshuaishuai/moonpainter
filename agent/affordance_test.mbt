@@ -35,8 +35,8 @@ test "census：全图 hue×sat 桶 + V 与 L 的对照" {
   // 红在桶 0、蓝在桶 7（每桶 30°），各 38400 像素
   assert_true(r.contains("\"hue_bins\":[38400,"), msg=r)
   // V 与 L 必须并列给出，且 V 明显高于 L（V 不是感知亮度）
-  assert_true(r.contains("\"mean_v\":"), msg=r)
-  assert_true(r.contains("\"mean_l\":"), msg=r)
+  assert_true(r.contains("\"hsv_v\":"), msg=r)
+  assert_true(r.contains("\"sel_l\":"), msg=r)
   // 无 within 时不应出现区域字段
   assert_true(!r.contains("\"coverage\":"), msg="无 within 不应报覆盖率：\{r}")
   // 坏 within 载荷

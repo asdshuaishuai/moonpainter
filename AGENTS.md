@@ -25,6 +25,10 @@
    **三个指纹别混**：`fingerprint`（design.json，编辑表变了它不变）/
    `program_sha256`（编辑表，`@core.program_sha256` 单一实现）/
    `render_sha256`（渲染产物，缓存失效判断认这个）。
+   **两套颜色坐标系别混**：选择子吃 **OKLCh/OKLab**（`color` 的 `h`/`s` 是
+   OKLCh 色相/彩度）；HSV 只做分析辅助。凡向调用方报颜色数值，一律走
+   `pixel.ColorStats`（`sel_*` 喂选择子、`hsv_*` 仅对照）——三处报告点
+   各自算一遍就是把 HSV 的 h 写进选择子字段的温床。
 8. **字符串插值**：`\{...}` 内只放标识符/字段/调用，不放二元运算（先 let）；
    `as`/`opaque`/`guard` 等是保留字；FFI 指针参数需要 `#borrow` 属性行。
 9. **测试文件命名**：`*_test.mbt` 是 **blackbox**（必须写 `@pkg.x`，否则
@@ -40,7 +44,7 @@
                                 #（安装→render≡impact 同一张图→断言→容器往返→预览走编辑表）
 ./build_demo.sh                 # AI 修图 demo 构建 + Node headless 自检 + npm SDK 冒烟
                                 # + demo 测试（工具面与 MVSL 闭环可达，需 Node）
-moon run --target native cli    # stdin 行协议；help 查看全部 56 个命令
+moon run --target native cli    # stdin 行协议；help 查看全部 57 个命令
 ```
 
 ## demo/agent 层附加纪律（demo 包不适用"零第三方依赖"铁律）
@@ -52,7 +56,7 @@ moon run --target native cli    # stdin 行协议；help 查看全部 56 个命�
   浏览器 demo 不可用）；
 - 工具回包给 LLM 一律截断（shorten），render 的 PNG 走 attachments 不走文本
   （`render` / `select_preview` / `mvsl_impact` 三个图像类工具同规）；
-- demo 工具面是 agent 命令面的**手写子集**（当前 38 个）：引擎新增命令后，
+- demo 工具面是 agent 命令面的**手写子集**（当前 39 个）：引擎新增命令后，
   要用到就该同步加进 `paint_tools.mbt` 的 `paint_tool_defs` + `execute` +
   `catalog.mbt` 的 system prompt，否则"引擎有能力"不等于"产品里的 AI 用得上"。
   模型侧只写 JSON，base64 由 SDK 的 `b64_text` 转。

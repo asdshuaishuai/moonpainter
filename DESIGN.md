@@ -46,7 +46,7 @@ macOS 原生类 Photoshop 编辑器。对本工程最有价值的三块遗产：
 
 ```
 宿主    cli（native 行协议 + 文件 FFI + 原子落盘）
-交互    agent（56 命令 · vision 闸 · undo/redo · P0–P2 lint · MVSL 闭环 · 工具字典）
+交互    agent（57 命令 · vision 闸 · undo/redo · P0–P2 lint · MVSL 闭环 · 工具字典）
 容器    mpd（pack/unpack · manifest/params/agent/mvsl · 指纹对账 · 限额 · 预览生成）
 渲染    render（RGBA 画布 · 2×2 子采样 AA · W3C 混合 · 旋转 · 取景 · pick · stats）
 核心    core（IR 层树 · canonical JSON 双向 · 指纹 · 层定位原语 · MVSL 编辑表 IR）
@@ -143,6 +143,13 @@ manifest 的 `mvsl` 版本块 pin 住四个独立版本号（`render_contract` /
   / `render_view_overlay_with`）。三条约束见 §2；三条出口
   （`render` / `previews/` / `mvsl-impact`）必须给出**同一张图**，
   `verify.sh` 第 7 步把 `render` 与 `mvsl-impact` 的 sha256 相等做成硬断言；
+- **两套颜色坐标系必须分家**：`color` 选择子的 `h`/`s`/`l` 是 **OKLCh 色相 /
+  OKLCh 彩度 / OKLab 亮度**；HSV 只做分析辅助（V 不是感知亮度）。凡向调用方
+  报颜色数值，一律经 `pixel.ColorStats` 产出——`sel_h`/`sel_c`/`sel_l`
+  **直接喂选择子**，`hsv_h`/`hsv_s`/`hsv_v` 仅对照。三处报告点
+  （probe 邻域 / census 区域 / 连通域事实）共用这一个实现：各自算一遍就是
+  把 HSV 的 h 写进选择子字段的温床，而拿错坐标系的表现是「命令成功、
+  一个像素都没选中」——静默、且极难自查。
 - **三个身份字段各司其职（宿主必读）**：`fingerprint` = design.json 的 sha256，
   **编辑表变了它不会变**；`program_sha256` = 编辑表的 sha256（canonical
   program JSON，`@core.program_sha256` 单一实现，容器 manifest 同名字段同算法）；

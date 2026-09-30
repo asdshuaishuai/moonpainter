@@ -1,7 +1,7 @@
 # MoonPainter — Agent 驱动的图层绘制引擎
 
 > 状态：**0.1.0（.mpd 容器 v2 + 参数化绘制 + AI 修图 demo + MVSL 确定性编辑 IR 引擎已落地：
-> native 137 项 / wasm-gc 135 项测试全绿；`./verify.sh` 七步验证门全过）**。
+> native 140 项 / wasm-gc 138 项测试全绿；`./verify.sh` 七步验证门全过）**。
 > 设计书 [DESIGN.md](./DESIGN.md) · 方案与验收 [PLAN.md](./PLAN.md) ·
 > MVSL 规划与评审对照 [PLAN-MVSL.md](./PLAN-MVSL.md) · AI 修图 demo 见下节。
 
@@ -89,10 +89,16 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
 - **视觉闭环**：`render` / `select_preview` / `mvsl_impact` 三个图像类工具把 PNG 以附件
   （`SuccessWithAttachments`）回传给多模态模型，AI 真的看图确认效果再继续
   （试选不看图 = 闭眼改色；影响证书不看图 = 发现不了选区跑偏）；
-- **38 个工具，MVSL 闭环可达**：`census`（先普查再选色）/`probe`（这个点选中没有）/
+- **39 个工具，MVSL 闭环可达**：`sel_schema`（先看语法：字段名/量纲/示例自证）/
+  `census`（先普查再选色）/`probe`（这个点选中没有）/
   `select_preview`（试选 + 连通域事实）/`mvsl_set`（装编辑表）/`mvsl_impact`
   （影响证书）/`mvsl_assert`（保护断言）/`mvsl_show`/`mvsl_clear`。模型只写 **JSON**
   选择子与编辑表，base64 由 SDK 做——不该让 LLM 手搓 base64；
+- **两套颜色坐标系分家**：`probe`/`census` 报 `sel_h`/`sel_c`/`sel_l`
+  （= OKLCh 色相 / OKLCh 彩度 / OKLab 亮度，**直接喂选择子的那三个数**）
+  与 `hsv_h`/`hsv_s`/`hsv_v`（仅分析对照）。纯红 #C81E1E 的
+  `sel_h≈28, sel_c≈0.20` 而 `hsv_h=0, hsv_s=0.85`——拿错一套的表现是
+  「命令成功但一个像素都没选中」；
 - agent 层用 mooncakes 的 **colmugx/posoco**（六边形端口框架：ModelPort /
   ToolProvider / Observer 三端口扩展；Observer 即"全程可见"的官方通道）。
   评估记录：moonllm（DC-Z-lab）锁 `+native` 不适用浏览器，弃用。

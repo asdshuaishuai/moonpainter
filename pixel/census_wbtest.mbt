@@ -36,8 +36,8 @@ test "census：hue×sat 桶与 dominant_bin（索引 = sat*12 + hue）" {
   }
   assert_eq(sum, 200, msg="hsl 桶总数")
   // **V 不是感知亮度**：纯红与纯蓝的 HSV V 都接近 1，OKLab L 差很多
-  assert_true(c.mean_v > 0.79, msg="HSV V 均值应接近 1（\{c.mean_v}）")
-  assert_true(c.mean_l < 0.58, msg="OKLab L 均值应明显低于 V（\{c.mean_l}）")
+  assert_true(c.stats.hsv_v > 0.79, msg="HSV V 均值应接近 1（\{c.stats.hsv_v}）")
+  assert_true(c.stats.sel_l < 0.58, msg="OKLab L 均值应明显低于 V（\{c.stats.sel_l}）")
 }
 
 ///|
@@ -70,8 +70,8 @@ test "census：空区域不产生 NaN（counted=0 时均值归 0）" {
   let c = census(b, Some(f))
   assert_eq(c.counted, 0, msg="空区域")
   assert_eq(c.dominant_bin, -1, msg="空区域无众数桶")
-  assert_true(c.mean_l == 0.0, msg="空区域均值应为 0 而不是 NaN")
-  assert_true(c.mean_h == 0.0, msg="空区域色相均值应为 0 而不是 NaN")
+  assert_true(c.stats.sel_l == 0.0, msg="空区域均值应为 0 而不是 NaN")
+  assert_true(c.stats.sel_h == 0.0, msg="空区域色相均值应为 0 而不是 NaN")
 }
 
 ///|
@@ -87,7 +87,7 @@ test "probe：邻域统计 + 平坦区边缘置信度为 0" {
   assert_true(p.var_l < 1.0E-12, msg="纯色邻域方差应为 0（\{p.var_l}）")
   assert_true(p.edge == 0.0, msg="纯色区不应有边缘（\{p.edge}）")
   assert_true(p.edge_conf == 0.0, msg="平坦区边缘置信度应为 0")
-  assert_true(p.mean_s > 0.7, msg="蓝色饱和度应高（\{p.mean_s}）")
+  assert_true(p.stats.hsv_s > 0.7, msg="蓝色 HSV 饱和度应高（\{p.stats.hsv_s}）")
 }
 
 ///|

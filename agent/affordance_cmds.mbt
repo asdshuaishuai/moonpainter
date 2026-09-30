@@ -15,6 +15,28 @@
 /// 引擎负责数值（「这个点 membership=0.87，属于第 3 个连通域」）。
 
 ///|
+/// `ColorStats` → JSON 片段：**两套颜色坐标系并列摆出**。
+///
+/// `sel_*` 是直接喂 `color` 选择子的三个值（选择子的 h/s/l 用的是 OKLCh
+/// 色相 / OKLCh 彩度 / OKLab 亮度）；`hsv_*` 只是对照。并列而不是二选一，
+/// 是要让调用方**亲眼看到**两者不是一回事（纯红 sel_h≈29 而 hsv_h=0，
+/// 彩度 0.18 而 HSV 饱和度 0.85）——否则它会在两个都叫"色相/饱和度"的
+/// 字段之间猜，而猜错的表现是"命令成功但一个像素都没选中"。
+///
+/// census / probe / 连通域事实三处共用这一个实现，保证同一片像素在三处
+/// 报出的数字逐位一致。
+fn stats_json(st : @pixel.ColorStats) -> String {
+  let sb = StringBuilder()
+  sb.write_string(",\"sel_h\":\{@core.fmt_num(st.sel_h)}")
+  sb.write_string(",\"sel_c\":\{@core.fmt_num(st.sel_c)}")
+  sb.write_string(",\"sel_l\":\{@core.fmt_num(st.sel_l)}")
+  sb.write_string(",\"hsv_h\":\{@core.fmt_num(st.hsv_h)}")
+  sb.write_string(",\"hsv_s\":\{@core.fmt_num(st.hsv_s)}")
+  sb.write_string(",\"hsv_v\":\{@core.fmt_num(st.hsv_v)}")
+  sb.to_string()
+}
+
+///|
 /// 解析 `within=<base64 sel>` 参数（可选）。返回 None 表示未指定。
 fn parse_within(tokens : Array[String]) -> Result[Option[@core.SelSpec], String] {
   let mut raw : Option[String] = None
@@ -116,11 +138,11 @@ fn cmd_census(s : Session, tokens : Array[String]) -> String {
   }
   sb.write_string("]")
   sb.write_string(",\"dominant_bin\":\{cen.dominant_bin}")
-  sb.write_string(",\"mean_l\":\{@core.fmt_num(cen.mean_l)}")
-  sb.write_string(",\"mean_h\":\{@core.fmt_num(cen.mean_h)}")
-  sb.write_string(",\"mean_s\":\{@core.fmt_num(cen.mean_s)}")
-  // 对照字段：V 不是感知亮度。和 mean_l 并列摆出来，让模型自己看到差异。
-  sb.write_string(",\"mean_v\":\{@core.fmt_num(cen.mean_v)}")
+  // 桶直方图是 HSV 的（粗粒度可视辅助）；精确均值按选择子坐标给出。
+  sb.write_string(
+    ",\"bin_space\":\"hue_bins/sat_bins/hsl_bins 是 HSV 粗粒度桶（可视辅助）；要喂选择子请用下面的 sel_h/sel_c/sel_l\"",
+  )
+  sb.write_string(stats_json(cen.stats))
   match field {
     Some(f) => {
       let cert = @pixel.certify(base, f)
@@ -192,9 +214,7 @@ fn cmd_probe(s : Session, tokens : Array[String]) -> String {
   sb.write_string(",\"var_l\":\{@core.fmt_num(pr.var_l)}")
   sb.write_string(",\"mean_a\":\{@core.fmt_num(pr.mean_a)}")
   sb.write_string(",\"mean_b\":\{@core.fmt_num(pr.mean_b)}")
-  sb.write_string(",\"mean_h\":\{@core.fmt_num(pr.mean_h)}")
-  sb.write_string(",\"mean_s\":\{@core.fmt_num(pr.mean_s)}")
-  sb.write_string(",\"mean_v\":\{@core.fmt_num(pr.mean_v)}")
+  sb.write_string(stats_json(pr.stats))
   sb.write_string(",\"edge\":\{@core.fmt_num(pr.edge)}")
   sb.write_string(",\"edge_conf\":\{@core.fmt_num(pr.edge_conf)}")
   // 逐算子的选择子归属（同色异义干扰在这里暴露：membership 高但成分不同）

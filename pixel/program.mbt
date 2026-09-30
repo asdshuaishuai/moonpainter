@@ -197,9 +197,8 @@ pub(all) struct Component {
   mean_l : Double
   mean_a : Double
   mean_b : Double
-  mean_h : Double // 平均色相（环平均，避免 0/360 折叠）
-  mean_s : Double
-  mean_v : Double
+  /// 颜色摘要（与 probe/census 共用同一实现——三处报的数字必须同源）
+  stats : ColorStats
 }
 
 ///|
@@ -292,7 +291,6 @@ fn scan_components(
   let visited = field_new(f.w, f.h)
   let comps : Array[Component] = []
   let n = f.w * f.h
-  let deg2rad = 3.141592653589793 / 180.0
   let mut i = 0
   while i < n {
     if f.v[i] < CERT_THRESHOLD || visited.v[i] > 0.0 {
@@ -316,13 +314,10 @@ fn scan_components(
     let mut y1 = sy
     let mut sumx = 0.0
     let mut sumy = 0.0
+    let acc = color_acc_new()
     let mut sl = 0.0
     let mut sa = 0.0
     let mut sb = 0.0
-    let mut shx = 0.0
-    let mut shy = 0.0
-    let mut ss = 0.0
-    let mut sv = 0.0
     while stack.length() > 0 {
       let top = stack.length() - 1
       let (cx, cy) = stack[top]
@@ -347,12 +342,7 @@ fn scan_components(
       sl = sl + lab.l
       sa = sa + lab.a
       sb = sb + lab.b
-      let (hs, sat, vs) = argb_to_hsv(argb)
-      let rad = hs * deg2rad
-      shx = shx + mcos(rad)
-      shy = shy + msin(rad)
-      ss = ss + sat
-      sv = sv + vs
+      color_acc_add(acc, argb)
       let mut dy = -1
       while dy <= 1 {
         let mut dx = -1
@@ -390,9 +380,7 @@ fn scan_components(
       mean_l: sl / ad,
       mean_a: sa / ad,
       mean_b: sb / ad,
-      mean_h: ring_mean_angle(shx, shy),
-      mean_s: ss / ad,
-      mean_v: sv / ad,
+      stats: color_acc_finish(acc),
     })
     i = i + 1
   }

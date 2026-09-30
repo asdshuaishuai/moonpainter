@@ -149,6 +149,8 @@ pub fn exec(s : Session, line : String) -> String {
     // 区域级 affordance（census 破除「先定位才能普查」的循环依赖）
     "census" => cmd_census(s, tokens)
     "probe" => cmd_probe(s, tokens)
+    // 语法自证：示例由 canonical 写出器产出、由同一解析器验回（文档不漂移）
+    "sel-schema" => cmd_sel_schema(s, tokens)
     "lint" => cmd_lint(s)
     "fingerprint" => cmd_fingerprint(s)
     "inspect" => cmd_inspect(s)

@@ -122,9 +122,8 @@ fn component_json(c : @pixel.Component) -> String {
   sb.write_string(",\"area\":\{c.area}")
   sb.write_string(",\"centroid\":[\{@core.fmt_num(c.cx)},\{@core.fmt_num(c.cy)}]")
   sb.write_string(",\"mean_l\":\{@core.fmt_num(c.mean_l)}")
-  sb.write_string(",\"mean_h\":\{@core.fmt_num(c.mean_h)}")
-  sb.write_string(",\"mean_s\":\{@core.fmt_num(c.mean_s)}")
-  sb.write_string(",\"mean_v\":\{@core.fmt_num(c.mean_v)}}")
+  sb.write_string(stats_json(c.stats))
+  sb.write_string("}")
   sb.to_string()
 }
 

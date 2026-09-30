@@ -35,10 +35,92 @@ pub(all) struct Census {
   sat_bins : FixedArray[Int]
   hsl_bins : FixedArray[Int]
   dominant_bin : Int // hsl_bins 的众数下标；无像素时为 -1
-  mean_l : Double // OKLab L（感知亮度）
-  mean_s : Double
-  mean_v : Double // HSV V —— **仅作对照**：V 不是感知亮度
-  mean_h : Double // 环平均色相
+  /// 桶直方图是 **HSV** 的（粗粒度可视辅助）；要喂选择子请用下面的 stats。
+  stats : ColorStats
+}
+
+///|
+/// 一组像素在**两套色相坐标系**下的摘要。
+///
+/// **为什么必须是一个共用类型**：引擎里有两套颜色坐标，且它们不是同一回事——
+/// `color` 选择子的 `h`/`s` 吃的是 **OKLCh 色相与彩度**（纯红 ≈ h 29°、c 0.18），
+/// 而 HSV 只是分析辅助（同一像素 H 0°、S 0.85）。三个报告点（probe 邻域 /
+/// census 区域 / 连通域事实）如果各自算一遍，迟早在其中一处把 HSV 的 h 写进
+/// 选择子的 h 字段——那正是"引擎把数字告诉模型，数字却不能用"的循环依赖。
+/// 所以这里算一次，三处共用。
+///
+/// 字段命名刻意带前缀：`sel_*` 是喂选择子的，`hsv_*` 只是对照。
+pub(all) struct ColorStats {
+  sel_h : Double // OKLCh 色相（度，环平均——避免 0/360 折叠）
+  sel_c : Double // OKLCh 彩度（sRGB 全色域约 0..0.32）
+  sel_l : Double // OKLab L（0..1，感知亮度）
+  hsv_h : Double // 仅对照
+  hsv_s : Double // 仅对照
+  hsv_v : Double // 仅对照：V 不是感知亮度（纯绿 V≈1 而 L≈0.87，纯蓝 V≈1 而 L≈0.45）
+}
+
+///|
+/// `ColorStats` 的累加器（逐像素 add，最后 finish）。
+priv struct ColorAcc {
+  mut n : Int
+  mut l : Double
+  mut c : Double
+  mut cx : Double
+  mut cy : Double
+  mut hx : Double
+  mut hy : Double
+  mut hs : Double
+  mut hv : Double
+}
+
+///|
+fn color_acc_new() -> ColorAcc {
+  {
+    n: 0,
+    l: 0.0,
+    c: 0.0,
+    cx: 0.0,
+    cy: 0.0,
+    hx: 0.0,
+    hy: 0.0,
+    hs: 0.0,
+    hv: 0.0,
+  }
+}
+
+///|
+fn color_acc_add(a : ColorAcc, argb : Int) -> Unit {
+  let lch = oklab_to_oklch(argb_to_oklab(argb))
+  let (hh, ss, vv) = argb_to_hsv(argb)
+  let deg2rad = 3.141592653589793 / 180.0
+  a.n = a.n + 1
+  a.l = a.l + lch.l
+  a.c = a.c + lch.c
+  let lrad = lch.h * deg2rad
+  a.cx = a.cx + mcos(lrad)
+  a.cy = a.cy + msin(lrad)
+  let hrad = hh * deg2rad
+  a.hx = a.hx + mcos(hrad)
+  a.hy = a.hy + msin(hrad)
+  a.hs = a.hs + ss
+  a.hv = a.hv + vv
+}
+
+///|
+/// 空集的均值一律给 0（不是 NaN）——调用方是 JSON 报告，NaN 会毁掉整段输出。
+fn color_acc_finish(a : ColorAcc) -> ColorStats {
+  if a.n == 0 {
+    return { sel_h: 0.0, sel_c: 0.0, sel_l: 0.0, hsv_h: 0.0, hsv_s: 0.0, hsv_v: 0.0 }
+  }
+  let n = a.n.to_double()
+  {
+    sel_h: ring_mean_angle(a.cx, a.cy),
+    sel_c: a.c / n,
+    sel_l: a.l / n,
+    hsv_h: ring_mean_angle(a.hx, a.hy),
+    hsv_s: a.hs / n,
+    hsv_v: a.hv / n,
+  }
 }
 
 ///|
@@ -49,13 +131,8 @@ pub fn census(base : @codec.RgbaBuf, within : Field?) -> Census {
   let hue_bins = FixedArray::make(CENSUS_HUE_BINS, 0)
   let sat_bins = FixedArray::make(CENSUS_SAT_BINS, 0)
   let hsl = FixedArray::make(CENSUS_HUE_BINS * CENSUS_SAT_BINS, 0)
-  let deg2rad = 3.141592653589793 / 180.0
+  let acc = color_acc_new()
   let mut counted = 0
-  let mut sl = 0.0
-  let mut ss = 0.0
-  let mut sv = 0.0
-  let mut shx = 0.0
-  let mut shy = 0.0
   let mut i = 0
   while i < total {
     let mut take = true
@@ -67,8 +144,9 @@ pub fn census(base : @codec.RgbaBuf, within : Field?) -> Census {
     }
     if take {
       let c = base.pixels[i]
-      let (h, s, v) = argb_to_hsv(c)
-      let lab = argb_to_oklab(c)
+      // 桶用 HSV（粗粒度可视辅助）；精确均值走共用的 ColorStats
+      let (h, s, _v) = argb_to_hsv(c)
+      color_acc_add(acc, c)
       let mut hb = trunc_pos(h / 30.0)
       if hb >= CENSUS_HUE_BINS {
         hb = CENSUS_HUE_BINS - 1
@@ -88,12 +166,6 @@ pub fn census(base : @codec.RgbaBuf, within : Field?) -> Census {
       let idx = sb * CENSUS_HUE_BINS + hb
       hsl[idx] = hsl[idx] + 1
       counted = counted + 1
-      sl = sl + lab.l
-      ss = ss + s
-      sv = sv + v
-      let rad = h * deg2rad
-      shx = shx + mcos(rad)
-      shy = shy + msin(rad)
     }
     i = i + 1
   }
@@ -107,7 +179,6 @@ pub fn census(base : @codec.RgbaBuf, within : Field?) -> Census {
     }
     k = k + 1
   }
-  let n = counted.to_double()
   {
     total,
     counted,
@@ -115,10 +186,7 @@ pub fn census(base : @codec.RgbaBuf, within : Field?) -> Census {
     sat_bins,
     hsl_bins: hsl,
     dominant_bin: dom,
-    mean_l: if counted > 0 { sl / n } else { 0.0 },
-    mean_s: if counted > 0 { ss / n } else { 0.0 },
-    mean_v: if counted > 0 { sv / n } else { 0.0 },
-    mean_h: if counted > 0 { ring_mean_angle(shx, shy) } else { 0.0 },
+    stats: color_acc_finish(acc),
   }
 }
 
@@ -133,9 +201,8 @@ pub(all) struct Probe {
   var_l : Double // OKLab L 的方差（平坦 vs 纹理）
   mean_a : Double
   mean_b : Double
-  mean_h : Double
-  mean_s : Double
-  mean_v : Double
+  /// 颜色摘要（两套坐标系的对照都在这里，见 ColorStats）
+  stats : ColorStats
   edge : Double // OKLab L 的中心差分梯度幅值（每像素 L 单位）
   edge_conf : Double // clamp01(edge / EDGE_SCALE)：边缘置信度
 }
@@ -157,15 +224,11 @@ pub fn probe(base : @codec.RgbaBuf, x : Int, y : Int, r : Int) -> Result[Probe, 
   if r < 0 || r > 32 {
     return Err("探针半径 \{r} 越界（0..32）")
   }
-  let deg2rad = 3.141592653589793 / 180.0
+  let acc = color_acc_new()
   let mut n = 0
   let mut sl = 0.0
   let mut sa = 0.0
   let mut sb = 0.0
-  let mut ss = 0.0
-  let mut sv = 0.0
-  let mut shx = 0.0
-  let mut shy = 0.0
   let mut dy = -r
   while dy <= r {
     let mut dx = -r
@@ -175,15 +238,10 @@ pub fn probe(base : @codec.RgbaBuf, x : Int, y : Int, r : Int) -> Result[Probe, 
       if sx >= 0 && sx < base.width && sy >= 0 && sy < base.height {
         let c = base.pixels[sy * base.width + sx]
         let lab = argb_to_oklab(c)
-        let (h, s, v) = argb_to_hsv(c)
+        color_acc_add(acc, c)
         sl = sl + lab.l
         sa = sa + lab.a
         sb = sb + lab.b
-        ss = ss + s
-        sv = sv + v
-        let rad = h * deg2rad
-        shx = shx + mcos(rad)
-        shy = shy + msin(rad)
         n = n + 1
       }
       dx = dx + 1
@@ -239,9 +297,7 @@ pub fn probe(base : @codec.RgbaBuf, x : Int, y : Int, r : Int) -> Result[Probe, 
     var_l: var_l / nd,
     mean_a: sa / nd,
     mean_b: sb / nd,
-    mean_h: ring_mean_angle(shx, shy),
-    mean_s: ss / nd,
-    mean_v: sv / nd,
+    stats: color_acc_finish(acc),
     edge,
     edge_conf: clamp01(edge / EDGE_SCALE),
   })
