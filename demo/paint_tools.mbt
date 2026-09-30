@@ -101,6 +101,9 @@ fn tool_cmd(name : String) -> String? {
     // 它们当初只加进了 `line` match，**没加进这张表**，于是 `cmd` 求值阶段
     // 就直接返回"未知工具"——9 个工具在工具面上一直是坏的（人类走前端按钮，
     // 而这些工具的端到端回合从来没写过，所以没人发现）。
+    "add_mask" => Some("add-mask")
+    "set_mask" => Some("set-mask")
+    "remove_mask" => Some("remove-mask")
     "add_text" => Some("add-text")
     "set_text" => Some("set-text")
     "visible" => Some("visible")
@@ -257,6 +260,30 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
     make_tool("tag", "给图层打语义标签（如 hero/background/logo）", [("id", "string:req:图层 id"), ("tag", "string:req:标签")]),
     make_tool("undo", "撤销上一次修改（工具出错后自我纠正用）", []),
     make_tool("redo", "重做被撤销的修改（undo 的对偶；撤销过头时恢复）", []),
+    make_tool(
+      "add_mask",
+      "给图层加几何蒙版（蒙版外不渲染）。改几何 = remove_mask + add_mask",
+      [
+        ("id", "string:req:图层 id"),
+        ("kind", "string:req:rect 或 ellipse"),
+        ("x", "number:req:蒙版左上 x（像素，画布坐标）"),
+        ("y", "number:req:蒙版左上 y（像素，画布坐标）"),
+        ("w", "number:req:蒙版宽（像素）"),
+        ("h", "number:req:蒙版高（像素）"),
+        ("radius", "number:圆角（像素，仅 rect）"),
+        ("invert", "string:true 则反选（蒙版内反而不渲染）"),
+      ],
+    ),
+    make_tool(
+      "set_mask",
+      "只改蒙版反选；几何不可改（用 remove_mask + add_mask 重做）",
+      [("id", "string:req:图层 id"), ("invert", "string:req:true 或 false")],
+    ),
+    make_tool(
+      "remove_mask",
+      "移除图层蒙版（恢复整层渲染）",
+      [("id", "string:req:图层 id")],
+    ),
     make_tool(
       "add_text",
       "加文本层（ASCII 真字形）。文字可含空格（命令行层会自动加引号）",
@@ -492,6 +519,14 @@ pub impl @posoco.ToolProvider for PaintTools with fn execute(
       "query-layer \{id}"
     }
     "pick" => "pick \{arg(call, "x")} \{arg(call, "y")}"
+    "add_mask" => {
+      let id = arg(call, "id")
+      let kind = arg(call, "kind")
+      let tail = args_to_tail(call.arguments, ["x", "y", "w", "h", "radius", "invert"])
+      "add-mask \{id} kind=\{kind} \{tail}"
+    }
+    "set_mask" => "set-mask \{arg(call, "id")} \{arg(call, "invert")}"
+    "remove_mask" => "remove-mask \{arg(call, "id")}"
     "add_text" => {
       let x = arg(call, "x")
       let y = arg(call, "y")
