@@ -177,6 +177,46 @@ grep -q '"error":"断言未通过（2 条）' "$OUT/mvsl_bad.log" || { echo "FAI
 # 编辑表随容器往返（状态不是历史：重开后必须原样在编辑表里）
 unzip -p "$OUT/mvsl.mpd" meta/mvsl.json | grep -q '"hue_deg":120' || { echo "FAIL: 容器缺编辑表"; exit 1; }
 unzip -p "$OUT/mvsl.mpd" manifest.json | grep -q '"render_contract":1' || { echo "FAIL: manifest 缺 MVSL 版本块"; exit 1; }
+
+# 图层级作用域 `layer=`：只改指定的那一层。
+# 两层同色，左半 l1 被引用、右半 l2 没有——所以"左半变、右半不变"是精确判据，
+# 而不是"有没有差异"这种弱判据。取值用等值比较，不做子串匹配（铁律 11）。
+#
+# **选择子必须是全图（w=64）**：一开始写成了 w=32（只盖左半），于是"右半没变"
+# 在**任何**情况下都成立——删掉 layer= 它照样通过，是一条空断言。全图选择子
+# 才有区分度：不带 layer 时左右都变，带 layer 时只有左变。
+SCOPE_PROG='{"version":1,"ops":[{"id":"e1","kind":"recolor","sel":{"basis":"base","expr":{"t":"geo","shape":"rect","w":{"x":0,"y":0,"w":64,"h":32,"feather":0}}},"amount":1,"hue_deg":120,"temp_kelvin":0,"relight_gain":1,"layer":"l1","refine":[],"note":"","evidence":null}],"guards":[]}'
+SCOPE_B64=$(printf '%s' "$SCOPE_PROG" | base64 | tr -d '\n')
+printf '%s\n' \
+  'session-open full_image' \
+  'new 64 32 uuid=mvsl-scope' \
+  'add-rect x=0 y=0 w=32 h=32 fill=#FF0000FF id=l1' \
+  'add-rect x=32 y=0 w=32 h=32 fill=#FF0000FF id=l2' \
+  "mvsl-set $SCOPE_B64" \
+  'sample 16 16' \
+  'sample 48 16' \
+  | moon run --target native cli > "$OUT/scope.log"
+grep -q '"op":"mvsl-set"' "$OUT/scope.log" || { echo "FAIL: 图层级编辑表装不上"; cat "$OUT/scope.log"; exit 1; }
+SCOPE_COLORS=$(grep -o '"color":"#[0-9A-F]*"' "$OUT/scope.log")
+SCOPE_LEFT=$(printf '%s\n' "$SCOPE_COLORS" | sed -n '1p')
+SCOPE_RIGHT=$(printf '%s\n' "$SCOPE_COLORS" | sed -n '2p')
+if [ "$SCOPE_RIGHT" != '"color":"#FF0000FF"' ]; then
+  echo "FAIL: 图层级作用域越界——未被引用的层被改了（右半 $SCOPE_RIGHT）"
+  exit 1
+fi
+if [ "$SCOPE_LEFT" = '"color":"#FF0000FF"' ]; then
+  echo "FAIL: 图层级算子没有生效——被引用的层颜色未变（左半 $SCOPE_LEFT）"
+  exit 1
+fi
+# 引用不存在的层必须被拒绝（否则那个算子在表里、跑得通、什么都不改）
+printf '%s\n' \
+  'session-open full_image' \
+  'new 64 32 uuid=mvsl-scope-bad2' \
+  'add-rect x=0 y=0 w=32 h=32 fill=#FF0000FF id=l1' \
+  "mvsl-set $(printf '%s' "${SCOPE_PROG/l1/nope}" | base64 | tr -d '\n')" \
+  | moon run --target native cli > "$OUT/scope_bad.log"
+grep -q '"error":"算子引用了不存在的图层' "$OUT/scope_bad.log" || { echo "FAIL: 引用不存在的层未被拒绝"; cat "$OUT/scope_bad.log"; exit 1; }
+echo "图层级作用域 OK（左半被改、右半逐位不变；不存在的层被拒）"
 printf '%s\n' \
   'session-open full_image' \
   "open-mpd $OUT/mvsl.mpd" \
