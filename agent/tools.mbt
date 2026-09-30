@@ -50,7 +50,7 @@ pub fn list_tools() -> Array[AgentTool] {
   add("delete", "delete <id>", "meta")
   add("visible", "visible <id> <true|false>", "meta")
   add("reorder", "reorder <id> front|back|up|down", "meta")
-  add("group", "group <gid> <id…>：把根级层编成组（直通合成）", "meta")
+  add("group", "group <gid> <id> [id...]：把一个或多个**根级**层编成组（直通合成；嵌套编组请先 ungroup）", "meta")
   add("ungroup", "ungroup <gid>", "meta")
   // 文本 / 调整 / 蒙版
   add("add-text", "add-text x= y= text=<内容> [font_size=] [fill=<#RRGGBB[AA]，默认黑>]：文本层（ASCII 真字形）；**含空格用双引号包住** text=\"Hello World\"，name= 同理", "meta")

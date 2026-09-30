@@ -727,3 +727,32 @@ test "容器自述不许撒谎：manifest 的 assets 计数 == design.json 的�
   assert_eq(again.doc.assets.length(), 1, msg="undo 应把资产引用还回来")
   assert_eq(again.assets.length(), 1, msg="undo 后容器里应重新有那份字节")
 }
+
+///|
+test "group：一个成员的组也能建（入口不许比可达状态更严）" {
+  // 原先入口要求至少两个成员，但"一个成员的组"本来就能到达——
+  // 分两个再删一个就得到了。于是入口比可达状态更严，字典里
+  // `group <gid> <id…>` 又读作"一个也行"：三处口径不一致。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 32 32")
+  let _ = run(s, "add-rect x=0 y=0 w=8 h=8 fill=#FF0000FF name=A")
+  let one = run(s, "group g1 l1")
+  assert_true(one.contains("\"op\":\"group\""), msg="一个成员也该能建组：\{one}")
+  assert_true(one.contains("\"members\":1"), msg=one)
+  // 组能装能开、能拆
+  let un = run(s, "ungroup g1")
+  assert_true(un.contains("\"op\":\"ungroup\""), msg=un)
+  assert_true(un.contains("\"restored\":1"), msg=un)
+  // 零成员仍必须拒绝（空组没有意义，且会让"直通合成"多一层无用嵌套）
+  let none = run(s, "group g2")
+  assert_true(none.has_prefix("{\"error\":"), msg=none)
+  assert_true(none.contains("至少一个成员"), msg=none)
+  // 经由"分两个再删一个"到达的单成员组，删掉最后那个成员后组还在（空组）
+  let _ = run(s, "add-rect x=0 y=0 w=8 h=8 fill=#00FF00FF name=B")
+  let _ = run(s, "group g3 l1 l2")
+  let _ = run(s, "delete l2")
+  let ll = run(s, "list-layers")
+  assert_true(ll.contains("\"id\":\"g3\""), msg="删掉一个成员后组应还在：\{ll}")
+  assert_true(ll.contains("\"id\":\"l1\""), msg=ll)
+}

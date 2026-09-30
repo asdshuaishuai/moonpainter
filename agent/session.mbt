@@ -1123,8 +1123,12 @@ fn cmd_reorder(s : Session, tokens : Array[String]) -> String {
 
 ///|
 fn cmd_group(s : Session, tokens : Array[String]) -> String {
-  if tokens.length() < 4 {
-    return err("用法：group <gid> <id1> <id2> ...（成员须为根级层）")
+  // 下界是 **1 个成员**，不是 2 个。这里原先写 `< 4`（即至少两个成员），
+  // 但"只有一个成员的组"本来就能到达（分两个再删一个），于是入口比可达状态
+  // 更严——字典里写的是 `group <gid> <id…>`，也读作"一个也行"。
+  // 三处口径统一到"至少一个"。
+  if tokens.length() < 3 {
+    return err("用法：group <gid> <id> [id...]（至少一个成员，且都须是根级层）")
   }
   let doc = match require_doc(s) {
     Ok(d) => d
