@@ -267,6 +267,16 @@ MUTS = [
         "killed",
     ),
     (
+        "R16",
+        "set-text 下界写小（缺参数时越界 panic 而非报用法错）",
+        "agent/session.mbt",
+        """  if tokens.length() < 3 {
+    return err("用法：set-text <id>""",
+        """  if tokens.length() < 2 {
+    return err("用法：set-text <id>""",
+        "killed",
+    ),
+    (
         "R15",
         "delete 不收敛资产引用（design.json 留悬空引用、manifest 自述撒谎）",
         "agent/session.mbt",

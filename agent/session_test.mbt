@@ -756,3 +756,26 @@ test "group：一个成员的组也能建（入口不许比可达状态更严）
   assert_true(ll.contains("\"id\":\"g3\""), msg="删掉一个成员后组应还在：\{ll}")
   assert_true(ll.contains("\"id\":\"l1\""), msg=ll)
 }
+
+///|
+test "set-text 缺参数要报用法错，不许越界崩溃" {
+  // 原先下界写成 2（应为 3），于是 `set-text l1` 穿过校验、在 `tokens[2]`
+  // 上**越界 panic**：进程从 cmd_set_text 崩掉，用户看到调用栈而不是提示。
+  // 这条测试在修之前会直接把测试进程带崩——正是它该有的样子。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 32 32")
+  let _ = run(s, "add-text x=0 y=0 text=Hi")
+  let bad = run(s, "set-text l1")
+  assert_true(bad.has_prefix("{\"error\":"), msg=bad)
+  assert_true(bad.contains("用法：set-text"), msg=bad)
+  // 清空是合法用法（分词后仍是 3 个 token），不许被下界误伤
+  let cleared = run(s, "set-text l1 \"\"")
+  assert_true(cleared.contains("\"op\":\"set-text\""), msg=cleared)
+  let q = run(s, "query-layer l1")
+  assert_true(!q.contains("\"text\":\""), msg="空文本会从回包里省略（注意别被 kind:text 误伤）：\{q}")
+  // 真正设置也照常
+  let ok = run(s, "set-text l1 Hello")
+  assert_true(ok.contains("\"op\":\"set-text\""), msg=ok)
+  assert_true(run(s, "query-layer l1").contains("\"text\":\"Hello\""), msg=run(s, "query-layer l1"))
+}

@@ -779,8 +779,13 @@ fn cmd_add_text(s : Session, tokens : Array[String]) -> String {
 
 ///|
 fn cmd_set_text(s : Session, tokens : Array[String]) -> String {
-  if tokens.length() < 2 {
-    return err("用法：set-text <id> <新内容>（含空格用双引号包起来）")
+  // 下界是 **3**（`set-text <id> <内容>`）。原先写 2，于是 `set-text l1`
+  // 穿过校验、在下面 `tokens[2]` 上**越界 panic**：CLI 进程直接从
+  // `cmd_set_text` 崩掉，用户看到的是调用栈而不是用法提示。
+  // 注意内容可以为空（`set-text l1 ""` 是"清空文本"的合法写法，分词后
+  // 仍是 3 个 token），所以下界卡 3 不会误伤这条用法。
+  if tokens.length() < 3 {
+    return err("用法：set-text <id> <新内容>（含空格用双引号包起来；清空用 \"\"）")
   }
   let doc = match require_doc(s) {
     Ok(d) => d
