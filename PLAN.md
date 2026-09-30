@@ -235,9 +235,9 @@ native **67/67**、js **66/66**、wasm-gc **65/65**；`moon check` 0 错误
 
 ### 验收口径
 
-`moon check` 0 error / 0 warning；`moon test --target native` **176/176**、
-`--target wasm-gc` **174/174**；`./verify.sh` **八步全过**。
-（对比补遗 4：native 67 → 176。）
+`moon check` 0 error / 0 warning；`moon test --target native` **177/177**、
+`--target wasm-gc` **175/175**；`./verify.sh` **八步全过**。
+（对比补遗 4：native 67 → 177。）
 
 ### 补遗 5 追加：区域级 affordance（census / probe）
 

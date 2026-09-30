@@ -138,3 +138,38 @@ test "mask_inner_dist：椭圆用短半轴做尺度（圆形时精确）" {
   assert_true(near_d(mask_inner_dist(c, 2.5, 5.0), 2.5))
   assert_true(mask_inner_dist(c, 0.0, 0.0) < 0.0)
 }
+
+///|
+test "rounded_rect_sdf：radius 超过半边长也按半边长夹住（羽化路径不能溢出）" {
+  // 羽化按 `-rounded_rect_sdf` 算内距，所以这条路径的夹住行为与硬边路径
+  // 同等重要。上面那条"夹住"测的是 `rounded_rect_inside`（布尔版），
+  // 这条补上 sdf 版——变异 R4 就是靠它才被抓住的。
+  assert_true(
+    near_d(
+      rounded_rect_sdf(0.0, 0.0, 20.0, 10.0, 999.0),
+      rounded_rect_sdf(0.0, 0.0, 20.0, 10.0, 5.0),
+    ),
+  )
+  assert_true(
+    near_d(
+      rounded_rect_sdf(1.0, 1.0, 20.0, 10.0, 999.0),
+      rounded_rect_sdf(1.0, 1.0, 20.0, 10.0, 5.0),
+    ),
+  )
+  assert_true(
+    near_d(
+      rounded_rect_sdf(10.0, 5.0, 20.0, 10.0, 999.0),
+      rounded_rect_sdf(10.0, 5.0, 20.0, 10.0, 5.0),
+    ),
+  )
+  assert_true(
+    near_d(
+      rounded_rect_sdf(19.0, 9.0, 20.0, 10.0, 999.0),
+      rounded_rect_sdf(19.0, 9.0, 20.0, 10.0, 5.0),
+    ),
+  )
+  // 超大 radius 不能把内部点算成"在外"
+  assert_true(rounded_rect_sdf(10.0, 5.0, 20.0, 10.0, 999.0) < 0.0)
+  // 也不能把远处外部点算成"在内"
+  assert_true(rounded_rect_sdf(0.0 - 50.0, 0.0 - 50.0, 20.0, 10.0, 999.0) > 0.0)
+}

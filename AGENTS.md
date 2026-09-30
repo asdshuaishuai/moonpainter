@@ -72,8 +72,12 @@
                                 # render≡impact 同一张图→断言→软过渡带不
                                 # 算泄漏→lint 空操作/违约→容器往返→预览
                                 # 走编辑表）；渐变端点单位等静默失败也在此拦
-                                # 8/8 命令字典与分发一致：list-tools 吐出的每个
+                                # 8/9 命令字典与分发一致：list-tools 吐出的每个
                                 # 命令都逐个真实调用，必须不报"未知命令"（铁律 6）
+                                # 9/9 变异锚点自检：每个变异锚点必须唯一命中 1 处
+                                # （秒级）。锚点失效 = 那块覆盖被悄悄拿掉，
+                                # 而汇总里的「N 个变异全部通过」照旧好看——实测
+                                # 踩过，两个变异静静失效了一轮
 ./build_demo.sh                 # AI 修图 demo 构建 + Node headless 自检 + npm SDK 冒烟
                                 # + demo 测试（工具面与 MVSL 闭环可达，需 Node；
                                 # 含 undispatched_tools 工具面自检）
@@ -82,6 +86,9 @@
 # 两个脚本都用 run_quiet 包裹长输出命令。
 python3 mutation_scan.py        # 变异门：注入语义 bug 看测试能否抓住（约 5 分钟；
                                 # 「测试全绿」不等于「行为被守护」）
+python3 mutation_scan.py --check-anchors   # 只校验锚点唯一命中（秒级，已进 verify.sh）
+python3 mutation_scan.py R3 R4  # 按 id 只跑指定的变异（改完测试想快速复验）
+# 锚点失效 → INVALID → **退出码 1**（不再被静默排除在统计之外）
 moon run --target native cli    # stdin 行协议；help 查看全部 57 个命令
 ```
 

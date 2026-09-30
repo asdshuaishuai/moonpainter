@@ -13,10 +13,18 @@
 
 「测试全绿」不等于「行为被守护」。这个脚本是那个差距的度量。
 
+**这个脚本自己也有一个静默失效模式**：每个变异靠一段「锚点文本」定位要替换
+的代码，锚点一旦被后续重构改掉、或变得不再唯一，那个变异就**再也没跑过**。
+实测踩过：R3 的锚点被一次重构改了缩进、R4 的锚点变成匹配 2 处，两个变异静静
+失效了一轮，而汇总里的「变异 N 个全部通过」照旧好看。所以：
+  * 锚点失效（INVALID）会让脚本**退出码 1**，不再被静默排除在统计之外；
+  * `--check-anchors` 只校验锚点唯一命中（秒级），已接进 `verify.sh` 第 9 步。
+
 用法（在仓库根）：
-    python3 mutation_scan.py            # 全跑（约 5 分钟）
-    python3 mutation_scan.py M1 M7      # 只跑指定项
-退出码：有「应当被抓住却存活」的变异 → 1。
+    python3 mutation_scan.py                  # 全跑（约 5 分钟）
+    python3 mutation_scan.py M1 M7            # 只跑指定项
+    python3 mutation_scan.py --check-anchors  # 只校验锚点（秒级）
+退出码：有「应当被抓住却存活」的变异 → 1；有锚点失效 → 1。
 """
 
 import os
@@ -238,16 +246,16 @@ MUTS = [
         "R3",
         "蒙版 radius 又被忽略（存了不用，退回静默失败）",
         "render/scene.mbt",
-        '      } else if mask.radius <= 0.0 {\n        true\n      } else {\n        rounded_rect_inside(dx, dy, mask.w, mask.h, mask.radius)\n      }',
-        '      } else {\n        true\n      }',
+        '        } else if mask.radius <= 0.0 {\n          true\n        } else {\n          rounded_rect_inside(dx, dy, mask.w, mask.h, mask.radius)\n        }',
+        '        } else {\n          true\n        }',
         "killed",
     ),
     (
         "R4",
-        "蒙版 radius 不按半边长夹住（超大半径让圆角整个失效）",
+        "蒙版 radius 不按半边长夹住（SDF 路径；超大半径让圆角整个失效）",
         "render/scene.mbt",
-        '  let r0 = if radius > hw { hw } else { radius }\n  let r = if r0 > hh { hh } else { r0 }',
-        '  let r = radius',
+        '  let r0 = if radius > hw { hw } else { radius }\n  let r = if r0 > hh { hh } else { r0 }\n  let ax = if dx > hw { dx - hw } else { hw - dx }\n  let ay = if dy > hh { dy - hh } else { hh - dy }\n  let qx = ax - (hw - r)\n  let qy = ay - (hh - r)\n  let ox = if qx > 0.0 { qx } else { 0.0 }\n  let oy = if qy > 0.0 { qy } else { 0.0 }\n  // 标准圆角矩形 SDF 的第二项',
+        '  let r = radius\n  let ax = if dx > hw { dx - hw } else { hw - dx }\n  let ay = if dy > hh { dy - hh } else { hh - dy }\n  let qx = ax - (hw - r)\n  let qy = ay - (hh - r)\n  let ox = if qx > 0.0 { qx } else { 0.0 }\n  let oy = if qy > 0.0 { qy } else { 0.0 }\n  // 标准圆角矩形 SDF 的第二项',
         "killed",
     ),
     (
@@ -329,7 +337,34 @@ def judge(out):
     return "SURVIVED", "全部通过（无人守护）"
 
 
+def check_anchors():
+    """只校验每个变异的 old 锚点在当前源码里**唯一存在**，不跑测试（秒级）。
+
+    锚点失效 = 该处覆盖被悄悄拿掉。实测踩过：R3 的锚点被一次重构改掉、
+    R4 的锚点变成匹配 2 处，两个变异静静失效了一轮，而"变异 33 个全通过"
+    看起来一切正常。所以这一步要独立、要便宜、要进常规门禁。
+    """
+    bad = []
+    for mid, desc, rel, old, new, expect in MUTS:
+        path = os.path.join(ROOT, rel)
+        if not os.path.exists(path):
+            bad.append((mid, rel, "文件不存在"))
+            continue
+        n = open(path, encoding="utf-8").read().count(old)
+        if n != 1:
+            bad.append((mid, rel, f"锚点出现 {n} 次，应为 1 次"))
+    if bad:
+        print(f"变异锚点失效 {len(bad)} 个（这些变异等于没在跑）：", file=sys.stderr)
+        for mid, rel, why in bad:
+            print(f"  {mid}  {rel}  {why}", file=sys.stderr)
+        return 1
+    print(f"变异锚点全部有效（{len(MUTS)} 个，每个唯一命中 1 处）")
+    return 0
+
+
 def main():
+    if "--check-anchors" in sys.argv:
+        return check_anchors()
     wanted = [a for a in sys.argv[1:] if not a.startswith("-")]
     todo = [m for m in MUTS if not wanted or m[0] in wanted]
     if not todo:

@@ -1,7 +1,7 @@
 # MoonPainter — Agent 驱动的图层绘制引擎
 
 > 状态：**0.1.0（.mpd 容器 v2 + 参数化绘制 + AI 修图 demo + MVSL 确定性编辑 IR 引擎已落地：
-> native 176 项 / wasm-gc 174 项测试全绿；`./verify.sh` 八步验证门全过）**。
+> native 177 项 / wasm-gc 175 项测试全绿；`./verify.sh` 八步验证门全过）**。
 > 设计书 [DESIGN.md](./DESIGN.md) · 方案与验收 [PLAN.md](./PLAN.md) ·
 > MVSL 规划与评审对照 [PLAN-MVSL.md](./PLAN-MVSL.md) · AI 修图 demo 见下节。
 
@@ -147,7 +147,11 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
 - **P3 manifest 的 `counts` 无人校验**：把 `layers` 和 `assets` 计数互换全部测试通过——
   而 `counts` 正是工具/审阅者据以判断"容器里有什么"的对外事实。
 
-当前 35 个变异中 34 个被抓住，唯一存活的 M2 是**已确认的等价变异**（去掉空表短路后行为逐位相同）。
+当前 35 个变异中 34 个被抓住，唯一存活的 M2 是**已确认的等价变异**。
+变异门自己也有一个静默失效模式：锚点文本被重构改掉或变得不唯一，那个变异就
+**再也没跑过**，而汇总里的「N 个变异全部通过」照旧好看（实测踩过：两个变异
+静静失效了一轮）。所以 `verify.sh` 第 9 步用 `--check-anchors` 秒级校验
+"每个锚点唯一命中 1 处"，锚点失效直接让门禁红（去掉空表短路后行为逐位相同）。
 覆盖路径：编辑表数值语义 / 三个指纹 / 保护断言 / lint / W3C alpha 合成与 blend 模式 /
 几何选择子 / 覆盖预览与盒降采样 / SHA-256 / PNG / ZIP-CRC / 容器 manifest /
 命令行分词（自由文本的引号与转义）/ 字典与实现的一致性（set-mask 不许静默无效）/ 批量入口与单点入口的字段一致性（probe 的两条路不许走样）/ 蒙版参数真的被消费（radius 圆角、feather 羽化与它的内距）。
