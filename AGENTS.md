@@ -64,6 +64,9 @@
 
 ```bash
 ./verify.sh                     # 一键验证门：check / native 测试 / wasm-gc 测试 /
+                                # **两个 target 的 check 都断言无 Warning**（铁律 1
+                                # 的 0-warning 不分 target；warning 会让 moon check
+                                # 返回非零，set -e 直接停在第 1 步） /
                                 # CLI 子进程 e2e / 独立 unzip 验证 / open→save 字节一致 /
                                 # MVSL 编辑表命令面 + 渲染管线闭环（安装→
                                 # render≡impact 同一张图→断言→软过渡带不

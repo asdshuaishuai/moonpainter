@@ -42,7 +42,15 @@ echo "== 2/7 moon test --target native =="
 run_quiet moon test --target native
 
 echo "== 3/7 wasm-gc 可检 + 测试（引擎纯字节进出的背书） =="
-run_quiet moon check --target wasm-gc
+# wasm-gc 的 check 也要查 warning：铁律 1 的"0 error / 0 warning"不分 target。
+# （步骤 1 查的是默认 target；target 特有的 warning 只能在这里抓。）
+WASM_CHECK=$(moon check --target wasm-gc 2>&1)
+echo "$WASM_CHECK" | tail -1
+if echo "$WASM_CHECK" | grep -q "Warning"; then
+  echo "FAIL: moon check --target wasm-gc 存在 Warning"
+  echo "$WASM_CHECK" | grep -A4 "Warning" | head -20
+  exit 1
+fi
 run_quiet moon test --target wasm-gc
 
 echo "== 4/7 CLI 子进程端到端 =="
