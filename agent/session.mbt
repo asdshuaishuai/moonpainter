@@ -355,6 +355,13 @@ fn layer_summary(l : @core.Layer) -> String {
     }
     sb.write_string("]")
   }
+  match l.mask {
+    Some(m) =>
+      sb.write_string(
+        ",\"mask\":{\"kind\":\"\{kind_str(m.kind)}\",\"x\":\{@core.fmt_num(m.x)},\"y\":\{@core.fmt_num(m.y)},\"w\":\{@core.fmt_num(m.w)},\"h\":\{@core.fmt_num(m.h)},\"radius\":\{@core.fmt_num(m.radius)},\"invert\":\{m.invert}}",
+      )
+    None => ()
+  }
   if l.children.length() > 0 {
     sb.write_string(",\"children\":[")
     let mut f = true
@@ -856,19 +863,29 @@ fn cmd_add_mask(s : Session, tokens : Array[String]) -> String {
 
 ///|
 fn cmd_set_mask(s : Session, tokens : Array[String]) -> String {
-  // set-mask <id> invert=true|false（几何修改走 remove + add）
+  // set-mask **只改 invert**（几何修改走 remove-mask + add-mask）。
+  //
+  // 这里曾经静默接受任何 tokens[2]：认不出 `true`/`1`/`invert=true` 就当
+  // false。于是照字典传 `x= y= w= h=` 会**什么都不改却返回 ok**（指纹一字
+  // 未变），还会把原有的 invert 重置掉——踩了铁律 3"不支持就报明确错误"。
+  // 现在认不出就拒绝，并指路几何修改的正确做法。
   if tokens.length() < 3 {
-    return err("用法：set-mask <id> invert=true|false")
+    return err("用法：set-mask <id> true|false（只改反选；几何修改用 remove-mask + add-mask）")
   }
   let doc = match require_doc(s) {
     Ok(d) => d
     Err(e) => return err(e)
   }
   let id = tokens[1]
+  let inv = match tokens[2] {
+    "true" | "1" | "invert=true" => true
+    "false" | "0" | "invert=false" => false
+    other =>
+      return err(
+        "set-mask 只改 invert（true|false）；几何修改请用 remove-mask + add-mask，got \{other}",
+      )
+  }
   snapshot(s, doc, "set-mask \{id}")
-  let inv = tokens[2] == "true" ||
-    tokens[2] == "1" ||
-    tokens[2] == "invert=true"
   let ok = update_layer(doc.layers, id, fn(l) {
     match l.mask {
       Some(m) => { ..l, mask: Some({ ..m, invert: inv }) }

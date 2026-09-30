@@ -356,3 +356,33 @@ test "自由文本的空格：引号包裹，下划线保持字面（一个用�
   let q5 = run(s, "query-layer t2")
   assert_true(q5.contains("\"text\":\"say \\\"hi\\\"\""), msg=q5)
 }
+
+
+///|
+test "set-mask 只改 invert：几何参数必须被拒绝，不许静默无效" {
+  // 这里曾经静默接受任何 tokens[2]（认不出 `true`/`1`/`invert=true` 就当
+  // false）。于是照旧字典传 `set-mask r x=0 y=10 w=20 h=10` 会**什么都不改
+  // 却返回 ok**（指纹一字未变），还会把原有的 invert 重置掉。
+  // 铁律 3：不支持就报明确错误，不降级、不糊弄。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 40 20")
+  let _ = run(s, "add-rect x=0 y=0 w=40 h=20 fill=#FF0000FF id=r")
+  let _ = run(s, "add-mask r kind=rect x=0 y=0 w=20 h=20")
+  // 几何参数被拒绝，且错误里指路正确做法
+  let bad = run(s, "set-mask r x=0 y=10 w=40 h=10")
+  assert_true(bad.contains("\"error\""), msg="几何参数应被拒绝，实际：\{bad}")
+  assert_true(bad.contains("remove-mask"), msg="错误应指路 remove-mask + add-mask：\{bad}")
+  // 被拒绝的调用不该留下编辑历史（快照在校验之后）
+  let before = run(s, "edits")
+  let _ = run(s, "set-mask r w=1")
+  let after = run(s, "edits")
+  assert_eq(after, before, msg="被拒绝的 set-mask 不该留下编辑历史")
+  // 真正的 invert 仍能改，且 query-layer 看得到（可观测性）
+  let ok = run(s, "set-mask r true")
+  assert_true(ok.contains("\"op\":\"set-mask\""), msg=ok)
+  let q = run(s, "query-layer r")
+  assert_true(q.contains("\"invert\":true"), msg="query-layer 应报告蒙版 invert：\{q}")
+  // add-mask 的几何也要能被看见
+  assert_true(q.contains("\"mask\":{\"kind\":\"rect\""), msg="query-layer 应报告蒙版几何：\{q}")
+}

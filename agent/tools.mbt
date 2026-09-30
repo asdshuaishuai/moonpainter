@@ -57,7 +57,11 @@ pub fn list_tools() -> Array[AgentTool] {
   add("set-text", "set-text <id> <新内容>（含空格用双引号包住）", "meta")
   add("add-adjust", "add-adjust op=<算子> value=<-1..1>：调整层（PSD 语义）。算子：brightness/contrast/saturation/invert/grayscale/blur/sharpen/smooth/whiten/warm/vignette", "meta")
   add("add-mask", "add-mask <id> kind=rect|ellipse x= y= w= h= [radius=] [invert=true]", "meta")
-  add("set-mask", "set-mask <id> x= y= w= h= [radius=] [invert=true]", "meta")
+  add(
+    "set-mask",
+    "set-mask <id> true|false：**只改蒙版的 invert**（几何 x/y/w/h/radius 不可改，要改用 remove-mask + add-mask）",
+    "meta",
+  )
   add("remove-mask", "remove-mask <id>", "meta")
   // 修图操作
   add("add-paint", "add-paint [name=]：新建画笔层（raster，全画布）", "meta")
