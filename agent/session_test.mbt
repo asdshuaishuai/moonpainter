@@ -320,3 +320,39 @@ fn unwrap_doc(s : @agent.Session) -> @core.Document {
     None => @core.new_document("empty", 1, 1)
   }
 }
+
+
+///|
+test "自由文本的空格：引号包裹，下划线保持字面（一个用户可见的旧 bug）" {
+  // 协议里原本写着"下划线代替空格"——它写在 `add-text` 的错误提示里，
+  // 前端 `do_text_add` 也真的把空格换成了下划线，**但引擎从不还原**：
+  // 用户输入 "Hello World"，存进去、渲染出来都是 "Hello_World"。
+  // 现在用引号分词，含空格不必再牺牲下划线。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 200 100")
+  let r = run(s, "add-text x=4 y=4 text=\"Hello World\" font_size=20 id=t1")
+  assert_true(r.contains("\"op\":\"add-text\""), msg=r)
+  let q = run(s, "query-layer t1")
+  assert_true(q.contains("\"text\":\"Hello World\""), msg=q)
+  // 没有引号时 `_` 仍是**字面下划线**：历史行为不变，向后兼容。
+  let r2 = run(s, "add-text x=4 y=40 text=Hello_World font_size=20 id=t2")
+  assert_true(r2.contains("\"op\":\"add-text\""), msg=r2)
+  let q2 = run(s, "query-layer t2")
+  assert_true(q2.contains("\"text\":\"Hello_World\""), msg=q2)
+  // 图层名同样吃引号（它曾经也只能靠下划线，同样没被还原）
+  let r3 = run(s, "add-rect x=0 y=0 w=8 h=8 name=\"My Layer\" id=box")
+  assert_true(r3.contains("\"op\":\"add-rect\""), msg=r3)
+  let q3 = run(s, "query-layer box")
+  assert_true(q3.contains("\"name\":\"My Layer\""), msg=q3)
+  // set-text 也走同一套分词
+  let r4 = run(s, "set-text t2 \"Now With Spaces\"")
+  assert_true(r4.contains("\"op\":\"set-text\""), msg=r4)
+  let q4 = run(s, "query-layer t2")
+  assert_true(q4.contains("\"text\":\"Now With Spaces\""), msg=q4)
+  // 引号内的 \" 是字面引号
+  let r5 = run(s, "set-text t2 \"say \\\"hi\\\"\"")
+  assert_true(r5.contains("\"op\":\"set-text\""), msg=r5)
+  let q5 = run(s, "query-layer t2")
+  assert_true(q5.contains("\"text\":\"say \\\"hi\\\"\""), msg=q5)
+}

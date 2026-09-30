@@ -116,6 +116,15 @@ fn do_text_pick(coords : String) -> Unit {
 }
 
 ///|
+///|
+/// 把自由文本包成命令行参数：双引号包裹，内部的双引号与反斜杠按
+/// `tokenize_line` 的转义规则处理。图层名/文字内容都走这里。
+fn quote_arg(s : String) -> String {
+  let esc = s.replace(old="\\", new="\\\\").replace(old="\"", new="\\\"")
+  "\"" + esc + "\""
+}
+
+///|
 fn do_text_add() -> Unit {
   let txt = js_val("tinput")
   if txt.trim(char_set=" \t").length() == 0 {
@@ -127,15 +136,10 @@ fn do_text_add() -> Unit {
     js_status_bar("⚠ 先用文本工具点击画布选择位置")
     return
   }
-  // 命令行协议空格转下划线
-  let sb = StringBuilder()
-  for ch in txt.iter() {
-    if ch == ' ' {
-      sb.write_char('_')
-    } else {
-      sb.write_char(ch)
-    }
-  }
+  // 含空格的文字必须包双引号（引号内的空格不参与分词，见 agent 的
+  // tokenize_line）。原先这里把空格换成下划线，但引擎从不还原它，于是
+  // 用户输入 "Hello World" 存进去、渲染出来都是 "Hello_World"。
+  let quoted = quote_arg(txt)
   let parts : Array[String] = []
   for p in coords.split(",") {
     parts.push(p.to_owned())
@@ -145,7 +149,7 @@ fn do_text_add() -> Unit {
   }
   let color = js_state_get("color")
   let fill = if color == "" { "#222222" } else { color }
-  let r = eng("add-text x=\{parts[0]} y=\{parts[1]} text=\{sb.to_string()} font_size=32 fill=\{fill}FF name=文本")
+  let r = eng("add-text x=\{parts[0]} y=\{parts[1]} text=\{quoted} font_size=32 fill=\{fill}FF name=文本")
   if eng_ok(r) {
     js_set_text_target("")
     js_val_clear("tinput")
@@ -539,7 +543,7 @@ fn do_export() -> Unit {
 
 fn do_import(b64 : String, name : String) -> Unit {
   bootstrap()
-  let cmd = "add-image x=100 y=60 w=600 h=450 b64=\{b64} name=\{name}"
+  let cmd = "add-image x=100 y=60 w=600 h=450 b64=\{b64} name=\{quote_arg(name)}"
   let r = eng(cmd)
   if eng_ok(r) {
     js_log_line("📷 导入: \{name}（任意格式已转 PNG）", "#4a4")

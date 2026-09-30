@@ -53,8 +53,8 @@ pub fn list_tools() -> Array[AgentTool] {
   add("group", "group <gid> <id…>：把根级层编成组（直通合成）", "meta")
   add("ungroup", "ungroup <gid>", "meta")
   // 文本 / 调整 / 蒙版
-  add("add-text", "add-text x= y= text=<内容> [font_size=] [fill=]：文本层（ASCII 真字形）", "meta")
-  add("set-text", "set-text <id> <新内容>", "meta")
+  add("add-text", "add-text x= y= text=<内容> [font_size=] [fill=]：文本层（ASCII 真字形）；**含空格用双引号包住** text=\"Hello World\"，name= 同理", "meta")
+  add("set-text", "set-text <id> <新内容>（含空格用双引号包住）", "meta")
   add("add-adjust", "add-adjust op=<算子> value=<-1..1>：调整层（PSD 语义）。算子：brightness/contrast/saturation/invert/grayscale/blur/sharpen/smooth/whiten/warm/vignette", "meta")
   add("add-mask", "add-mask <id> kind=rect|ellipse x= y= w= h= [radius=] [invert=true]", "meta")
   add("set-mask", "set-mask <id> x= y= w= h= [radius=] [invert=true]", "meta")

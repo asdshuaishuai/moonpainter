@@ -56,6 +56,59 @@ fn err(msg : String) -> String {
 }
 
 ///|
+/// 命令行分词：按空白切分，**双引号包裹的片段整体算一个 token**（引号内的
+/// 空格不参与切分）；`\"` 表示字面引号。引号可以出现在 token 中间，所以
+/// `text="Hello World"` 与 `name="My Layer"` 都按预期工作。
+///
+/// 为什么需要它：协议里原本只有"下划线代替空格"这一说——它写在 `add-text`
+/// 的错误提示里、前端 `do_text_add` 也真的把空格换成了下划线，**但引擎从未
+/// 实现还原**。于是用户在前端输入 "Hello World"，存进去和渲染出来的都是
+/// 带下划线的 `Hello_World`。引号既不必牺牲下划线（`_` 仍是字面下划线，
+/// 历史行为完全不变），也不用发明新编码。
+///
+/// 未闭合的引号按字面处理（把已读部分当作普通 token），不报错——命令行
+/// 协议的错误一律由各命令自己给，分词器不制造新的失败面。
+fn tokenize_line(s : String) -> Array[String] {
+  let out : Array[String] = []
+  let mut sb = StringBuilder()
+  let mut in_quote = false
+  let mut started = false
+  let n = s.length()
+  let mut i = 0
+  while i < n {
+    let c = s.get_char(i).unwrap_or(' ')
+    i = i + 1
+    if in_quote {
+      if c == '"' {
+        in_quote = false
+      } else if c == '\\' && i < n {
+        let c2 = s.get_char(i).unwrap_or(c)
+        i = i + 1
+        sb.write_char(c2)
+      } else {
+        sb.write_char(c)
+      }
+    } else if c == '"' {
+      in_quote = true
+      started = true
+    } else if is_ws(c) {
+      if started {
+        out.push(sb.to_string())
+        sb = StringBuilder()
+        started = false
+      }
+    } else {
+      sb.write_char(c)
+      started = true
+    }
+  }
+  if started {
+    out.push(sb.to_string())
+  }
+  out
+}
+
+///|
 /// 命令执行入口。任何失败返回 {"error":...}，绝不半截落状态。
 pub fn exec(s : Session, line : String) -> String {
   // 手工去首尾空白（避开 API 版本差异）
@@ -80,14 +133,7 @@ pub fn exec(s : Session, line : String) -> String {
     return err("空命令")
   }
   let trimmed = line[b:e].to_owned()
-  let tokens : Array[String] = []
-  for t in trimmed.split(" ") {
-    for t2 in t.split("	") {
-      if t2.length() > 0 {
-        tokens.push(t2.to_owned())
-      }
-    }
-  }
+  let tokens = tokenize_line(trimmed)
   if tokens.length() == 0 {
     return err("空命令")
   }
@@ -662,7 +708,7 @@ fn cmd_add_text(s : Session, tokens : Array[String]) -> String {
   let m = kv_args(tokens, 1)
   let text = match m.get("text") {
     Some(t) => t
-    None => return err("add-text 需要 text=<内容>（下划线代替空格）")
+    None => return err("add-text 需要 text=<内容>（含空格用双引号包起来：text=\"Hello World\"）")
   }
   let id = match m.get("id") {
     Some(i) => i
@@ -716,7 +762,7 @@ fn cmd_add_text(s : Session, tokens : Array[String]) -> String {
 ///|
 fn cmd_set_text(s : Session, tokens : Array[String]) -> String {
   if tokens.length() < 2 {
-    return err("用法：set-text <id> <新内容>（下划线代替空格）")
+    return err("用法：set-text <id> <新内容>（含空格用双引号包起来）")
   }
   let doc = match require_doc(s) {
     Ok(d) => d
