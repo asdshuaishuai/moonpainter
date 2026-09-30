@@ -51,6 +51,88 @@ fn make_tool(name : String, desc : String, props : Array[(String, String)]) -> @
 }
 
 ///|
+/// 工具名清单。存在的意义是让「产品里的 AI 够不够得着某个能力」**变成可测的
+/// 断言**——人类前端有某个按钮，不等于工具面暴露了对应工具。`redo` 就是这么
+/// 漏掉的：`main.mbt` 一直有「↪ 重做」按钮，工具面却只有 `undo`。
+pub fn paint_tool_names() -> Array[String] {
+  paint_tool_defs().map(fn(t) { t.name.value })
+}
+
+///|
+/// 工具名 → 引擎命令名（**单一事实源**）。
+///
+/// 原先这是 `execute` 内部的一个 match，于是"注册了工具、却忘了在这里接"
+/// 只能靠人眼发现——`undo` 就这么坏了很久：`line` match 里有它、`cmd`
+/// match 里没有，而 `cmd` **先求值**，所以 AI 每次调 undo 拿到的都是
+/// "未知工具 undo"。人类前端有「↩ 撤销」按钮，没人从 AI 那条路走过去，
+/// 于是它一直没暴露。现在与 `paint_tool_defs` 的一致性由
+/// `undispatched_tools()` 断言守住。
+fn tool_cmd(name : String) -> String? {
+  match name {
+    "new_canvas" => Some("new")
+    "add_rect" => Some("add-rect")
+    "add_ellipse" => Some("add-ellipse")
+    "add_line" => Some("add-line")
+    "add_polygon" => Some("add-polygon")
+    "set_style" => Some("set-style")
+    "move" => Some("move")
+    "resize" => Some("resize")
+    "rotate" => Some("rotate")
+    "flip" => Some("flip")
+    "delete" => Some("delete")
+    "reorder" => Some("reorder")
+    "render" => Some("render")
+    "pick" => Some("pick")
+    "list_layers" => Some("list-layers")
+    "query_layer" => Some("query-layer")
+    "stats" => Some("stats")
+    "lint" => Some("lint")
+    "save_mpd" => Some("save-mpd-b64")
+    "sel_schema" => Some("sel-schema")
+    "census" => Some("census")
+    "probe" => Some("probe")
+    "select_preview" => Some("select-preview")
+    "mvsl_set" => Some("mvsl-set")
+    "mvsl_show" => Some("mvsl-show")
+    "mvsl_clear" => Some("mvsl-clear")
+    "mvsl_impact" => Some("mvsl-impact")
+    "mvsl_assert" => Some("mvsl-assert")
+    // B4.5 起的工具：画笔 / 橡皮 / 调整层 / 分组 / 标签 / 裁剪 / 采样。
+    // 它们当初只加进了 `line` match，**没加进这张表**，于是 `cmd` 求值阶段
+    // 就直接返回"未知工具"——9 个工具在工具面上一直是坏的（人类走前端按钮，
+    // 而这些工具的端到端回合从来没写过，所以没人发现）。
+    "group" => Some("group")
+    "ungroup" => Some("ungroup")
+    "tag" => Some("tag")
+    "add_paint_layer" => Some("add-paint")
+    "paint_stroke" => Some("brush")
+    "erase_stroke" => Some("erase")
+    "apply_filter" => Some("add-adjust")
+    "crop_canvas" => Some("crop")
+    "sample_color" => Some("sample")
+    "undo" => Some("undo")
+    "redo" => Some("redo")
+    _ => None
+  }
+}
+
+///|
+/// 工具面自检：返回**注册了却接不上引擎命令行**的工具名（空 = 健康）。
+///
+/// 这是 `undo` 那个 bug 的根治手段——把"工具定义"与"命令分发"的一致性
+/// 从"靠人眼比对两张表"变成一条断言。
+pub fn undispatched_tools() -> Array[String] {
+  let bad : Array[String] = []
+  for t in paint_tool_defs() {
+    match tool_cmd(t.name.value) {
+      None => bad.push(t.name.value)
+      Some(_) => ()
+    }
+  }
+  bad
+}
+
+///|
 /// 修图工具集（LLM 视角；底层是一一对应的引擎命令行）。
 fn paint_tool_defs() -> Array[@posoco.ToolDef] {
   [
@@ -171,6 +253,7 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
     make_tool("ungroup", "解组", [("gid", "string:req:组 id")]),
     make_tool("tag", "给图层打语义标签（如 hero/background/logo）", [("id", "string:req:图层 id"), ("tag", "string:req:标签")]),
     make_tool("undo", "撤销上一次修改（工具出错后自我纠正用）", []),
+    make_tool("redo", "重做被撤销的修改（undo 的对偶；撤销过头时恢复）", []),
     make_tool("save_mpd", "把当前文档打包为 .mpd 容器（页面会提供下载）", []),
     // 修图操作（B4.5）
     make_tool("add_paint_layer", "新建画笔层（自由手绘/涂抹的载体）", [("name", "string:图层名")]),
@@ -346,37 +429,9 @@ pub impl @posoco.ToolProvider for PaintTools with fn execute(
   call : @posoco.ToolCall,
 ) -> @posoco.ToolOutcome raise {
   // 引擎命令行：工具名 → 命令名 + 参数
-  let cmd = match name {
-    "new_canvas" => "new"
-    "add_rect" => "add-rect"
-    "add_ellipse" => "add-ellipse"
-    "add_line" => "add-line"
-    "add_polygon" => "add-polygon"
-    "set_style" => "set-style"
-    "move" => "move"
-    "resize" => "resize"
-    "rotate" => "rotate"
-    "flip" => "flip"
-    "delete" => "delete"
-    "reorder" => "reorder"
-    "render" => "render"
-    "pick" => "pick"
-    "list_layers" => "list-layers"
-    "query_layer" => "query-layer"
-    "stats" => "stats"
-    "lint" => "lint"
-    "save_mpd" => "save-mpd-b64"
-    // MVSL 编辑表（B5）
-    "sel_schema" => "sel-schema"
-    "census" => "census"
-    "probe" => "probe"
-    "select_preview" => "select-preview"
-    "mvsl_set" => "mvsl-set"
-    "mvsl_show" => "mvsl-show"
-    "mvsl_clear" => "mvsl-clear"
-    "mvsl_impact" => "mvsl-impact"
-    "mvsl_assert" => "mvsl-assert"
-    _ => return @posoco.ToolOutcome::ToolReportedError(content="未知工具 \{name}", structured=None)
+  let cmd = match tool_cmd(name) {
+    Some(c) => c
+    None => return @posoco.ToolOutcome::ToolReportedError(content="未知工具 \{name}", structured=None)
   }
   let line = match name {
     "list_layers" => "list-layers"
@@ -422,6 +477,7 @@ pub impl @posoco.ToolProvider for PaintTools with fn execute(
     }
     "tag" => "tag \{arg(call, "id")} \{arg(call, "tag")}"
     "undo" => "undo"
+    "redo" => "redo"
     "new_canvas" => "new \{arg(call, "w")} \{arg(call, "h")}"
     "add_paint_layer" => {
       let tail = args_to_tail(call.arguments, ["name"])

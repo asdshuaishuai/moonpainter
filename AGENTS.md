@@ -70,7 +70,11 @@
                                 # 算泄漏→lint 空操作/违约→容器往返→预览
                                 # 走编辑表）；渐变端点单位等静默失败也在此拦
 ./build_demo.sh                 # AI 修图 demo 构建 + Node headless 自检 + npm SDK 冒烟
-                                # + demo 测试（工具面与 MVSL 闭环可达，需 Node）
+                                # + demo 测试（工具面与 MVSL 闭环可达，需 Node；
+                                # 含 undispatched_tools 工具面自检）
+
+# 门禁脚本别写 `cmd | tail -1`：管道的退出码是 tail 的，set -e 抓不到失败。
+# 两个脚本都用 run_quiet 包裹长输出命令。
 python3 mutation_scan.py        # 变异门：注入语义 bug 看测试能否抓住（约 5 分钟；
                                 # 「测试全绿」不等于「行为被守护」）
 moon run --target native cli    # stdin 行协议；help 查看全部 57 个命令
@@ -85,10 +89,17 @@ moon run --target native cli    # stdin 行协议；help 查看全部 57 个命�
   浏览器 demo 不可用）；
 - 工具回包给 LLM 一律截断（shorten），render 的 PNG 走 attachments 不走文本
   （`render` / `select_preview` / `mvsl_impact` 三个图像类工具同规）；
-- demo 工具面是 agent 命令面的**手写子集**（当前 39 个）：引擎新增命令后，
-  要用到就该同步加进 `paint_tools.mbt` 的 `paint_tool_defs` + `execute` +
+- demo 工具面是 agent 命令面的**手写子集**（当前 40 个）：引擎新增命令后，
+  要用到就该同步加进 `paint_tools.mbt` 的 `paint_tool_defs` + `tool_cmd` +
   `catalog.mbt` 的 system prompt，否则"引擎有能力"不等于"产品里的 AI 用得上"。
   模型侧只写 JSON，base64 由 SDK 的 `b64_text` 转。
+  **"注册了工具"与"接得上引擎命令行"是两件事，必须由测试锁住**：
+  `paint_tools.mbt` 里曾有**两张手写表**（`tool_cmd` 的命令名、`line` 的参数
+  拼接），`cmd` 求值在前且不认识就报"未知工具"，于是 `line` match 里写了、
+  `cmd` 表里漏了的工具**在工具面上根本调不通**。实测漏了 10 个（`undo` 与
+  B4.5 起的画笔/橡皮/调整层/分组/标签/裁剪/采样）。现在 `undispatched_tools()`
+  把它变成一条断言，`demo_test.mbt` 断言为空——新增工具时忘了接线会**立刻红**。
+  人类前端有按钮、测试又直接调 `engine_exec_line`，这两条都会掩盖这类漏洞。
 
 改动 canonical JSON 字段序、渲染管线或 pack 条目顺序时，golden sha256 与
 open→save 字节一致断言会变化——这必须是有意为之，并同步更新对应测试与文档。

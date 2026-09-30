@@ -80,6 +80,29 @@ async test "AI 修图端到端：mock 模型 × wasm 引擎 × 全程可见 × u
   assert_true(undone.contains("\"op\":\"undo\""), msg=undone)
   let fp_undo = @demo.engine_exec_line("fingerprint")
   assert_true(fp_undo != fp_cold, msg="undo 后指纹应变化")
+  // 5b) redo：人类前端一直有「↪ 重做」按钮（main.mbt 的 __redo），
+  //     工具面却只有 undo —— AI 撤销过头就回不去。锁住两侧能力对称，
+  //     并验证 redo 真的把文档带回 set_style 之后的状态。
+  let names = @demo.paint_tool_names()
+  assert_true(names.contains("undo"), msg="工具面缺 undo")
+  assert_true(names.contains("redo"), msg="工具面缺 redo（前端有按钮，AI 没有）")
+  // 更强的断言：**每个注册的工具都必须接得上引擎命令行**。`undo` 正是栽在
+  // 这里——它注册了很久，但 execute 的命令名映射（cmd）里没有它，而 cmd
+  // 先于参数拼接求值，于是 AI 每次调 undo 都只拿到"未知工具 undo"。
+  // 人类前端有「↩ 撤销」按钮、测试又都直接 engine_exec_line，所以一直没暴露。
+  let bad = @demo.undispatched_tools()
+  assert_eq(
+    bad.length(),
+    0,
+    msg="有工具注册了却接不上引擎命令行：\{bad.join("、")}",
+  )
+  let redone = @demo.engine_exec_line("redo")
+  assert_true(redone.contains("\"op\":\"redo\""), msg=redone)
+  assert_eq(
+    @demo.engine_exec_line("fingerprint"),
+    fp_cold,
+    msg="redo 后应回到 set_style 之后的状态",
+  )
   // ── 回合 3：MVSL 精准改色闭环（普查 → 试选 → 装编辑表 → 影响/断言 → 渲染）──
   // 这条回合证明**产品里的 AI 能真的用到编辑引擎**：工具面可达、图像类
   // 回包走附件（试选覆盖图与结果图都要让模型真的看到）、编辑表进了渲染管线。

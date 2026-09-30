@@ -93,7 +93,7 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
 - **视觉闭环**：`render` / `select_preview` / `mvsl_impact` 三个图像类工具把 PNG 以附件
   （`SuccessWithAttachments`）回传给多模态模型，AI 真的看图确认效果再继续
   （试选不看图 = 闭眼改色；影响证书不看图 = 发现不了选区跑偏）；
-- **39 个工具，MVSL 闭环可达**：`sel_schema`（先看语法：字段名/量纲/示例自证）/
+- **40 个工具，MVSL 闭环可达**：`sel_schema`（先看语法：字段名/量纲/示例自证）/
   `census`（先普查再选色）/`probe`（这个点选中没有）/
   `select_preview`（试选 + 连通域事实）/`mvsl_set`（装编辑表）/`mvsl_impact`
   （影响证书）/`mvsl_assert`（保护断言）/`mvsl_show`/`mvsl_clear`。模型只写 **JSON**
