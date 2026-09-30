@@ -35,7 +35,8 @@
                                 # CLI 子进程 e2e / 独立 unzip 验证 / open→save 字节一致 /
                                 # MVSL 编辑表命令面 + 渲染管线闭环
                                 #（安装→render≡impact 同一张图→断言→容器往返→预览走编辑表）
-./build_demo.sh                 # AI 修图 demo 构建 + Node headless 自检
+./build_demo.sh                 # AI 修图 demo 构建 + Node headless 自检 + npm SDK 冒烟
+                                # + demo 测试（工具面与 MVSL 闭环可达，需 Node）
 moon run --target native cli    # stdin 行协议；help 查看全部 56 个命令
 ```
 
@@ -46,7 +47,12 @@ moon run --target native cli    # stdin 行协议；help 查看全部 56 个命�
 - 引擎交互必须经 wasm SDK 实例（wasm 包 ABI），不得在 demo 里旁路直调引擎包；
 - mooncakes 依赖进模块前必须查 `supported_targets`（例：moonllm 锁 +native，
   浏览器 demo 不可用）；
-- 工具回包给 LLM 一律截断（shorten），render 的 PNG 走 attachments 不走文本。
+- 工具回包给 LLM 一律截断（shorten），render 的 PNG 走 attachments 不走文本
+  （`render` / `select_preview` / `mvsl_impact` 三个图像类工具同规）；
+- demo 工具面是 agent 命令面的**手写子集**（当前 38 个）：引擎新增命令后，
+  要用到就该同步加进 `paint_tools.mbt` 的 `paint_tool_defs` + `execute` +
+  `catalog.mbt` 的 system prompt，否则"引擎有能力"不等于"产品里的 AI 用得上"。
+  模型侧只写 JSON，base64 由 SDK 的 `b64_text` 转。
 
 改动 canonical JSON 字段序、渲染管线或 pack 条目顺序时，golden sha256 与
 open→save 字节一致断言会变化——这必须是有意为之，并同步更新对应测试与文档。

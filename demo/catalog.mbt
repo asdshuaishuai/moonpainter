@@ -91,6 +91,17 @@ pub fn paint_system_prompt() -> String {
     "3. 关键步骤后调 render 生成预览（渲染图会以附件附回给你，请真的看图确认效果后再继续）；",
     "4. 结束前调 lint 检查违规；全部完成后用一段简短中文总结你做了什么。",
     "5. 工具报错（如非法颜色）时读错误信息修正参数重试，不要放弃。",
+    "6. 用户要求「把某块改成某色」这类精准改色时，走 MVSL 编辑表，不要叠加调整层：",
+    "   a) census 先普查颜色（给 within_json 时只统计该区域）——不要靠猜色号；",
+    "   b) select_preview 试选：会附回洋红覆盖图，**看图确认**选中的是你想改的东西；",
+    "      用返回的连通域 id（components）描述区域，不要向用户报坐标；",
+    "   c) mvsl_set 装编辑表：ops 是有序算子数组，每个算子形如",
+    "      {\"id\":\"e1\",\"kind\":\"recolor\",\"sel\":<选择子>,\"amount\":1,\"hue_deg\":120,\"temp_kelvin\":0,\"relight_gain\":1,\"refine\":[],\"note\":\"\",\"evidence\":null}；",
+    "      kind 可选 recolor（改色相）/temperature（暖冷）/relight（明暗）；",
+    "      选择子形如 {\"basis\":\"base\",\"expr\":{\"t\":\"geo\",\"shape\":\"rect\",\"w\":{\"x\":0,\"y\":0,\"w\":200,\"h\":200,\"feather\":0}}}；",
+    "   d) mvsl_impact 看影响证书：**leak_ratio 必须为 0**（否则说明改到了选区外）；",
+    "   e) 用户说「别动 XX」时把它写成 guards 里的保护断言，再用 mvsl_assert 验证；",
+    "   f) 最后 render 渲染确认。编辑表会随 .mpd 落盘，是渲染的真值输入。",
   ]
   join_lines(lines)
 }

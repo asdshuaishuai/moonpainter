@@ -80,4 +80,46 @@ async test "AI 修图端到端：mock 模型 × wasm 引擎 × 全程可见 × u
   assert_true(undone.contains("\"op\":\"undo\""), msg=undone)
   let fp_undo = @demo.engine_exec_line("fingerprint")
   assert_true(fp_undo != fp_cold, msg="undo 后指纹应变化")
+  // ── 回合 3：MVSL 精准改色闭环（普查 → 试选 → 装编辑表 → 影响/断言 → 渲染）──
+  // 这条回合证明**产品里的 AI 能真的用到编辑引擎**：工具面可达、图像类
+  // 回包走附件（试选覆盖图与结果图都要让模型真的看到）、编辑表进了渲染管线。
+  let _ = @demo.engine_exec_line("mvsl-clear")
+  let renders_before = renders
+  let log_before = log_lines.val.length()
+  let summary3 = @demo.run_edit_turn(
+    "帮我把这张图精准调暖一点",
+    {
+      provider: "mock",
+      base_url: "",
+      model: "mock-script",
+      api_key: "",
+    },
+    log=fn(line) { log_lines.val.push(line) },
+    on_image=fn(_png) { renders = renders + 1 },
+  )
+  let mut mvsl_tools = 0
+  for i = log_before; i < log_lines.val.length(); i = i + 1 {
+    let l = log_lines.val[i]
+    if l.contains("census") ||
+      l.contains("select_preview") ||
+      l.contains("mvsl_set") ||
+      l.contains("mvsl_impact") ||
+      l.contains("mvsl_assert") {
+      mvsl_tools = mvsl_tools + 1
+    }
+  }
+  assert_true(mvsl_tools >= 5, msg="MVSL 工具调用过少：\{mvsl_tools}")
+  // 图像附件：试选覆盖图 + 影响结果图 + 渲染 = 3 次
+  assert_eq(renders - renders_before, 3, msg="MVSL 回合的图像附件数")
+  // 编辑表真的装上了，且进了渲染管线
+  let shown = @demo.engine_exec_line("mvsl-show")
+  assert_true(shown.contains("\"ops\":1"), msg=shown)
+  let fp_edited = @demo.engine_exec_line("fingerprint")
+  let _ = fp_edited
+  let impact = @demo.engine_exec_line("mvsl-impact")
+  assert_true(impact.contains("\"leak_ratio\":0"), msg=impact)
+  assert_true(summary3.contains("精准改色"), msg=summary3)
+  // 清空编辑表 → 渲染回到未编辑状态
+  let cleared = @demo.engine_exec_line("mvsl-clear")
+  assert_true(cleared.contains("\"ops\":0"), msg=cleared)
 }

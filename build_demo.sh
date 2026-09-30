@@ -5,17 +5,18 @@
 #   3. index.html（仅壳；页面结构由 demo.js 内 MoonBit 代码构建）
 #   4. Node headless 自检（mock 模型完整修图回合 × wasm 引擎）
 #   5. npm SDK 冒烟（多会话 + 渲染 + 容器打包）
+#   6. demo 测试（moon test --target js：工具面 + MVSL 闭环可达）
 # 产物在 dist/；本地预览：cd dist && python3 -m http.server 8080
 set -e
 cd "$(dirname "$0")"
 
-echo "== 1/5 引擎 wasm 构建 =="
+echo "== 1/6 引擎 wasm 构建 =="
 moon build --target wasm 2>&1 | tail -1
 
-echo "== 2/5 demo（MoonBit js 后端）构建 =="
+echo "== 2/6 demo（MoonBit js 后端）构建 =="
 moon build --target js 2>&1 | tail -1
 
-echo "== 3/5 组装 dist/ =="
+echo "== 3/6 组装 dist/ =="
 rm -rf dist
 mkdir -p dist
 cp _build/wasm/release/build/wasm/wasm.wasm dist/moonpainter.wasm 2>/dev/null ||
@@ -36,7 +37,7 @@ cat > dist/index.html << 'HTML'
 HTML
 ls -la dist | awk 'NR>1 {print $5, $9}'
 
-echo "== 4/5 Node headless 自检（mock 模型 × wasm 引擎） =="
+echo "== 4/6 Node headless 自检（mock 模型 × wasm 引擎） =="
 cd dist
 NODE_OUT=$(node demo.js)
 echo "$NODE_OUT" | python3 -c "
@@ -49,7 +50,7 @@ print('headless selftest OK:', d)
 "
 cd ..
 
-echo "== 5/5 npm SDK 冒烟（多会话 + 渲染 + 容器） =="
+echo "== 5/6 npm SDK 冒烟（多会话 + 渲染 + 容器） =="
 cp _build/wasm/debug/build/wasm/wasm.wasm npm/moonpainter-sdk/moonpainter.wasm
 cd npm/moonpainter-sdk
 node --input-type=module -e "
@@ -75,5 +76,12 @@ if (!r3.error || !r3.error.includes('未知会话句柄')) throw new Error('clos
 console.log('NPM SDK SMOKE OK: multi-session + render + save all green');
 "
 cd ../..
+
+echo "== 6/6 demo 测试（工具面 + MVSL 闭环可达；需 Node） =="
+# 这条守住"引擎有能力"与"产品里的 AI 用得上"之间的缝：mock 模型经真实
+# tool provider 驱动真实 wasm 引擎，跑完整 MVSL 闭环（普查→试选→装表→
+# 影响/断言→渲染），并断言图像类回包走附件。
+moon test --target js -p moonpainter/demo 2>&1 | tail -1
+
 echo ""
 echo "DEMO BUILD PASS ✓   本地预览: cd dist && python3 -m http.server 8080 → http://localhost:8080"

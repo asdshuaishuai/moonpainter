@@ -278,6 +278,26 @@ membership 与所属连通域 id。连通域 id 由新加的标签场给出，�
 实际求值基准不一致（`check_guards` 静默按 base 求值），这比直接拒绝更坏。
 两者现在都在 `validate_program` 期拒绝——声明与行为必须一致。
 
+### 补遗 5 追加三：MVSL 闭环在产品里可达（demo 工具面）
+
+前两轮把引擎做完了，但 **demo 的 AI 用不到它**：demo 的工具面是手写的 30 个工具，
+一个 MVSL 命令都没有——引擎再完备，产品里的模型也够不着。这轮补上：
+
+- 新增 8 个工具：`census` / `probe` / `select_preview` / `mvsl_set` / `mvsl_show` /
+  `mvsl_clear` / `mvsl_impact` / `mvsl_assert`（工具面 30 → 38）；
+- **模型只写 JSON，base64 由 SDK 做**：命令面收的是 base64（行协议空白分词，
+  内联 JSON 的引号空格会在分词阶段被切碎），但让 LLM 手搓 base64 是荒唐的——
+  SDK 侧 `b64_text` 转换是它的本职；
+- **图像类工具统一走附件**：`render` / `select_preview` / `mvsl_impact` 的 PNG 都以
+  `SuccessWithAttachments` 回传。试选不看图 = 闭眼改色；影响证书不看图 =
+  发现不了选区跑偏；
+- mock 模型新增一条 MVSL 脚本路由，`demo_test` 增加第 3 个回合：普查 → 试选 →
+  装编辑表 → 影响 + 断言 + 渲染，断言 5 次 MVSL 工具调用、3 张图像附件、
+  编辑表 ops=1 且进了渲染管线（`leak_ratio:0`）、清表后 ops=0。
+
+这一轮的意义是**把"引擎有能力"变成"产品里的 AI 用得上"**——否则前两轮的
+闭环只是实验室里的闭环。
+
 ### 仍未落地（诚实边界，详见 README 与 DESIGN §8）
 
 - **MVSL 编辑表是文档级的最终一遍**，不是图层：能改整张合成图，但还不能

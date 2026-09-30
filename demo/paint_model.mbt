@@ -522,7 +522,54 @@ fn PaintModel::mock_chat(
 
   let wants_badge = request.contains("徽章") || request.contains("圆")
   let wants_cool = request.contains("冷") || request.contains("蓝")
-  // 脚本：徽章 = 3 工具轮；换色 = 2 轮；默认 = 2 轮
+  let wants_precise = request.contains("精准") || request.contains("编辑表")
+  // 脚本：精准改色 = MVSL 闭环 4 轮；徽章 = 3 工具轮；换色 = 2 轮；默认 = 2 轮
+  if wants_precise {
+    // 选择子：整幅画布（demo 场景小，几何谓词足够）
+    let sel = "{\"basis\":\"base\",\"expr\":{\"t\":\"geo\",\"shape\":\"rect\",\"w\":{\"x\":0,\"y\":0,\"w\":640,\"h\":480,\"feather\":0}}}"
+    let prog = "{\"version\":1,\"ops\":[{\"id\":\"e1\",\"kind\":\"temperature\",\"sel\":" + sel + ",\"amount\":1,\"hue_deg\":0,\"temp_kelvin\":900,\"relight_gain\":1,\"refine\":[],\"note\":\"整体转暖\",\"evidence\":null}],\"guards\":[]}"
+    match step {
+      0 =>
+        return with_calls(
+          "先普查画面颜色，不猜。",
+          [call("p1", "census", "{}")],
+        )
+      1 =>
+        return with_calls(
+          "试选一下目标区域，看图确认。",
+          [
+            call(
+              "p2",
+              "select_preview",
+              "{\"sel_json\":" + json_quote(sel) + ",\"max\":320}",
+            ),
+          ],
+        )
+      2 =>
+        return with_calls(
+          "装编辑表：整体转暖。",
+          [call("p3", "mvsl_set", "{\"program_json\":" + json_quote(prog) + "}")],
+        )
+      3 =>
+        return with_calls(
+          "看影响证书 + 校验保护断言 + 渲染确认。",
+          [
+            call("p4", "mvsl_impact", "{\"max\":320}"),
+            call("p5", "mvsl_assert", "{}"),
+            call("p6", "render", "{\"w\":480}"),
+          ],
+        )
+      _ => {
+        self.mock_step = 0
+        return {
+          completion: say(
+            "精准改色完成：普查 → 试选 → 装编辑表（整体转暖 +900K）→ 影响证书无选区外泄漏 → 断言通过 → 渲染确认。",
+          ),
+          processed_messages: [],
+        }
+      }
+    }
+  }
   if wants_badge {
     match step {
       0 =>
@@ -612,6 +659,24 @@ fn PaintModel::mock_chat(
       }
     }
   }
+}
+
+///|
+/// 把字符串包成 JSON 字符串字面量（mock 脚本里嵌套 JSON 载荷用）。
+fn json_quote(s : String) -> String {
+  let sb = StringBuilder()
+  sb.write_string("\"")
+  for c in s {
+    if c == '\"' {
+      sb.write_string("\\\"")
+    } else if c == '\\' {
+      sb.write_string("\\\\")
+    } else {
+      sb.write_char(c)
+    }
+  }
+  sb.write_string("\"")
+  sb.to_string()
 }
 
 ///|

@@ -46,7 +46,7 @@ macOS 原生类 Photoshop 编辑器。对本工程最有价值的三块遗产：
 
 ```
 宿主    cli（native 行协议 + 文件 FFI + 原子落盘）
-交互    agent（54 命令 · vision 闸 · undo/redo · P0–P2 lint · MVSL 闭环 · 工具字典）
+交互    agent（56 命令 · vision 闸 · undo/redo · P0–P2 lint · MVSL 闭环 · 工具字典）
 容器    mpd（pack/unpack · manifest/params/agent/mvsl · 指纹对账 · 限额 · 预览生成）
 渲染    render（RGBA 画布 · 2×2 子采样 AA · W3C 混合 · 旋转 · 取景 · pick · stats）
 核心    core（IR 层树 · canonical JSON 双向 · 指纹 · 层定位原语 · MVSL 编辑表 IR）

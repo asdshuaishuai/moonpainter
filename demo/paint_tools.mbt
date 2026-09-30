@@ -216,6 +216,50 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
       "吸管：取画布坐标处合成像素颜色",
       [("x", "number:req:x"), ("y", "number:req:y")],
     ),
+    // MVSL 确定性编辑表（B5）：谓词选择子 + 有序算子程序 + 保护断言。
+    // 这些工具是"改颜色"的正路——比叠加调整层更精确、可断言、可随容器落盘。
+    make_tool(
+      "census",
+      "颜色普查：全图 hue×sat 桶（12×3）+ OKLab L 与 HSV V 均值。给 within_json 时只统计该选择子的区域，并附覆盖率/bbox/连通域事实。**先普查再选色**，不要靠猜。",
+      [
+        ("within_json", "string:选择子 JSON（留空 = 全图）"),
+        ("components", "integer:最多回几条连通域事实（默认 16）"),
+      ],
+    ),
+    make_tool(
+      "probe",
+      "单点探针：邻域 OKLab 均值/方差、环平均色相、边缘置信度，外加当前编辑表每个算子/断言在该点的 membership 与所属连通域 id。用于确认「我指的这个点，选择子到底选中没有」。",
+      [
+        ("x", "integer:req:画布 x"),
+        ("y", "integer:req:画布 y"),
+        ("r", "integer:邻域半径 px（默认 2 → 5×5）"),
+      ],
+    ),
+    make_tool(
+      "select_preview",
+      "选择子试选：把选择子画成洋红覆盖图（附回给你看）+ 覆盖率/bbox/连通域事实。**改色前必须先试选**：看图确认选中的是不是你要的东西，用返回的连通域 id 说话，不要报坐标。",
+      [
+        ("sel_json", "string:req:选择子 JSON"),
+        ("max", "integer:覆盖图最长边 px（默认 512）"),
+      ],
+    ),
+    make_tool(
+      "mvsl_set",
+      "安装编辑表（覆盖当前编辑表）：有序算子程序 + 保护断言。装完必须 mvsl_impact 看差异、mvsl_assert 验约束。",
+      [("program_json", "string:req:编辑表 JSON（{\"version\":1,\"ops\":[…],\"guards\":[…]}）")],
+    ),
+    make_tool("mvsl_show", "查看当前编辑表（canonical JSON + 指纹）", []),
+    make_tool("mvsl_clear", "清空编辑表（渲染回到未编辑状态）", []),
+    make_tool(
+      "mvsl_impact",
+      "编辑表影响证书：逐算子改动像素数/平均与最大 ΔE/目标区 ΔE/选区外泄漏率，并附结果图。**泄漏率是软边界是否越界的第一号指标**：>0 说明改到了不该改的地方。",
+      [("max", "integer:结果图最长边 px（默认 512）")],
+    ),
+    make_tool(
+      "mvsl_assert",
+      "校验保护断言：有违反则工具直接报错并列出明细（「别动人物」从愿望变成机器可验证约束）。",
+      [],
+    ),
   ]
 }
 
@@ -251,6 +295,13 @@ fn args_to_tail(args : Json, keys : Array[String]) -> String {
     sb.write_string(p)
   }
   sb.to_string()
+}
+
+///|
+/// 模型给的是 JSON 文本，命令面要的是 base64 —— 转换是 SDK 的职责，
+/// 不该让 LLM 手搓 base64（它会算错，而且错了很难自查）。
+fn b64_text(text : String) -> String {
+  @base64.encode(@utf8.encode(text))
 }
 
 ///|
@@ -310,6 +361,15 @@ pub impl @posoco.ToolProvider for PaintTools with fn execute(
     "stats" => "stats"
     "lint" => "lint"
     "save_mpd" => "save-mpd-b64"
+    // MVSL 编辑表（B5）
+    "census" => "census"
+    "probe" => "probe"
+    "select_preview" => "select-preview"
+    "mvsl_set" => "mvsl-set"
+    "mvsl_show" => "mvsl-show"
+    "mvsl_clear" => "mvsl-clear"
+    "mvsl_impact" => "mvsl-impact"
+    "mvsl_assert" => "mvsl-assert"
     _ => return @posoco.ToolOutcome::ToolReportedError(content="未知工具 \{name}", structured=None)
   }
   let line = match name {
@@ -402,6 +462,47 @@ pub impl @posoco.ToolProvider for PaintTools with fn execute(
       }
       l
     }
+    // MVSL：模型只写 JSON，base64 由 SDK 做（不该让 LLM 手搓 base64）
+    "census" => {
+      let mut l = "census"
+      let within = arg(call, "within_json")
+      if within != "" {
+        l = l + " within=" + b64_text(within)
+      }
+      let n = arg(call, "components")
+      if n != "" {
+        l = l + " components=" + n
+      }
+      l
+    }
+    "probe" => {
+      let mut l = "probe x=" + arg(call, "x") + " y=" + arg(call, "y")
+      let r = arg(call, "r")
+      if r != "" {
+        l = l + " r=" + r
+      }
+      l
+    }
+    "select_preview" => {
+      let mut l = "select-preview " + b64_text(arg(call, "sel_json"))
+      let mx = arg(call, "max")
+      if mx != "" {
+        l = l + " max=" + mx
+      }
+      l
+    }
+    "mvsl_set" => "mvsl-set " + b64_text(arg(call, "program_json"))
+    "mvsl_impact" => {
+      let mx = arg(call, "max")
+      if mx == "" {
+        "mvsl-impact"
+      } else {
+        "mvsl-impact max=" + mx
+      }
+    }
+    "mvsl_show" => "mvsl-show"
+    "mvsl_clear" => "mvsl-clear"
+    "mvsl_assert" => "mvsl-assert"
     _ => {
       // add-*：几何必带 + 样式可选
       let tail = args_to_tail(
@@ -421,12 +522,23 @@ pub impl @posoco.ToolProvider for PaintTools with fn execute(
       structured=None,
     )
   }
-  // render：把 PNG 附回（多模态视觉闭环）；同时页面侧经 Observer 上屏
-  if name == "render" {
-    let png = extract_json_string(envelope, "png_b64")
+  // 图像类工具：把 PNG 附回（多模态视觉闭环）；同时页面侧经 Observer 上屏。
+  // render / select_preview / mvsl_impact 都必须让模型**真的看到图**——
+  // 试选不看图就等于闭眼改色，影响证书不看图就发现不了选区跑偏。
+  let (img_field, label) = if name == "render" {
+    ("png_b64", "渲染完成")
+  } else if name == "select_preview" {
+    ("overlay_png_b64", "试选覆盖图已生成（洋红 = 选择子命中）")
+  } else if name == "mvsl_impact" {
+    ("result_png_b64", "编辑结果图已生成")
+  } else {
+    ("", "")
+  }
+  if img_field != "" {
+    let png = extract_json_string(envelope, img_field)
     if png != "" {
       return @posoco.ToolOutcome::SuccessWithAttachments(
-        content="渲染完成：\{shorten(envelope, 240)}",
+        content="\{label}：\{shorten(envelope, 240)}",
         structured=None,
         attachments=[@posoco.Content::Image(media_type="image/png", data=png)],
       )

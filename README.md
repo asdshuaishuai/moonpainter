@@ -74,7 +74,8 @@ EOF
 `mp_exec_in` 执行 + 字符串指针读出，与 deepDesign 胶水同款 ABI）。
 
 ```bash
-./build_demo.sh          # 构建 wasm + demo.js + index.html → dist/，并跑 Node headless 自检
+./build_demo.sh          # 构建 wasm + demo.js + index.html → dist/ + Node headless 自检
+                         # + npm SDK 冒烟 + demo 测试（工具面与 MVSL 闭环可达）
 cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
 ```
 
@@ -83,8 +84,13 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   `open/execOn/close`、`render`/`saveMpd` 门面）——宿主侧唯一 JS 胶水，引擎本体 100% MoonBit；
 - **真实端点**：DeepSeek / StepFun / OpenAI / 自定义 OpenAI 兼容端点，Key 仅存本页、
   直连端点（接入形态对齐 deepOrca：OpenAI wire + function calling + models.dev 式模型目录）；
-- **视觉闭环**：`render` 工具把渲染 PNG 以附件（`SuccessWithAttachments`）回传给
-  多模态模型，AI 真的看图确认效果再继续；
+- **视觉闭环**：`render` / `select_preview` / `mvsl_impact` 三个图像类工具把 PNG 以附件
+  （`SuccessWithAttachments`）回传给多模态模型，AI 真的看图确认效果再继续
+  （试选不看图 = 闭眼改色；影响证书不看图 = 发现不了选区跑偏）；
+- **38 个工具，MVSL 闭环可达**：`census`（先普查再选色）/`probe`（这个点选中没有）/
+  `select_preview`（试选 + 连通域事实）/`mvsl_set`（装编辑表）/`mvsl_impact`
+  （影响证书）/`mvsl_assert`（保护断言）/`mvsl_show`/`mvsl_clear`。模型只写 **JSON**
+  选择子与编辑表，base64 由 SDK 做——不该让 LLM 手搓 base64；
 - agent 层用 mooncakes 的 **colmugx/posoco**（六边形端口框架：ModelPort /
   ToolProvider / Observer 三端口扩展；Observer 即"全程可见"的官方通道）。
   评估记录：moonllm（DC-Z-lab）锁 `+native` 不适用浏览器，弃用。
