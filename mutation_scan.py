@@ -219,6 +219,22 @@ MUTS = [
     ),
     # ---- 命令行分词（自由文本的空格靠它，见 tokenize_line）----
     (
+        "R1",
+        "probe 批量模式省掉 guards（与单点模式字段走样）",
+        "agent/affordance_cmds.mbt",
+        '  sb.write_string(",\\"guards\\":[")',
+        '  if !envelope {\n    return Ok(sb.to_string() + ",\\"guards\\":[]}")\n  }\n  sb.write_string(",\\"guards\\":[")',
+        "killed",
+    ),
+    (
+        "R2",
+        "probe 批量点数上限失效（一次能塞进无限多个点）",
+        "agent/affordance_cmds.mbt",
+        '  if out.length() > 64 {',
+        '  if out.length() > 100000 {',
+        "killed",
+    ),
+    (
         "Q3",
         "set-mask 退回静默接受：认不出的参数当成 false（几何改不动却报 ok）",
         "agent/session.mbt",
