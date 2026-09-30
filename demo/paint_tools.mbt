@@ -393,8 +393,8 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
     ),
     make_tool(
       "mvsl_set",
-      "安装编辑表（覆盖当前编辑表）：有序算子程序 + 保护断言。装完必须 mvsl_impact 看差异、mvsl_assert 验约束。",
-      [("program_json", "string:req:编辑表 JSON（{\"version\":1,\"ops\":[…],\"guards\":[…]}）")],
+      "安装编辑表（覆盖当前编辑表）：有序算子程序 + 保护断言。**算子可带 layer=<层 id> 把作用域收窄到那一层**——该层先单独栅格化、选择子在「这一层自己的像素」上求值，再合成回去；这是「只改某个图层」的唯一正确做法（在合成图上做，前景与背景已经乘在一起了）。带 layer 的算子先按序执行、然后合成、最后才跑文档级算子。装完必须 mvsl_impact 看差异、mvsl_assert 验约束。",
+      [("program_json", "string:req:编辑表 JSON（{\"version\":1,\"ops\":[…],\"guards\":[…]}）；算子字段 layer=\"<层 id>\" 可选，空/缺省=文档级")],
     ),
     make_tool("mvsl_show", "查看当前编辑表（canonical JSON + 指纹）", []),
     make_tool("mvsl_clear", "清空编辑表（渲染回到未编辑状态）", []),
