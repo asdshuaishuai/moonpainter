@@ -195,6 +195,28 @@ MUTS = [
         "  let mut crc = 0x00000000",
         "killed",
     ),
+    # --- 第三批：预览 overlay / 降采样 / 容器 manifest ---
+    (
+        "P1", "覆盖预览忽略 membership 强度（软边界消失）",
+        "pixel/overlay.mbt",
+        "      let mixed = lerp_argb(c, OVERLAY_ARGb, OVERLAY_ALPHA * w)",
+        "      let mixed = lerp_argb(c, OVERLAY_ARGb, OVERLAY_ALPHA)",
+        "killed",
+    ),
+    (
+        "P2", "盒平均降采样不做平均（只取左上角像素）",
+        "pixel/overlay.mbt",
+        "      out.pixels[y * ow + x] = (round_div(sa, n) << 24) +\n        (round_div(sr, n) << 16) +\n        (round_div(sg, n) << 8) +\n        round_div(sb, n)",
+        "      out.pixels[y * ow + x] = src.pixels[(y * k) * src.width + x * k]",
+        "killed",
+    ),
+    (
+        "P3", "manifest 的 layers/assets 计数互换",
+        "mpd/mpd.mbt",
+        '\\"counts\\":{\\"layers\\":\\{layers_n},\\"assets\\":\\{d.assets.length()}',
+        '\\"counts\\":{\\"layers\\":\\{d.assets.length()},\\"assets\\":\\{layers_n}',
+        "killed",
+    ),
 ]
 
 

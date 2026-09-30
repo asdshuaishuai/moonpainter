@@ -94,6 +94,42 @@ fn sample_mvsl_program() -> @core.EditProgram {
 }
 
 ///|
+/// 从 JSON 对象精确取数字字段（纪律 11：数值断言不靠子串匹配——
+/// `contains("\"layers\":3")` 会被 `"layers":30` 骗过）。
+fn num_field(obj : @core.JValue, key : String) -> Double {
+  match obj.get(key) {
+    Some(@core.JValue::JNum(d)) => d
+    Some(_) => abort("字段 \{key} 不是数字")
+    None => abort("缺字段 \{key}")
+  }
+}
+
+///|
+test "manifest 的 counts 如实报告（layers/assets/params 不许互换或写死）" {
+  // counts 是对外可见的事实——工具与审阅者据此判断"容器里到底有什么"，
+  // 而 verify.sh 只校验 format 与 MVSL 版本块。把 layers 和 assets 互换
+  // 此前**全部测试通过**。
+  let m = sample_mpd() // 3 层 + 1 位图资产 + 1 参数
+  let packed = match @mpd.pack(m) {
+    Ok(b) => b
+    Err(e) => abort("pack 失败: \{e}")
+  }
+  let z = @codec.Zip::open(packed)
+  let manifest = z.read_text("manifest.json")
+  let v = match @core.parse_json(manifest) {
+    Ok(x) => x
+    Err(e) => abort("manifest 不是合法 JSON: \{e}")
+  }
+  let counts = match v.get("counts") {
+    Some(c) => c
+    None => abort("manifest 缺 counts：\{manifest}")
+  }
+  assert_eq(num_field(counts, "layers"), 3.0, msg=manifest)
+  assert_eq(num_field(counts, "assets"), 1.0, msg=manifest)
+  assert_eq(num_field(counts, "params"), 1.0, msg=manifest)
+}
+
+///|
 test "MVSL：编辑表随容器往返，版本块自洽（list 条目 + manifest 声明）" {
   let m = sample_mpd()
   m.mvsl = sample_mvsl_program()
