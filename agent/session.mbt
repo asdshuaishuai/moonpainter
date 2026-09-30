@@ -1322,6 +1322,28 @@ fn cmd_remove_param(s : Session, tokens : Array[String]) -> String {
 }
 
 ///|
+/// 从 `save-mpd-b64` 的回包里量出容器**字节数**（测试用；b64 长度 × 3/4）。
+/// 抽成函数是因为测试要拿它比对"清理前后容器变短了"。
+pub fn mp_b64_len(envelope : String) -> Int {
+  mp_b64(envelope).length() / 4 * 3
+}
+
+///|
+/// 从 `save-mpd-b64` 的回包里取出 b64 载荷（取不到给空串）。
+pub fn mp_b64(envelope : String) -> String {
+  match envelope.find("\"mpd_b64\":\"") {
+    Some(i) => {
+      let rest = envelope[i + 11:].to_owned()
+      match rest.find("\"") {
+        Some(j) => rest[:j].to_owned()
+        None => ""
+      }
+    }
+    None => ""
+  }
+}
+
+///|
 /// 会话渲染环境（解码全部资产）。
 fn session_env(s : Session) -> Result[@render.RenderEnv, String] {
   let env = @render.RenderEnv::new()
@@ -1602,8 +1624,19 @@ pub fn pack_current(s : Session) -> Result[Bytes, String] {
   }
   let m = @mpd.MpdDoc::new(doc)
   m.mvsl = s.mvsl
+  // 只打包**文档还在引用**的资产。会话的 `s.assets` 是只增的登记簿（内容寻址，
+  // 同一份字节只登记一次），而 `doc.assets` 是当前引用表——`delete` 掉一个
+  // 图片层不会、也不该去动登记簿（撤销要能把字节还回来）。
+  //
+  // 收口放在这里而不是 `delete` 里：任何让资产变成孤儿的路径（删层、换图、
+  // 撤销后重放……）都会经过打包，改一处就够。此前这里是 `for pair in s.assets`
+  // 全量写入，实测**删掉图片层后容器里仍留着那份 PNG**（design.json 已不引用
+  // 它），而 `@mpd.pack` 只做"引用的必须有字节"的正向对账、不反向清理。
+  let referenced = @core.referenced_asset_hashes(doc)
   for pair in s.assets {
-    m.add_asset(pair.0, pair.1)
+    if referenced.contains(pair.0) {
+      m.add_asset(pair.0, pair.1)
+    }
   }
   for e in s.edits {
     m.edits.push(e)

@@ -602,3 +602,66 @@ test "remove-param：只有它是 set-param 的对偶，删不掉就删不掉" {
   assert_true(run(s, "list-params").contains("\"count\":2"), msg="undo 应把参数恢复回来")
   assert_true(@agent.exec(s, "fingerprint") != fp_after, msg="undo 后指纹应变")
 }
+
+///|
+/// 解开 `save-mpd-b64` 的回包，数一数容器里**真的**有几个资产条目。
+/// 这是"孤儿资产有没有被打包"的直接判据。
+fn container_assets(envelope : String) -> Int {
+  let bytes = @base64.decode(@agent.mp_b64(envelope)) catch {
+    _ => abort("b64 解码失败")
+  }
+  match @mpd.unpack(bytes) {
+    Ok(m) => m.assets.length()
+    Err(e) => abort("解容器失败: \{e}")
+  }
+}
+
+///|
+test "孤儿资产不进容器：删掉图片层后，那份字节不该再被打包" {
+  // `doc.assets` 与 `s.assets` 都是**只增不减**的表，所以"谁还被引用"只能从
+  // **层**上问。第一版拿 `doc.assets` 当引用表，清理完全没生效——`delete l1`
+  // 之后 `design.layers` 是 0 层，而 `design.assets` 里那条还在。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 64 64")
+  let img = @codec.rgba_new(8, 8)
+  @codec.fill_rect_rgba(img, 0, 0, 8, 8, @codec.color_from_hex("#CC3366"))
+  let b64 = @base64.encode(@codec.png_encode(img))
+  let added = run(s, "add-image x=0 y=0 w=32 h=32 b64=\{b64} name=A")
+  assert_true(added.contains("\"op\":\"add-image\""), msg=added)
+  let doc = match s.doc {
+    Some(d) => d
+    None => abort("无文档")
+  }
+  assert_eq(
+    @core.referenced_asset_hashes(doc).length(),
+    1,
+    msg="图片层应引用 1 份资产",
+  )
+  let kept = run(s, "save-mpd-b64")
+  assert_true(kept.contains("\"mpd_b64\""), msg=kept)
+  // **判据是容器里真的有几个资产条目**，不是"字节数变小了"——后者太弱：
+  // 一张能压缩的 PNG 进 ZIP 后差异很小，我第一版就是拿长度比，结果变异
+  // （打包时不过滤）活了下来。解容器直接数条目才咬得住。
+  let kept_n = container_assets(kept)
+  assert_eq(kept_n, 1, msg="有层引用时容器里应有 1 个资产")
+  // 删层后再打包：必须仍然成功，而且变短
+  let _ = run(s, "delete l1")
+  assert_eq(
+    @core.referenced_asset_hashes(doc).length(),
+    0,
+    msg="删层后应无引用（注意不是看 doc.assets，那张表不会减）",
+  )
+  let after = run(s, "save-mpd-b64")
+  let hint = "删层后仍必须能保存——早先 pack 拿只增的 doc.assets 做正向对账，这里会报「文档引用的资产未登记字节」"
+  assert_true(after.contains("\"mpd_b64\""), msg="\{hint}。回包：\{after}")
+  let after_n = container_assets(after)
+  assert_eq(
+    after_n,
+    0,
+    msg="删层后容器里不该再有资产条目（孤儿资产被打包进去了）",
+  )
+  // 容器仍然自洽：装得回来
+  let back = run(s, "open-mpd-b64 \{@agent.mp_b64(after)}")
+  assert_true(back.contains("\"op\":\"open-mpd-b64\""), msg=back)
+}

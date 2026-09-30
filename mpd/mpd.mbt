@@ -219,16 +219,21 @@ pub fn pack(m : MpdDoc) -> Result[Bytes, String] {
       return Err("资产对账失败：\{hash} 不是其字节的 sha256")
     }
   }
-  for a in d.assets {
+  // 正面对账：**层真正引用的**资产必须有字节。判据按层的 `asset_hash`，
+  // 与 `@core.referenced_asset_hashes` 一致——早先这里遍历 `d.assets`，
+  // 而 `d.assets` 是一张只增不减的表（删层不清），于是"删掉图片层后不带字节
+  // 重新打包"会被这条判成失败，而那份字节其实已经没人引用了。
+  let needed = @core.referenced_asset_hashes(d)
+  for hash in needed {
     let mut found = false
     for pair in m.assets {
-      if pair.0 == a.hash {
+      if pair.0 == hash {
         found = true
         break
       }
     }
     if !found {
-      return Err("文档引用的资产未登记字节: \{a.hash}")
+      return Err("文档引用的资产未登记字节: \{hash}")
     }
   }
   // 预览
@@ -387,16 +392,20 @@ pub fn unpack(data : Bytes) -> Result[MpdDoc, String] {
     }
     m.assets.push((hash, bytes))
   }
-  for a in doc.assets {
+  // 判据按**层**的 `asset_hash`（与 pack 侧同一把尺子）。此前这里遍历
+  // `doc.assets`——那是一张只增不减的表，于是"删掉图片层 → 保存（已 GC 掉
+  // 孤儿资产）→ 再装回来"会在这里被判成"资产缺失"，而那份字节早没人引用了。
+  // 打包与解包用两把尺子，是这条测试抓出来的（正方向修好了，反方向还错着）。
+  for hash in @core.referenced_asset_hashes(doc) {
     let mut found = false
     for pair in m.assets {
-      if pair.0 == a.hash {
+      if pair.0 == hash {
         found = true
         break
       }
     }
     if !found {
-      return Err("文档引用的资产在容器中缺失: \{a.hash}")
+      return Err("文档引用的资产在容器中缺失: \{hash}")
     }
   }
   // agent.json 编辑历史（可选部件）

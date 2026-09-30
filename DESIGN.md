@@ -88,6 +88,10 @@ foo.mpd (ZIP, deflate)
 ├── previews/flat.png    # 保存时渲染（长边 ≤2048）
 ├── previews/thumb.png   # 缩略图（长边 ≤512）
 └── assets/sha256/<hash> # 内容寻址 PNG 资产（stored 条目）
+                        # **只写被层引用的**：`doc.assets` 是只增的元数据表，
+                        # 不能拿它当"还有没有人引用"的判据——判据是层的
+                        # `asset_hash`（`@core.referenced_asset_hashes`），
+                        # pack 与 unpack 两侧必须用同一把尺子
 ```
 
 **v1 → v2 升版理由**：MVSL 编辑表是渲染的真值输入。若只追加条目而不升版，

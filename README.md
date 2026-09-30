@@ -17,7 +17,9 @@
   `meta/mvsl.json` 是**当前 MVSL 编辑表**（渲染的真值输入），
   manifest 的 `mvsl` 版本块 pin 住 render contract / selector 算法 /
   色彩语义 / 算子语义四个版本号；
-- **设计稿层**：`assets/sha256/<hash>`（内容寻址 PNG 资产）+ `previews/{flat,thumb}.png`
+- **设计稿层**：`assets/sha256/<hash>`（内容寻址 PNG 资产）+ `previews/{flat,thumb}.png`。
+  **打包只写当前被层引用的资产**：会话内的登记簿只增（撤销要把字节还回来），
+  但删掉图片层后再存，那份孤儿字节不会再进容器
   （保存时自动渲染）+ 拒绝式校验（CRC / 指纹对账 / 前向版本拒绝 / 限额 / 路径安全）。
 
 ```

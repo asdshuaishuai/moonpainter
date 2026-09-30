@@ -267,6 +267,32 @@ MUTS = [
         "killed",
     ),
     (
+        "R13",
+        "pack 全量写入会话资产（孤儿资产进容器）",
+        "agent/session.mbt",
+        """    if referenced.contains(pair.0) {
+      m.add_asset(pair.0, pair.1)
+    }""",
+        """    m.add_asset(pair.0, pair.1)""",
+        "killed",
+    ),
+    (
+        "R14",
+        "referenced_asset_hashes 拿只增的 doc.assets 当引用表（判断等于没判断）",
+        "core/document.mbt",
+        """  for l in doc.layers {
+    if l.asset_hash != "" && !out.contains(l.asset_hash) {
+      out.push(l.asset_hash)
+    }
+  }""",
+        """  for a in doc.assets {
+    if !out.contains(a.hash) {
+      out.push(a.hash)
+    }
+  }""",
+        "killed",
+    ),
+    (
         "R12",
         "remove-param 不真删（只清空值，条目留下）",
         "agent/session.mbt",

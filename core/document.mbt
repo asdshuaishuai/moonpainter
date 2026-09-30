@@ -302,6 +302,28 @@ pub fn default_layer(
 
 ///|
 /// 递归找层。
+///|
+/// 文档当前**真正被引用**的资产 hash（去重）。
+///
+/// 判据是**层的 `asset_hash`**，不是 `doc.assets`。第一版我用了后者，结果
+/// 清理完全没生效——因为 `doc.assets` 自己就是一张**只增不减**的表：
+/// `delete l1` 之后 `design.layers` 是 0 层，而 `design.assets` 那条还在
+/// （实测 `add-image` 后 `delete`，`doc.assets` 仍有该 hash）。拿一张只增的
+/// 表当"引用表"去判断引用，等于什么都没判断。
+///
+/// 打包用它过滤会话的资产登记簿（`s.assets` 是内容寻址的登记簿，只增是对的
+/// ——撤销要把字节还回来）；`doc.assets` 里的元数据条目本身无害，留着不动。
+pub fn referenced_asset_hashes(doc : Document) -> Array[String] {
+  let out : Array[String] = []
+  for l in doc.layers {
+    if l.asset_hash != "" && !out.contains(l.asset_hash) {
+      out.push(l.asset_hash)
+    }
+  }
+  out
+}
+
+///|
 pub fn find_layer(layers : Array[Layer], id : String) -> Layer? {
   for l in layers {
     if l.id == id {
