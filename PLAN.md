@@ -235,9 +235,9 @@ native **67/67**、js **66/66**、wasm-gc **65/65**；`moon check` 0 错误
 
 ### 验收口径
 
-`moon check` 0 error / 0 warning；`moon test --target native` **136/136**、
-`--target wasm-gc` **134/134**；`./verify.sh` **七步全过**。
-（对比补遗 4：native 67 → 136。）
+`moon check` 0 error / 0 warning；`moon test --target native` **137/137**、
+`--target wasm-gc` **135/135**；`./verify.sh` **七步全过**。
+（对比补遗 4：native 67 → 137。）
 
 ### 补遗 5 追加：区域级 affordance（census / probe）
 
@@ -297,6 +297,21 @@ membership 与所属连通域 id。连通域 id 由新加的标签场给出，�
 
 这一轮的意义是**把"引擎有能力"变成"产品里的 AI 用得上"**——否则前两轮的
 闭环只是实验室里的闭环。
+
+### 补遗 5 追加四：三个身份字段各司其职
+
+接进渲染管线后暴露的一个宿主级陷阱：`fingerprint` 覆盖的是 design.json，
+**编辑表变了它不会变**。宿主若只按文档指纹判缓存失效，编辑表改动后会继续
+用旧图。修法不是改指纹语义（那会破坏容器的指纹对账），而是把三个身份字段
+在 `render` 信封里并列给出，别让宿主猜：
+
+- `fingerprint` = design.json 的 sha256（**编辑表不变它**）；
+- `program_sha256` = 编辑表的 sha256，提为 `@core.program_sha256` 单一实现
+  （容器 manifest 的同名字段改为复用它，杜绝两份实现漂移）；
+- `render_sha256` = 渲染产物 PNG 的 sha256，**缓存失效判断认这个**。
+
+配套测试断言这三者的变化关系（装编辑表 → 文档指纹不变、program 与 render
+指纹都变；清空 → 三者都回到原值），把陷阱钉在测试里而不只是文档里。
 
 ### 仍未落地（诚实边界，详见 README 与 DESIGN §8）
 

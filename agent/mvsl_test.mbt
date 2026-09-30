@@ -196,6 +196,41 @@ test "渲染管线闭环：render / previews / impact 三者必须给出同一�
 }
 
 ///|
+test "三个身份字段各司其职：文档指纹不随编辑表变，program_sha256 才随它变" {
+  // 这是个真实陷阱：宿主若只按 fingerprint 判缓存失效，编辑表改动后会继续
+  // 用旧图——因为 fingerprint 覆盖的是 design.json，编辑表不在其中。
+  let s = scene("mvsl-identity")
+  let r0 = run(s, "render 320")
+  let fp0 = jfield(r0, "fingerprint")
+  let p0 = jfield(r0, "program_sha256")
+  let i0 = jfield(r0, "render_sha256")
+  let text = @core.program_to_json(recolor_program([]))
+  let _ = run(s, "mvsl-set \{b64_of(text)}")
+  let r1 = run(s, "render 320")
+  let fp1 = jfield(r1, "fingerprint")
+  let p1 = jfield(r1, "program_sha256")
+  let i1 = jfield(r1, "render_sha256")
+  // 文档没动 → 文档指纹必须不变（否则 .mpd 指纹对账语义就错了）
+  assert_eq(fp1, fp0, msg="装编辑表不该改变文档指纹")
+  // 编辑表动了 → program_sha256 必须变
+  assert_true(p1 != p0, msg="装编辑表后 program_sha256 未变")
+  // 渲染结果变了 → render_sha256 必须变（宿主缓存的唯一真值）
+  assert_true(i1 != i0, msg="装编辑表后 render_sha256 未变（管线漏渲染）")
+  // program_sha256 与容器 manifest 里的同名字段同算法
+  assert_eq(
+    p1,
+    @core.program_sha256(recolor_program([])),
+    msg="program_sha256 与 core 实现不一致",
+  )
+  // 清空后回到原值（空程序的指纹是稳定的）
+  let _ = run(s, "mvsl-clear")
+  let r2 = run(s, "render 320")
+  assert_eq(jfield(r2, "program_sha256"), p0, msg="清空后 program_sha256 应回到空程序指纹")
+  assert_eq(jfield(r2, "render_sha256"), i0, msg="清空后渲染应回到原图")
+  assert_eq(jfield(r2, "fingerprint"), fp0, msg="清空后文档指纹不变")
+}
+
+///|
 test "MVSL：保护断言违反则命令信封 fail（别动人物 = 机器可验证约束）" {
   let s = scene("mvsl-assert")
   // 保护区 = 左半边（正是要改的地方）→ 两条都违反

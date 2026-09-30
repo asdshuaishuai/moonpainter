@@ -22,6 +22,9 @@
    （反之亦然）——它是 help/list-tools/文档的单一事实源。
 7. **确定性**：pack/canonical 序列化/渲染 sha256 必须可复现；禁止把时间戳、
    随机数、哈希表迭代序混进任何落盘字节。
+   **三个指纹别混**：`fingerprint`（design.json，编辑表变了它不变）/
+   `program_sha256`（编辑表，`@core.program_sha256` 单一实现）/
+   `render_sha256`（渲染产物，缓存失效判断认这个）。
 8. **字符串插值**：`\{...}` 内只放标识符/字段/调用，不放二元运算（先 let）；
    `as`/`opaque`/`guard` 等是保留字；FFI 指针参数需要 `#borrow` 属性行。
 9. **测试文件命名**：`*_test.mbt` 是 **blackbox**（必须写 `@pkg.x`，否则

@@ -63,7 +63,8 @@ pub fn fingerprint(m : MpdDoc) -> String {
 /// 当前编辑表的指纹（= sha256(canonical mvsl.json)）。与文档指纹并列：
 /// 人改结构、AI 改编辑表，两条指纹各自可对账。
 pub fn program_hash(m : MpdDoc) -> String {
-  @base.sha256_hex(@utf8.encode(@core.program_to_json(m.mvsl)))
+  // 单一实现：core.program_sha256（容器内外的编辑表指纹必须同算法）
+  @core.program_sha256(m.mvsl)
 }
 
 ///|

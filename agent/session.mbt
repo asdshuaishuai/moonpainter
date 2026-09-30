@@ -1257,7 +1257,12 @@ fn cmd_render(s : Session, tokens : Array[String]) -> String {
   let hash = @base.sha256_hex(png)
   s.last_render_hash = hash
   let b64 = @base64.encode(png)
-  "{\"ok\":true,\"op\":\"render\",\"width\":\{buf.width},\"height\":\{buf.height},\"overlay\":\{overlay},\"png_b64\":\"\{b64}\",\"render_sha256\":\"\{hash}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+  // 三个身份字段一起给出，别让宿主猜：
+  //   fingerprint    = design.json 的 sha256（**编辑表变了它不会变**）
+  //   program_sha256 = 编辑表的 sha256
+  //   render_sha256  = 这张 PNG 的 sha256（渲染产物缓存的唯一真值）
+  let prog_sha = @core.program_sha256(s.mvsl)
+  "{\"ok\":true,\"op\":\"render\",\"width\":\{buf.width},\"height\":\{buf.height},\"overlay\":\{overlay},\"png_b64\":\"\{b64}\",\"render_sha256\":\"\{hash}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\",\"program_sha256\":\"\{prog_sha}\"}"
 }
 
 ///|

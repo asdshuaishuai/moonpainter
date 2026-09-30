@@ -241,6 +241,17 @@ fn is_relight(k : OpKind) -> Bool {
 }
 
 ///|
+/// 编辑表指纹：canonical program JSON 的 sha256。
+///
+/// **与文档指纹并列，不可互相替代**：`fingerprint(document)` 覆盖
+/// design.json，编辑表变了它**不会**变。宿主只按文档指纹做缓存/失效判断，
+/// 就会在编辑表改动后继续用旧图。渲染结果的最终真值是 `render_sha256`
+/// （PNG 的 sha256）；需要「文档 + 编辑表」这对身份时用这两者。
+pub fn program_sha256(p : EditProgram) -> String {
+  @base.sha256_hex(@utf8.encode(program_to_json(p)))
+}
+
+///|
 /// 参数范围校验（所有算子/选择子共用）。返回精确错误文本。
 ///
 /// 两处**静态可判**的语义错误必须在这里拦下，而不是留到执行期：

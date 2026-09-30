@@ -1,7 +1,7 @@
 # MoonPainter — Agent 驱动的图层绘制引擎
 
 > 状态：**0.1.0（.mpd 容器 v2 + 参数化绘制 + AI 修图 demo + MVSL 确定性编辑 IR 引擎已落地：
-> native 136 项 / wasm-gc 134 项测试全绿；`./verify.sh` 七步验证门全过）**。
+> native 137 项 / wasm-gc 135 项测试全绿；`./verify.sh` 七步验证门全过）**。
 > 设计书 [DESIGN.md](./DESIGN.md) · 方案与验收 [PLAN.md](./PLAN.md) ·
 > MVSL 规划与评审对照 [PLAN-MVSL.md](./PLAN-MVSL.md) · AI 修图 demo 见下节。
 
@@ -11,7 +11,9 @@
 专属容器 **`.mpd`** 双层结构为唯一事实源：
 
 - **元参数层**（纯文本）：`manifest.json` + `meta/{design,params,vision,agent,mvsl}.json`
-  —— canonical design.json 的 sha256 即文档指纹，宿主据此判失效；
+  —— canonical design.json 的 sha256 即**文档指纹**；编辑表另有
+  `program_sha256`（两者不可互相替代：编辑表变了文档指纹不变，宿主缓存渲染
+  结果要认 `render_sha256`）；
   `meta/mvsl.json` 是**当前 MVSL 编辑表**（渲染的真值输入），
   manifest 的 `mvsl` 版本块 pin 住 render contract / selector 算法 /
   色彩语义 / 算子语义四个版本号；

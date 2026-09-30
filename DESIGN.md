@@ -142,8 +142,14 @@ manifest 的 `mvsl` 版本块 pin 住四个独立版本号（`render_contract` /
   （`最终图 = apply(program, 层合成底图)`，`render_doc_with` / `render_view_with`
   / `render_view_overlay_with`）。三条约束见 §2；三条出口
   （`render` / `previews/` / `mvsl-impact`）必须给出**同一张图**，
-  `verify.sh` 第 7 步把 `render` 与 `mvsl-impact` 的 sha256 相等做成硬断言。
-  取景顺序不可交换：**先全画布求编辑表、再裁剪缩放**——选择子定义在画布坐标里，
+  `verify.sh` 第 7 步把 `render` 与 `mvsl-impact` 的 sha256 相等做成硬断言；
+- **三个身份字段各司其职（宿主必读）**：`fingerprint` = design.json 的 sha256，
+  **编辑表变了它不会变**；`program_sha256` = 编辑表的 sha256（canonical
+  program JSON，`@core.program_sha256` 单一实现，容器 manifest 同名字段同算法）；
+  `render_sha256` = 渲染产物 PNG 的 sha256，**是渲染结果缓存的唯一真值**。
+  宿主只按文档指纹判失效，就会在编辑表改动后继续用旧图。`render` 信封三者并列
+  给出，不让宿主猜。渲染结果缓存的失效判断认 `render_sha256`；
+- 取景顺序不可交换：**先全画布求编辑表、再裁剪缩放**——选择子定义在画布坐标里，
   先裁剪会让同一条选择子在不同取景下命中不同的东西；
 - **静态校验不留给运行期**：算子的前视 `stage:` 引用（`n > 自身序号`）与带
   `stage:` 基准的保护断言都在 `validate_program` 期拒绝。前者留到执行期会变成
