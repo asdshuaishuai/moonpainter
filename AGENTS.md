@@ -69,6 +69,8 @@
                                 # render≡impact 同一张图→断言→软过渡带不
                                 # 算泄漏→lint 空操作/违约→容器往返→预览
                                 # 走编辑表）；渐变端点单位等静默失败也在此拦
+                                # 8/8 命令字典与分发一致：list-tools 吐出的每个
+                                # 命令都逐个真实调用，必须不报"未知命令"（铁律 6）
 ./build_demo.sh                 # AI 修图 demo 构建 + Node headless 自检 + npm SDK 冒烟
                                 # + demo 测试（工具面与 MVSL 闭环可达，需 Node；
                                 # 含 undispatched_tools 工具面自检）

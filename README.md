@@ -1,7 +1,7 @@
 # MoonPainter — Agent 驱动的图层绘制引擎
 
 > 状态：**0.1.0（.mpd 容器 v2 + 参数化绘制 + AI 修图 demo + MVSL 确定性编辑 IR 引擎已落地：
-> native 158 项 / wasm-gc 156 项测试全绿；`./verify.sh` 七步验证门全过）**。
+> native 158 项 / wasm-gc 156 项测试全绿；`./verify.sh` 八步验证门全过）**。
 > 设计书 [DESIGN.md](./DESIGN.md) · 方案与验收 [PLAN.md](./PLAN.md) ·
 > MVSL 规划与评审对照 [PLAN-MVSL.md](./PLAN-MVSL.md) · AI 修图 demo 见下节。
 
@@ -115,7 +115,7 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   ToolProvider / Observer 三端口扩展；Observer 即"全程可见"的官方通道）。
   评估记录：moonllm（DC-Z-lab）锁 `+native` 不适用浏览器，弃用。
 
-## 一键验证门（`./verify.sh` 七步，任何一步失败即非零退出）
+## 一键验证门（`./verify.sh` 八步，任何一步失败即非零退出）
 
 1. `moon check` 零错误零警告；
 2. `moon test --target native` 全绿（NIST/CRC 已知答案、deflate/ZIP/PNG 往返、golden 渲染、容器确定性、八类拒绝路径、会话 e2e）；
