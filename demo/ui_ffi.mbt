@@ -193,9 +193,10 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #|   ov.style.cssText = 'position:absolute;border:1px dashed #6a9cff;box-shadow:0 0 0 9999px rgba(10,10,20,.55);display:none;pointer-events:none';
   #|   wrap.appendChild(ov);
   #|   window.__hideCrop = () => { ov.style.display = 'none'; globalThis.__crop_ready(''); };
+  #|   window.__hideMask = () => { maskStart = null; ov.style.display = 'none'; };
   #|   let drawing = false; let toolDown = 'move';
   #|   let lastPt = null; let lastSend = 0;
-  #|   let cropStart = null; let moveStart = null;
+  #|   let cropStart = null; let moveStart = null; let maskStart = null;
   #|   const toDoc = (e) => {
   #|     const r = img.getBoundingClientRect();
   #|     const sx = (img.naturalWidth || 1) / r.width, sy = (img.naturalHeight || 1) / r.height;
@@ -222,6 +223,11 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #|       ov.style.display = 'block';
   #|       ov.style.left = dx + 'px'; ov.style.top = dy + 'px';
   #|       ov.style.width = '0px'; ov.style.height = '0px';
+  #|     } else if (t === 'mask' || t === 'mask_e') {
+  #|       maskStart = { dx, dy, x, y };
+  #|       ov.style.display = 'block';
+  #|       ov.style.left = dx + 'px'; ov.style.top = dy + 'px';
+  #|       ov.style.width = '0px'; ov.style.height = '0px';
   #|     } else if (t === 'move') {
   #|       moveStart = [x, y];
   #|     }
@@ -240,6 +246,12 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #|       ov.style.top = Math.min(dy, cropStart.dy) + 'px';
   #|       ov.style.width = Math.abs(dx - cropStart.dx) + 'px';
   #|       ov.style.height = Math.abs(dy - cropStart.dy) + 'px';
+  #|     } else if (maskStart) {
+  #|       const [dx, dy] = toDisp(e);
+  #|       ov.style.left = Math.min(dx, maskStart.dx) + 'px';
+  #|       ov.style.top = Math.min(dy, maskStart.dy) + 'px';
+  #|       ov.style.width = Math.abs(dx - maskStart.dx) + 'px';
+  #|       ov.style.height = Math.abs(dy - maskStart.dy) + 'px';
   #|     }
   #|   });
   #|   document.addEventListener('mouseup', (e) => {
@@ -258,6 +270,16 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #|       if (w > 4 && h > 4) globalThis.__crop_ready(x0 + ',' + y0 + ',' + w + ',' + h);
   #|       else window.__hideCrop();
   #|       cropStart = null;
+  #|     }
+  #|     if (maskStart) {
+  #|       const [x, y] = toDoc(e);
+  #|       const x0 = Math.min(maskStart.x, x), y0 = Math.min(maskStart.y, y);
+  #|       const w = Math.abs(x - maskStart.x), h = Math.abs(y - maskStart.y);
+  #|       if (w > 4 && h > 4)
+  #|         globalThis.__mask_ready(toolDown === 'mask_e' ? 'ellipse' : 'rect',
+  #|                                  x0 + ',' + y0 + ',' + w + ',' + h);
+  #|       else window.__hideMask();
+  #|       maskStart = null;
   #|     }
   #|     if (moveStart) {
   #|       const [x, y] = toDoc(e);
@@ -279,6 +301,7 @@ extern "js" fn js_set_tool(name : String) -> Unit =
   #|     el.style.display = el.dataset.for === name ? 'flex' : 'none';
   #|   });
   #|   if (name !== 'crop' && window.__hideCrop) window.__hideCrop();
+  #|   if (name !== 'mask' && name !== 'mask_e' && window.__hideMask) window.__hideMask();
   #| }
 
 ///|

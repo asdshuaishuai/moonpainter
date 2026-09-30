@@ -234,6 +234,60 @@ fn do_crop_ready(rect : String) -> Unit {
 }
 
 ///|
+/// 蒙版拖拽落定：给**当前选中图层**加几何蒙版（kind = rect|ellipse）。
+/// 坐标与裁剪一样走画布坐标，`set-mask` 只能改 invert，几何一律 add-mask 重建。
+fn do_mask_ready(kind : String, rect : String) -> Unit {
+  let id = g_sel.val
+  if id == "" {
+    js_status_bar("⚠ 先在右侧图层面板点选图层，再拖拽画蒙版")
+    return
+  }
+  let parts : Array[String] = []
+  for p in rect.split(",") {
+    parts.push(p.to_owned())
+  }
+  if parts.length() != 4 {
+    return
+  }
+  let r = eng(
+    "add-mask \{id} kind=\{kind} x=\{parts[0]} y=\{parts[1]} w=\{parts[2]} h=\{parts[3]}",
+  )
+  if eng_ok(r) {
+    js_status_bar("▨ 蒙版已加：\{rect}（蒙版外不渲染）")
+    eng_render(800)
+    refresh_ui()
+  }
+}
+
+///|
+/// 蒙版反选。引擎的 `set-mask` 只改 invert，所以先查当前值再取反。
+fn do_mask_invert(id : String) -> Unit {
+  let q = eng("query-layer \{id}")
+  let l = match json_get(q, "layer") {
+    Some(x) => x
+    None => parse_json_safe("null")
+  }
+  let cur = match json_get(l, "mask") {
+    Some(m) =>
+      match json_get(m, "invert") {
+        Some(Json::True) => "false"
+        _ => "true"
+      }
+    None => "true"
+  }
+  let _ = engine_exec_line("set-mask \{id} \{cur}")
+  eng_render(800)
+  refresh_ui()
+}
+
+///|
+fn do_mask_clear(id : String) -> Unit {
+  let _ = engine_exec_line("remove-mask \{id}")
+  eng_render(800)
+  refresh_ui()
+}
+
+///|
 fn do_crop_apply() -> Unit {
   if g_crop.val == "" {
     return
@@ -358,7 +412,17 @@ fn refresh_ui() -> Unit {
     sb.write_string(lnm)
     sb.write_string("</span><span class='lkd'>")
     sb.write_string(lkd)
-    sb.write_string("</span></div>")
+    sb.write_string("</span>")
+    // 有蒙版的层给个记认（否则用户看不出这层的可见范围被裁过）
+    match json_get(l, "mask") {
+      Some(m) =>
+        match json_get(m, "invert") {
+          Some(Json::True) => sb.write_string("<span class='lkd' title='蒙版·反选'>▨反</span>")
+          _ => sb.write_string("<span class='lkd' title='蒙版'>▨</span>")
+        }
+      None => ()
+    }
+    sb.write_string("</div>")
     i = i - 1
   }
   js_refresh_layers(sb.to_string())
@@ -437,7 +501,11 @@ fn refresh_props() -> Unit {
   sb.write_string(id)
   sb.write_string("\")'>置顶</button><button onclick='globalThis.__back(\"")
   sb.write_string(id)
-  sb.write_string("\")'>置底</button></div>")
+  sb.write_string("\")'>置底</button><button onclick='globalThis.__mask_invert(\"")
+  sb.write_string(id)
+  sb.write_string("\")'>蒙版反选</button><button class='ghost' onclick='globalThis.__mask_clear(\"")
+  sb.write_string(id)
+  sb.write_string("\")'>去蒙版</button></div>")
   js_update_props(sb.to_string())
 }
 
@@ -713,6 +781,8 @@ fn inject_html() -> Unit {
       #|<div class='ctx' data-for='text'><span>T</span><input id='tinput' placeholder='输入文字内容…' style='width:200px;background:#0d1020;color:#ccc;border:1px solid #3a3a5e;border-radius:4px;padding:4px 8px;font-size:12px'/><button onclick='globalThis.__text_add()' style='background:#3d63ff;color:#fff;border:0;border-radius:4px;padding:4px 12px;font-size:12px;cursor:pointer'>添加</button><span class='hint'>先点画布选位置</span></div>
       #|<div class='ctx' data-for='crop'><span>✂️ 拖拽出裁剪选区</span>
       #|<div id='crop-btns'><button onclick='globalThis.__crop_apply()'>✓ 应用裁剪</button><button class='ghost' onclick='globalThis.__crop_cancel()'>✕ 取消</button></div></div>
+      #|<div class='ctx' data-for='mask'><span>▭ 拖拽出矩形蒙版范围（作用于右侧选中的图层）</span><span class='hint'>蒙版外不渲染</span></div>
+      #|<div class='ctx' data-for='mask_e'><span>◯ 拖拽出椭圆蒙版范围（作用于右侧选中的图层）</span><span class='hint'>蒙版外不渲染</span></div>
       #|</div>
       #|<div class='tools' id='tools'>
       #|<div class='t on' data-tool='move' title='移动' onclick='globalThis.__tool("move")'>🖐</div>
@@ -722,6 +792,8 @@ fn inject_html() -> Unit {
       #|<div class='ts'></div>
       #|<div class='t' data-tool='text' title='文本' onclick='globalThis.__tool("text")'>T</div>
       #|<div class='t' data-tool='crop' title='裁剪' onclick='globalThis.__tool("crop")'>✂️</div>
+      #|<div class='t' data-tool='mask' title='矩形蒙版（拖拽）' onclick='globalThis.__tool("mask")'>▭</div>
+      #|<div class='t' data-tool='mask_e' title='椭圆蒙版（拖拽）' onclick='globalThis.__tool("mask_e")'>◯</div>
       #|<div class='ts'></div>
       #|<div class='t' title='放大' onclick='globalThis.__zoom("1.25")'>🔍+</div>
       #|<div class='t' title='缩小' onclick='globalThis.__zoom("0.8")'>🔍−</div>
@@ -860,6 +932,9 @@ fn register_globals() -> Unit {
   })
   js_reg2s("__move_delta", fn(dx : String, dy : String) { do_move_delta(dx, dy) })
   js_reg1("__crop_ready", fn(rect : String) { do_crop_ready(rect) })
+  js_reg2s("__mask_ready", fn(kind : String, rect : String) { do_mask_ready(kind, rect) })
+  js_reg1("__mask_invert", fn(id : String) { do_mask_invert(id) })
+  js_reg1("__mask_clear", fn(id : String) { do_mask_clear(id) })
   js_reg1("__crop_cancel", fn(_ : String) { do_crop_cancel() })
   js_reg2s("__af", fn(op : String, sign : String) {
     let s = js_state_get("strength")

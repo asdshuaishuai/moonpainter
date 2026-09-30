@@ -386,3 +386,31 @@ test "set-mask 只改 invert：几何参数必须被拒绝，不许静默无效"
   // add-mask 的几何也要能被看见
   assert_true(q.contains("\"mask\":{\"kind\":\"rect\""), msg="query-layer 应报告蒙版几何：\{q}")
 }
+
+
+///|
+test "蒙版反选的读-改-写往返（前端「蒙版反选」按钮依赖的两步）" {
+  // 引擎没有 toggle 命令，所以前端的反选按钮只能：先 query-layer 读
+  // `mask.invert`，再 set-mask 写反值。这条把那条路在引擎侧锁住——
+  // 前端读不到或写不进，按钮就是坏的，而那种坏**编译不报错**。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 40 20")
+  let _ = run(s, "add-rect x=0 y=0 w=40 h=20 fill=#FF0000FF id=r")
+  let _ = run(s, "add-mask r kind=rect x=0 y=0 w=20 h=20")
+  // 1) 读得到初始值
+  let q0 = run(s, "query-layer r")
+  assert_true(q0.contains("\"invert\":false"), msg="应读得到 invert 初值：\{q0}")
+  // 2) 写反值 → 读回来是反的
+  let _ = run(s, "set-mask r true")
+  let q1 = run(s, "query-layer r")
+  assert_true(q1.contains("\"invert\":true"), msg=q1)
+  // 3) 再反一次 → 回到原值（一个完整的 toggle 往返）
+  let _ = run(s, "set-mask r false")
+  let q2 = run(s, "query-layer r")
+  assert_true(q2.contains("\"invert\":false"), msg=q2)
+  // 4) 去蒙版后 query-layer 上不再有 mask 字段（前端据此把标记撤掉）
+  let _ = run(s, "remove-mask r")
+  let q3 = run(s, "query-layer r")
+  assert_true(!q3.contains("\"mask\""), msg="去蒙版后不该再报 mask：\{q3}")
+}
