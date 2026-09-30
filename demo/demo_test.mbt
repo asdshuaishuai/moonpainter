@@ -293,3 +293,29 @@ test "页面接线：HTML 引用的处理器都注册了，getElementById 的 id
     msg="HTML 里 getElementById 指向了不存在的 id：\{no_el.join("、")}",
   )
 }
+
+///|
+test "蒙版命令行：圆角只给矩形，羽化都给；为 0 时不写进命令行" {
+  let p : Array[String] = ["10", "20", "30", "40"]
+  // 没设过（0/0）：命令行形状与历史完全一致
+  assert_eq(
+    @demo.mask_line("l1", "rect", p, 0, 0),
+    "add-mask l1 kind=rect x=10 y=20 w=30 h=40",
+  )
+  // 矩形：圆角与羽化都带
+  assert_eq(
+    @demo.mask_line("l1", "rect", p, 8, 4),
+    "add-mask l1 kind=rect x=10 y=20 w=30 h=40 radius=8 feather=4",
+  )
+  // **椭圆不给 radius**：引擎对椭圆的 radius 是拒绝的（"仅矩形"），前端要是
+  // 无脑带上，用户拖个椭圆蒙版就会拿到一条错误而不是一个蒙版
+  assert_eq(
+    @demo.mask_line("l1", "ellipse", p, 8, 4),
+    "add-mask l1 kind=ellipse x=10 y=20 w=30 h=40 feather=4",
+  )
+  // 只有羽化
+  assert_eq(
+    @demo.mask_line("l1", "rect", p, 0, 12),
+    "add-mask l1 kind=rect x=10 y=20 w=30 h=40 feather=12",
+  )
+}

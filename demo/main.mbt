@@ -185,6 +185,21 @@ fn do_move_delta(dx_s : String, dy_s : String) -> Unit {
 }
 
 ///|
+/// 取一个非负整数（取不到或非法给 0）。蒙版圆角/羽化用——它们是非负像素值，
+/// 负号在这里没有意义，所以不走 `parse_double_safe` 那条带符号的路径。
+fn parse_int_safe(s : String) -> Int {
+  let mut v = 0
+  for ch in s.iter() {
+    let c = ch.to_int()
+    if c < 48 || c > 57 {
+      return 0
+    }
+    v = v * 10 + (c - 48)
+  }
+  v
+}
+
+///|
 fn parse_double_safe(s : String) -> Double {
   let neg = s.has_prefix("-")
   let body = if neg { s[1:].to_owned() } else { s }
@@ -236,6 +251,24 @@ fn do_crop_ready(rect : String) -> Unit {
 ///|
 /// 蒙版拖拽落定：给**当前选中图层**加几何蒙版（kind = rect|ellipse）。
 /// 坐标与裁剪一样走画布坐标，`set-mask` 只能改 invert，几何一律 add-mask 重建。
+///|
+/// 蒙版命令行拼接（**纯函数**，便于测试）。
+///
+/// 圆角与羽化**只在矩形上有效**：`radius` 是"仅矩形"的参数（引擎对椭圆会
+/// 拒绝），`feather` 两者都吃。所以这里是 `kind == "rect"` 才带 `radius`。
+/// 两者为 0 时不写进命令行——保持历史命令行的形状，也让"没设过"与"设了 0"
+/// 在日志里可分辨。
+pub fn mask_line(id : String, kind : String, parts : Array[String], radius : Int, feather : Int) -> String {
+  let mut line = "add-mask \{id} kind=\{kind} x=\{parts[0]} y=\{parts[1]} w=\{parts[2]} h=\{parts[3]}"
+  if kind == "rect" && radius > 0 {
+    line = line + " radius=\{radius}"
+  }
+  if feather > 0 {
+    line = line + " feather=\{feather}"
+  }
+  line
+}
+
 fn do_mask_ready(kind : String, rect : String) -> Unit {
   let id = g_sel.val
   if id == "" {
@@ -249,11 +282,13 @@ fn do_mask_ready(kind : String, rect : String) -> Unit {
   if parts.length() != 4 {
     return
   }
-  let r = eng(
-    "add-mask \{id} kind=\{kind} x=\{parts[0]} y=\{parts[1]} w=\{parts[2]} h=\{parts[3]}",
-  )
+  let radius = parse_int_safe(js_state_get("mask_radius"))
+  let feather = parse_int_safe(js_state_get("mask_feather"))
+  let r = eng(mask_line(id, kind, parts, radius, feather))
   if eng_ok(r) {
-    js_status_bar("▨ 蒙版已加：\{rect}（蒙版外不渲染）")
+    let extra = if feather > 0 { "，羽化 \{feather}px" } else { "" }
+    let extra2 = if kind == "rect" && radius > 0 { "，圆角 \{radius}px" } else { "" }
+    js_status_bar("▨ 蒙版已加：\{rect}\{extra2}\{extra}（蒙版外不渲染）")
     eng_render(800)
     refresh_ui()
   }
@@ -842,8 +877,8 @@ pub fn app_html() -> String {
       #|<div class='ctx' data-for='text'><span>T</span><input id='tinput' placeholder='输入文字内容…' style='width:200px;background:#0d1020;color:#ccc;border:1px solid #3a3a5e;border-radius:4px;padding:4px 8px;font-size:12px'/><button onclick='globalThis.__text_add()' style='background:#3d63ff;color:#fff;border:0;border-radius:4px;padding:4px 12px;font-size:12px;cursor:pointer'>添加</button><span class='hint'>先点画布选位置</span></div>
       #|<div class='ctx' data-for='crop'><span>✂️ 拖拽出裁剪选区</span>
       #|<div id='crop-btns'><button onclick='globalThis.__crop_apply()'>✓ 应用裁剪</button><button class='ghost' onclick='globalThis.__crop_cancel()'>✕ 取消</button></div></div>
-      #|<div class='ctx' data-for='mask'><span>▭ 拖拽出矩形蒙版范围（作用于右侧选中的图层）</span><span class='hint'>蒙版外不渲染</span></div>
-      #|<div class='ctx' data-for='mask_e'><span>◯ 拖拽出椭圆蒙版范围（作用于右侧选中的图层）</span><span class='hint'>蒙版外不渲染</span></div>
+      #|<div class='ctx' data-for='mask'><span>▭ 拖拽出矩形蒙版范围（作用于右侧选中的图层）</span><span class='hint'>圆角</span><input type='range' id='mask-radius' min='0' max='200' value='0'/><span id='mask-radius-v' class='hint'>0</span><span class='hint'>羽化</span><input type='range' id='mask-feather' min='0' max='100' value='0'/><span id='mask-feather-v' class='hint'>0</span><span class='hint'>蒙版外不渲染</span></div>
+      #|<div class='ctx' data-for='mask_e'><span>◯ 拖拽出椭圆蒙版范围（作用于右侧选中的图层）</span><span class='hint'>羽化</span><input type='range' id='mask-feather-e' min='0' max='100' value='0'/><span id='mask-feather-e-v' class='hint'>0</span><span class='hint'>蒙版外不渲染</span></div>
       #|</div>
       #|<div class='tools' id='tools'>
       #|<div class='t on' data-tool='move' title='移动' onclick='globalThis.__tool("move")'>🖐</div>

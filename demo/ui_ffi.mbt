@@ -422,6 +422,20 @@ pub fn setup_tool_state() -> Unit {
       #|bind('bsize', 'size', (v) => Number(v));
       #|bind('esize', 'size', (v) => Number(v));
       #|bind('fstr', 'strength', (v) => (Number(v) / 100).toFixed(2));
+      #|// 蒙版圆角/羽化。椭圆那个滑块写同一个 feather 键——圆角对椭圆无效，
+      #|// 而羽化两者都吃，所以两个工具条共用一份羽化值。
+      #|bind('mask-radius', 'mask_radius');
+      #|const bindFeather = () => {
+      #|  const es = [document.getElementById('mask-feather'), document.getElementById('mask-feather-e')];
+      #|  const up = (src) => { window.MPST.mask_feather = src.value; es.forEach((e) => { if (e && e !== src) e.value = src.value; }); };
+      #|  es.forEach((e) => { if (!e) return; e.addEventListener('input', () => up(e)); e.addEventListener('change', () => up(e)); });
+      #|  // 同步标签
+      #|  const pair = (id, label) => { const e = document.getElementById(id), l = document.getElementById(label); if (!e || !l) return;
+      #|    const upd = () => { l.textContent = e.value; }; e.addEventListener('input', upd); e.addEventListener('change', upd); upd(); };
+      #|  pair('mask-radius', 'mask-radius-v'); pair('mask-feather', 'mask-feather-v'); pair('mask-feather-e', 'mask-feather-e-v');
+      #|};
+      #|bindFeather();
+      #|window.MPST.mask_radius = '0'; window.MPST.mask_feather = '0';
     ),
   )
 }
