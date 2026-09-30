@@ -892,8 +892,70 @@ pub fn render_doc_with(
   env : RenderEnv,
   prog : @core.EditProgram,
 ) -> Result[@codec.RgbaBuf, String] {
-  let base = render_layers(doc, env)
-  match @pixel.run_program(base, prog) {
+  // 不含图层级算子 → 原来的单段路径，**逐位不变**。
+  if !@core.program_has_layer_scope(prog) {
+    let base = render_layers(doc, env)
+    match @pixel.run_program(base, prog) {
+      Ok(pair) => Ok(pair.0)
+      Err(e) => Err("MVSL 编辑表执行失败：\{e}")
+    }
+  } else {
+    render_doc_with_layer_scope(doc, env, prog)
+  }
+}
+
+///|
+/// **两段式**渲染（表里含 `layer=` 算子时）。
+///
+/// 1. 被引用的层各自栅格化，只施加"属于它的算子"——选择子因此在**该层自己的
+///    栅格**上求值，这正是"只改这一层"的关键（合成底图上做不到：那里前景与
+///    背景已经乘在一起了）；
+/// 2. 按原顺序合成：被改的层用改后的栅格，其余层照旧直接画；
+/// 3. 再对合成底图施加**文档级**算子，并统一检查**全部**保护断言。
+fn render_doc_with_layer_scope(
+  doc : @core.Document,
+  env : RenderEnv,
+  prog : @core.EditProgram,
+) -> Result[@codec.RgbaBuf, String] {
+  match @core.layer_scope_error(prog) {
+    Some(e) => return Err(e)
+    None => ()
+  }
+  // 引用了不存在的层：`program_for_layer` 永远匹配不上，那个算子会**静默失效**
+  // （表里有、跑得通、什么都不改）。这里兜底拒绝，agent 入口另有更早的友好报错。
+  for id in @core.program_layer_ids(prog) {
+    if @core.find_layer(doc.layers, id) is None {
+      return Err("算子引用了不存在的图层：\{id}")
+    }
+  }
+  let w = if doc.width > RENDER_MAX_SIDE { RENDER_MAX_SIDE } else { doc.width }
+  let h = if doc.height > RENDER_MAX_SIDE {
+    RENDER_MAX_SIDE
+  } else {
+    doc.height
+  }
+  let out = @codec.rgba_new(w, h)
+  @codec.fill_rect_rgba(out, 0, 0, w, h, 0xFFFFFFFF)
+  for l in doc.layers {
+    let sub = @core.program_for_layer(prog, l.id)
+    if sub.ops.length() == 0 {
+      // 没被引用的层：与原来一样直接画（`paint_layer` 内部自行处理
+      // visible/opacity/Group 短路）。
+      paint_layer(l, out, env, 1.0)
+    } else {
+      let lb = rasterize_layer(l, w, h, env)
+      let edited = match @pixel.run_program(lb, sub) {
+        Ok(pair) => pair.0
+        Err(e) => return Err("MVSL 图层 \{l.id} 执行失败：\{e}")
+      }
+      blend_buffer(out, edited, l.blend)
+    }
+  }
+  let docprog = @core.program_doc_scope(prog)
+  if docprog.ops.length() == 0 && docprog.guards.length() == 0 {
+    return Ok(out)
+  }
+  match @pixel.run_program(out, docprog) {
     Ok(pair) => Ok(pair.0)
     Err(e) => Err("MVSL 编辑表执行失败：\{e}")
   }

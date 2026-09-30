@@ -30,6 +30,7 @@ fn rprog(sel : @core.SelSpec, hue : Double) -> @core.EditProgram {
     hue_deg: hue,
     temp_kelvin: 0.0,
     relight_gain: 1.0,
+    layer: "",
     refine: [],
     note: "",
     evidence: None,
@@ -135,6 +136,7 @@ test "坏编辑表：渲染报错，不静默漏渲染" {
     hue_deg: 10.0,
     temp_kelvin: 0.0,
     relight_gain: 1.0,
+    layer: "",
     refine: [],
     note: "",
     evidence: None,
@@ -173,4 +175,159 @@ test "编辑表 base 是层合成底图：反复渲染不会自我叠加" {
   // 且确实与底图不同（不是空转）
   let base = @render.render_doc(doc, env)
   assert_true(once.pixels[0] != base.pixels[0], msg="编辑表没起作用")
+}
+
+///|
+/// 带 `layer=` 作用域的算子（其余字段与 `rprog` 相同）。
+fn rprog_layer(sel : @core.SelSpec, hue : Double, layer : String) -> @core.EditProgram {
+  let op : @core.EditOp = {
+    id: "e1",
+    kind: @core.Recolor,
+    sel,
+    amount: 1.0,
+    hue_deg: hue,
+    temp_kelvin: 0.0,
+    relight_gain: 1.0,
+    layer,
+    refine: [],
+    note: "",
+    evidence: None,
+  }
+  { ops: [op], guards: [] }
+}
+
+///|
+fn must_render(
+  doc : @core.Document,
+  env : @render.RenderEnv,
+  prog : @core.EditProgram,
+) -> @codec.RgbaBuf {
+  match @render.render_doc_with(doc, env, prog) {
+    Ok(x) => x
+    Err(e) => abort("不该失败: \{e}")
+  }
+}
+
+///|
+test "图层级编辑：layer= 把作用域收窄到那一层（与文档级形成对照）" {
+  // PLAN 里最大的一条待办。关键不在"加个字段"，而在**选择子在哪张图上求值**：
+  // 只有先把那一层单独栅格化，才拿得到"这一层自己的像素"；合成底图上前景与
+  // 背景早已乘在一起（README 的诚实边界说过，`recolor` 的边缘去污染在底图上
+  // 无解，就是这个原因）。
+  let env = @render.RenderEnv::new()
+  let doc = two_tone_doc()
+  let whole = rsel(0.0, 0.0, 16.0, 8.0)
+  let doc_level = must_render(doc, env, rprog(whole, 120.0))
+  let layer_level = must_render(doc, env, rprog_layer(whole, 120.0, "l1"))
+  // 对照 A：文档级——两侧都被改（否则这条测试的"收窄"就没有参照物）
+  assert_true(
+    @codec.rgba_get(doc_level, 4, 4) != 0xFFC81E1E,
+    msg="文档级应当改变左半",
+  )
+  assert_true(
+    @codec.rgba_get(doc_level, 12, 4) != 0xFF1E5ACC,
+    msg="文档级应当改变右半",
+  )
+  // 对照 B：图层级——左半被改，右半**逐位不变**
+  assert_true(
+    @codec.rgba_get(layer_level, 4, 4) != 0xFFC81E1E,
+    msg="layer=l1 应当改变左半",
+  )
+  assert_eq(
+    @codec.rgba_get(layer_level, 12, 4),
+    0xFF1E5ACC,
+    msg="layer=l1 不该碰右半",
+  )
+  // 且左半的结果与文档级一致：左半只由 l1 构成，选择子在同一批像素上求值
+  assert_eq(
+    @codec.rgba_get(layer_level, 4, 4),
+    @codec.rgba_get(doc_level, 4, 4),
+    msg="同层覆盖区上，图层级与文档级应当给出同一个像素",
+  )
+}
+
+///|
+test "图层级编辑：文档级算子仍然作用在合成图上（两段式）" {
+  let env = @render.RenderEnv::new()
+  let doc = two_tone_doc()
+  let whole = rsel(0.0, 0.0, 16.0, 8.0)
+  let left = rsel(0.0, 0.0, 8.0, 8.0)
+  let right = rsel(8.0, 0.0, 8.0, 8.0)
+  // 两个图层级算子（各绑一层）+ 一个文档级算子
+  let p : @core.EditProgram = {
+    ops: [
+      rprog_layer(whole, 120.0, "l1").ops[0],
+      rprog_layer(whole, 240.0, "l2").ops[0],
+      rprog(right, 30.0).ops[0],
+    ],
+    guards: [],
+  }
+  let out = must_render(doc, env, p)
+  // 两侧都被各自的图层级算子改过（与原始色不同）
+  assert_true(@codec.rgba_get(out, 4, 4) != 0xFFC81E1E, msg="l1 应被改")
+  assert_true(@codec.rgba_get(out, 12, 4) != 0xFF1E5ACC, msg="l2 应被改")
+  // 与"只有图层级段"的结果不同——证明文档级段真的又在合成图上跑了一遍
+  let only_layers : @core.EditProgram = {
+    ops: [
+      rprog_layer(whole, 120.0, "l1").ops[0],
+      rprog_layer(whole, 240.0, "l2").ops[0],
+    ],
+    guards: [],
+  }
+  let two_stage = must_render(doc, env, only_layers)
+  assert_true(
+    @codec.rgba_get(out, 12, 4) != @codec.rgba_get(two_stage, 12, 4) ||
+    @codec.rgba_get(out, 4, 4) != @codec.rgba_get(two_stage, 4, 4),
+    msg="文档级算子必须真的又作用了一遍（否则两段式只是摆设）",
+  )
+  let _ = left
+}
+
+///|
+test "图层级编辑：只引用一层的表，不含图层级算子时走原路径（逐位不变）" {
+  let env = @render.RenderEnv::new()
+  let doc = two_tone_doc()
+  let whole = rsel(0.0, 0.0, 16.0, 8.0)
+  // layer="" → 单段路径，应与 render_doc + run_program 完全一致
+  let a = must_render(doc, env, rprog(whole, 120.0))
+  let base = @render.render_layers(doc, env)
+  let b = match @pixel.run_program(base, rprog(whole, 120.0)) {
+    Ok(pair) => pair.0
+    Err(e) => abort("不该失败: \{e}")
+  }
+  let mut i = 0
+  let total = a.width * a.height
+  while i < total {
+    assert_eq(a.pixels[i], b.pixels[i], msg="空 layer 必须走单段路径 @\{i}")
+    i = i + 1
+  }
+}
+
+///|
+test "图层级编辑：layer= 与 STAGE 基准组合被拒绝（分段后序号不连续）" {
+  let env = @render.RenderEnv::new()
+  let doc = two_tone_doc()
+  let g : @core.GeoWindow = { x: 0.0, y: 0.0, w: 16.0, h: 8.0, feather: 0.0 }
+  let op : @core.EditOp = {
+    id: "e1",
+    kind: @core.Recolor,
+    sel: { basis: @core.Stage(0), expr: @core.Atom(@core.Geo(g, "rect")) },
+    amount: 1.0,
+    hue_deg: 120.0,
+    temp_kelvin: 0.0,
+    relight_gain: 1.0,
+    layer: "l1",
+    refine: [],
+    note: "",
+    evidence: None,
+  }
+  let prog : @core.EditProgram = { ops: [op], guards: [] }
+  match @render.render_doc_with(doc, env, prog) {
+    Ok(_) => abort("layer= 与 STAGE 组合必须被拒绝，而不是静默取错缓冲")
+    Err(e) =>
+      assert_true(
+        e.contains("STAGE") && e.contains("分段"),
+        msg="错误信息要说清原因：\{e}",
+      )
+  }
 }

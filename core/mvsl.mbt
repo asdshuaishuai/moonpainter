@@ -177,6 +177,7 @@ pub(all) struct EditOp {
   hue_deg : Double // Recolor: 目标色相偏移（度）
   temp_kelvin : Double // Temperature: 目标色温偏移（K，正=暖）
   relight_gain : Double // Relight: 增益（>1 提亮）
+  layer : String // 作用域：""=文档级（合成底图上）；非空=只作用于该图层
   refine : Array[Refine]
   note : String
   evidence : Evidence?
@@ -207,6 +208,84 @@ pub fn EditProgram::new() -> EditProgram {
 /// 编辑表是否为空（空表 → 渲染逐位短路，不经任何色彩变换）。
 pub fn EditProgram::is_empty(p : EditProgram) -> Bool {
   p.ops.length() == 0
+}
+
+///|
+/// 是否含**图层级算子**（`layer` 非空）。渲染据此决定走单段还是两段式。
+pub fn program_has_layer_scope(p : EditProgram) -> Bool {
+  for op in p.ops {
+    if op.layer != "" {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// 该编辑表引用到的全部图层 id（去重，保持首次出现顺序）。
+pub fn program_layer_ids(p : EditProgram) -> Array[String] {
+  let out : Array[String] = []
+  for op in p.ops {
+    if op.layer == "" {
+      continue
+    }
+    let mut seen = false
+    for x in out {
+      if x == op.layer {
+        seen = true
+      }
+    }
+    if !seen {
+      out.push(op.layer)
+    }
+  }
+  out
+}
+
+///|
+/// 取出**某一图层**的算子子集。
+///
+/// 不带 guards：保护断言是"针对**最终图**"的约束，统一在文档级段之后检查，
+/// 否则一条"别动人物"的断言会被每一层各判一次，语义就散了。
+pub fn program_for_layer(p : EditProgram, layer_id : String) -> EditProgram {
+  let ops : Array[EditOp] = []
+  for op in p.ops {
+    if op.layer == layer_id {
+      ops.push(op)
+    }
+  }
+  { ops, guards: [] }
+}
+
+///|
+/// 取出**文档级**算子（`layer` 为空）与**全部** guards。
+pub fn program_doc_scope(p : EditProgram) -> EditProgram {
+  let ops : Array[EditOp] = []
+  for op in p.ops {
+    if op.layer == "" {
+      ops.push(op)
+    }
+  }
+  { ops, guards: p.guards }
+}
+
+///|
+/// 图层级算子的入口校验（两段式渲染的硬约束）。
+///
+/// `STAGE(n)` 的 `n` 是"第 n 个算子之后的中间缓冲"序号，而两段式会把算子拆到
+/// 不同缓冲上分别执行，序号不再连续——放行会得到一个**看起来跑通、实际取错缓冲**
+/// 的结果，所以直接拒绝。
+pub fn layer_scope_error(p : EditProgram) -> String? {
+  let mut i = 0
+  for op in p.ops {
+    if op.layer != "" && op.sel.basis is Stage(_) {
+      return Some(
+        "算子 \{op.id}（序号 \{i}）同时用了 layer=\{op.layer} 与 STAGE 基准：图层级算子分段执行，STAGE 序号不再连续，拒绝这种组合",
+      )
+    }
+    i = i + 1
+  }
+  None
 }
 
 // ---------------------------------------------------------------------------
@@ -713,6 +792,11 @@ fn op_json(o : EditOp) -> String {
   sb.write_string(",\"hue_deg\":\{fmt_num(o.hue_deg)}")
   sb.write_string(",\"temp_kelvin\":\{fmt_num(o.temp_kelvin)}")
   sb.write_string(",\"relight_gain\":\{fmt_num(o.relight_gain)}")
+  // `layer` 只在非空时写：空作用域（文档级）是绝大多数情形，写进去会让
+  // 所有既有编辑表的 canonical JSON 与 program_sha256 无谓地全变一遍。
+  if o.layer != "" {
+    sb.write_string(",\"layer\":\"\{json_escape(o.layer)}\"")
+  }
   sb.write_string(",\"refine\":[\{arr_refine_json(o.refine)}]")
   sb.write_string(",\"note\":\"\{json_escape(o.note)}\"")
   sb.write_string(",\"evidence\":\{evidence_json(o.evidence)}}")
@@ -1226,6 +1310,7 @@ fn op_of(v : JValue) -> Result[EditOp, String] {
     hue_deg: jfin(v, "hue_deg"),
     temp_kelvin: jfin(v, "temp_kelvin"),
     relight_gain: jfin(v, "relight_gain"),
+    layer: jfstr(v, "layer"),
     refine: refines,
     note: jfstr(v, "note"),
     evidence: evidence_of(v.get("evidence")),
