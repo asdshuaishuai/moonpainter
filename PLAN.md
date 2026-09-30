@@ -477,9 +477,14 @@ bbox 的 0..1**。我顺手把端点也写成了像素：
     grep -q '"leak_ratio":0' "$OUT/mvsl.log"
 
 `"leak_ratio":0.0279` **以 `"leak_ratio":0` 开头**。所以泄漏率在 `[0,1)` 的
-任何值都能通过——断言只拒绝 ≥ 1 的泄漏率。全仓库 5 处（含 `verify.sh` 的
-e2e 门、demo 测试）全都如此。更糟的是 e2e 门那条用的是**几何硬边**选择子
-（权重非 0 即 1），旧判据下泄漏本来就是 0——它**永远测不到软边界**。
+任何值都能通过——断言只拒绝 ≥ 1 的泄漏率。
+
+同类子串断言全仓库共 5 处：4 处 `leak_ratio`（`verify.sh` 的 e2e 门、
+`agent/schema_test.mbt`、`agent/mvsl_test.mbt`、`demo/demo_test.mbt`）
++ 1 处 `coverage`（`agent/mvsl_lint_test.mbt` 断言"该选择子一个像素都不命中"，
+而 `coverage:0.348` 同样以 `coverage:0` 开头）。更糟的是 e2e 门那条用的是
+**几何硬边**选择子（权重非 0 即 1），旧判据下泄漏本来就是 0——
+它**永远测不到软边界**。
 
 修法：
 1. 数值断言一律精确解析（`@core.parse_json` + `as_num`，辅助
