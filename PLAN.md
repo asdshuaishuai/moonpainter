@@ -235,16 +235,28 @@ native **67/67**、js **66/66**、wasm-gc **65/65**；`moon check` 0 错误
 
 ### 验收口径
 
-`moon check` 0 error / 0 warning；`moon test --target native` **118/118**、
-`--target wasm-gc` **116/116**；`./verify.sh` **七步全过**。
-（对比补遗 4：native 67 → 118。）
+`moon check` 0 error / 0 warning；`moon test --target native` **129/129**、
+`--target wasm-gc` **127/127**；`./verify.sh` **七步全过**。
+（对比补遗 4：native 67 → 129。）
+
+### 补遗 5 追加：区域级 affordance（census / probe）
+
+`census`：hue×sat 12×3 桶普查 + OKLab L 与 HSV V 均值**对照**（把「V 不是
+感知亮度」从文档论断变成可读数值），`within=<sel>` 收窄区域并附覆盖率/bbox/
+连通域事实。`probe`：单点 `r≤32` 邻域统计（OKLab 均值/方差、环平均色相、
+边缘置信度 = 中心差分梯度 / 0.25 L·px⁻¹）+ 当前编辑表每个算子与断言在该点的
+membership 与所属连通域 id。连通域 id 由新加的标签场给出，与既有的组件事实
+共用同一趟栅格序扫描（编号严格一致）——用 bbox 做包含判断在 bbox 重叠时
+会指错，这是 probe 必须拿到标签场而不是组件列表的原因。
+
+两个命令共同破的是同一个循环依赖：AI 得先知道「画面里有什么」才能提选择子，
+而定位恰是 VLM 最弱的一环。现在引擎把区域事实算成数值，模型只做语义判断。
 
 ### 仍未落地（诚实边界，详见 README 与 DESIGN §8）
 
 - **MVSL 编辑表还没接进渲染管线**：`render` / `previews/` 仍只画
   `design.json` 的层，`mvsl-impact` 的结果图是编辑表当前唯一的可视化出口。
   接进管线需要新增层类型并显式引入 `pixel ← render` 依赖。
-- `census` 升级（hue×sat 桶 / `within=` / `components()`）与 `probe` 升级
-  （batch / 5×5 邻域 / membership / component id）未落地。
+- `probe` 的单命令多点批量入口未加（多次 probe 可覆盖同一需求）。
 - `recolor` 的边界带去污染（`I = αF + (1−α)B` 只改前景）未做。
 - PLAN-MVSL §P3 Phase 2 的真 VLM 消融实验未做（需要真实多模态模型）。

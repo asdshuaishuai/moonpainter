@@ -212,8 +212,25 @@ pub(all) struct Certificate {
 }
 
 ///|
+/// 证书 + 连通域**标签场**（0 = 背景，k = 第 k 个连通域）。
+///
+/// 标签是 `probe` 能回答「这个点在哪个连通域里」的前提：只给组件事实
+/// 列表的话，调用方得自己拿 bbox 做包含判断——bbox 重叠时就会指错。
+/// 标签场与 `components()` 共用同一趟扫描，编号严格一致。
+pub(all) struct Certified {
+  cert : Certificate
+  labels : Field
+}
+
+///|
 /// 求选择子证书（阈值化后取连通域；覆盖率用全软场）。
 pub fn certify(base : @codec.RgbaBuf, w : Field) -> Certificate {
+  certify_full(base, w).cert
+}
+
+///|
+/// 求选择子证书 + 标签场（probe / 组件 id 查询用）。
+pub fn certify_full(base : @codec.RgbaBuf, w : Field) -> Certified {
   let total = w.w * w.h
   let cov = field_sum(w) / total.to_double()
   let mut bx0 = w.w
@@ -248,12 +265,30 @@ pub fn certify(base : @codec.RgbaBuf, w : Field) -> Certificate {
     bx1 = 0
     by1 = 0
   }
-  { total, coverage: cov, bbox: (bx0, by0, bx1, by1), components: components(base, w) }
+  let labels = field_new(w.w, w.h)
+  let comps = scan_components(base, w, Some(labels))
+  {
+    cert: { total, coverage: cov, bbox: (bx0, by0, bx1, by1), components: comps },
+    labels,
+  }
+}
+
+///|
+/// 选择子的连通域标签场（0 = 背景；k = 按栅格序发现的第 k 个连通域）。
+pub fn label_components(base : @codec.RgbaBuf, f : Field) -> Field {
+  let labels = field_new(f.w, f.h)
+  let _ = scan_components(base, f, Some(labels))
+  labels
 }
 
 ///|
 /// 8 邻域连通域（洪泛，纯数学；颜色事实取自不可变 base）。
-fn components(base : @codec.RgbaBuf, f : Field) -> Array[Component] {
+/// `labels` 非空时同时写出逐像素标签（编号 = 发现先后 + 1）。
+fn scan_components(
+  base : @codec.RgbaBuf,
+  f : Field,
+  labels : Field?,
+) -> Array[Component] {
   let visited = field_new(f.w, f.h)
   let comps : Array[Component] = []
   let n = f.w * f.h
@@ -266,7 +301,13 @@ fn components(base : @codec.RgbaBuf, f : Field) -> Array[Component] {
     }
     let sx = i % f.w
     let sy = i / f.w
+    // 编号在洪泛前就确定（= 已发现组件数 + 1），洪泛期间即可写标签
+    let cid = comps.length() + 1
     visited.v[i] = 1.0
+    match labels {
+      Some(lb) => lb.v[i] = cid.to_double()
+      None => ()
+    }
     let stack : Array[(Int, Int)] = [(sx, sy)]
     let mut area = 0
     let mut x0 = sx
@@ -323,6 +364,10 @@ fn components(base : @codec.RgbaBuf, f : Field) -> Array[Component] {
               let ni = ny * f.w + nx
               if visited.v[ni] == 0.0 && f.v[ni] >= CERT_THRESHOLD {
                 visited.v[ni] = 1.0
+                match labels {
+                  Some(lb) => lb.v[ni] = cid.to_double()
+                  None => ()
+                }
                 stack.push((nx, ny))
               }
             }
@@ -333,9 +378,8 @@ fn components(base : @codec.RgbaBuf, f : Field) -> Array[Component] {
       }
     }
     let ad = area.to_double()
-    let comps_n = comps.length() + 1
     comps.push({
-      id: comps_n,
+      id: cid,
       x0,
       y0,
       x1,

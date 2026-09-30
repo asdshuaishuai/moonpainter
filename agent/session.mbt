@@ -146,6 +146,9 @@ pub fn exec(s : Session, line : String) -> String {
     "render" => cmd_render(s, tokens)
     "pick" => cmd_pick(s, tokens)
     "stats" => cmd_stats(s)
+    // 区域级 affordance（census 破除「先定位才能普查」的循环依赖）
+    "census" => cmd_census(s, tokens)
+    "probe" => cmd_probe(s, tokens)
     "lint" => cmd_lint(s)
     "fingerprint" => cmd_fingerprint(s)
     "inspect" => cmd_inspect(s)

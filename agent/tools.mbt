@@ -64,6 +64,8 @@ pub fn list_tools() -> Array[AgentTool] {
   add("render", "render [width] [vx0 vy0 vx1 vy1] [overlay=1]：取景渲染 → PNG b64 + sha256；overlay 叠加层 bbox 序号线框", "vision")
   add("pick", "pick <x> <y>：画布坐标 → 最上层层 id", "both")
   add("stats", "直方图 32 桶 + 覆盖统计（引擎给数值，模型给判断）", "vision")
+  add("census", "census [within=<base64 sel>] [components=n]：hue×sat 桶普查（12×3）+ OKLab L 与 HSV V 均值对照；给 within 时附覆盖率/bbox/连通域事实", "both")
+  add("probe", "probe x= y= [r=2]：单点邻域统计（OKLab 均值/方差、环平均色相、边缘置信度）+ 当前编辑表每个算子的选择子在该点的 membership 与所属连通域 id", "both")
   // 历史 / 容器
   add("fingerprint", "当前 canonical design.json 指纹", "meta")
   add("inspect", "元参数层实时视图：manifest 摘要 + design.json 全文 + params + 编辑历史", "meta")

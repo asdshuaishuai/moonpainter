@@ -149,8 +149,11 @@ affordance，人机同一编辑表、同一撤销栈。
 - [x] `mvsl-assert`：保护断言违反 → 命令信封直接 fail 并带全部明细。
 - [x] 编辑表随容器持久化（`meta/mvsl.json` + manifest `mvsl` 版本块，
       容器升版 v2，篡改/半截状态/更高 render contract 一律拒绝）。
-- [ ] `census` 升级：hue×sat 桶 + `within=` 选择子参数 + `components()`。
-- [ ] `probe` 升级：batch + 5×5 邻域统计 + membership + component id。
+- [x] `census` 升级：hue×sat 桶（12×3）+ `within=` 选择子参数 +
+      `components()` 事实；附 OKLab L 与 HSV V 均值**对照**（V 不是感知亮度）。
+- [x] `probe` 升级：5×5（`r≤32`）邻域统计 + 环平均色相 + 边缘置信度 +
+      当前编辑表每个算子/断言在该点的 membership 与 component id。
+      （batch 形态由「多次 probe」覆盖；单命令多点的批量入口尚未加。）
 
 ### P2 算子与选择子 —— 部分完成
 

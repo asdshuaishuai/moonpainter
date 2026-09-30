@@ -123,6 +123,12 @@ manifest 的 `mvsl` 版本块 pin 住四个独立版本号（`render_contract` /
   （逐算子 diff 证书 + 结果 PNG）、`mvsl-assert`（保护断言，违反即信封 fail）、
   `mvsl-set/show/clear`。`base = 当前文档渲染`，由文档指纹隐式内容寻址，
   信封回传 `base_sha256` 供显式 pin；
+- **区域级事实（破除循环依赖）**：`census`（hue×sat 12×3 桶 + OKLab L 与
+  HSV V 均值对照； `within=<sel>` 时附覆盖率/bbox/连通域事实）与 `probe`
+  （单点 r≤32 邻域：OKLab 均值/方差、环平均色相、边缘置信度 = 中心差分
+  梯度 / 0.25 L·px⁻¹；外加**当前编辑表每个算子与断言在该点的 membership
+  与所属连通域 id**）。连通域 id 由 `pixel` 的标签场给出，与 `components()`
+  共用同一趟栅格序扫描——用 bbox 做包含判断在重叠时会指错；
 - **覆盖预览顺序**：**先全分辨率生成 overlay，再盒平均降采样**——反过来会把
   发丝级软边界平均掉，VLM 看到干净背景就判「没选中」。
 
