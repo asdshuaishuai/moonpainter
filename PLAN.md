@@ -235,9 +235,9 @@ native **67/67**、js **66/66**、wasm-gc **65/65**；`moon check` 0 错误
 
 ### 验收口径
 
-`moon check` 0 error / 0 warning；`moon test --target native` **164/164**、
-`--target wasm-gc` **162/162**；`./verify.sh` **八步全过**。
-（对比补遗 4：native 67 → 164。）
+`moon check` 0 error / 0 warning；`moon test --target native` **167/167**、
+`--target wasm-gc` **165/165**；`./verify.sh` **八步全过**。
+（对比补遗 4：native 67 → 167。）
 
 ### 补遗 5 追加：区域级 affordance（census / probe）
 
@@ -760,7 +760,6 @@ invert"；顺带补上 `layer_summary` 里缺失的 `mask` 字段（蒙版加了
 - **MVSL 编辑表是文档级的最终一遍**，不是图层：能改整张合成图，但还不能
   "只作用于某几个图层"或参与图层内部的混合序（`stage:n` 只切到算子序号）。
   要那种粒度得先有把图层单独栅格化的中间缓冲。
-- `probe` 的单命令多点批量入口未加（多次 probe 可覆盖同一需求）。
 - `recolor` 的边界带去污染（`I = αF + (1−α)B` 只改前景）**在合成底图上无解**，
   不是"未做"：反演要同时知道前景覆盖率 α 与背景色 B，而**渲染底图永远不透明**
   （`render_layers` 先铺满白底再画图层，`render_test` 有整幅"无半透明像素"断言）
