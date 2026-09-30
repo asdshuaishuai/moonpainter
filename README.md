@@ -1,7 +1,7 @@
 # MoonPainter — Agent 驱动的图层绘制引擎
 
 > 状态：**0.1.0（.mpd 容器 v2 + 参数化绘制 + AI 修图 demo + MVSL 确定性编辑 IR 引擎已落地：
-> native 158 项 / wasm-gc 156 项测试全绿；`./verify.sh` 八步验证门全过）**。
+> native 161 项 / wasm-gc 159 项测试全绿；`./verify.sh` 八步验证门全过）**。
 > 设计书 [DESIGN.md](./DESIGN.md) · 方案与验收 [PLAN.md](./PLAN.md) ·
 > MVSL 规划与评审对照 [PLAN-MVSL.md](./PLAN-MVSL.md) · AI 修图 demo 见下节。
 
@@ -143,9 +143,10 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
 - **P3 manifest 的 `counts` 无人校验**：把 `layers` 和 `assets` 计数互换全部测试通过——
   而 `counts` 正是工具/审阅者据以判断"容器里有什么"的对外事实。
 
-当前 26 个变异中 25 个被抓住，唯一存活的 M2 是**已确认的等价变异**（去掉空表短路后行为逐位相同）。
+当前 28 个变异中 27 个被抓住，唯一存活的 M2 是**已确认的等价变异**（去掉空表短路后行为逐位相同）。
 覆盖路径：编辑表数值语义 / 三个指纹 / 保护断言 / lint / W3C alpha 合成与 blend 模式 /
-几何选择子 / 覆盖预览与盒降采样 / SHA-256 / PNG / ZIP-CRC / 容器 manifest。
+几何选择子 / 覆盖预览与盒降采样 / SHA-256 / PNG / ZIP-CRC / 容器 manifest /
+命令行分词（自由文本的引号与转义）。
 新增核心语义（新的算子/选择子判据/指纹/断言）时，同步往 `MUTS` 加一条变异。
 
 ## 包结构（依赖严格无环）

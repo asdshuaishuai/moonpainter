@@ -217,6 +217,29 @@ MUTS = [
         '\\"counts\\":{\\"layers\\":\\{d.assets.length()},\\"assets\\":\\{layers_n}',
         "killed",
     ),
+    # ---- 命令行分词（自由文本的空格靠它，见 tokenize_line）----
+    (
+        "Q1",
+        "命令行分词丢掉引号语义（引号内的空格又会被切断）",
+        "agent/session.mbt",
+        """    } else if c == '"' {
+      in_quote = true
+      started = true
+    } else if is_ws(c) {""",
+        """    } else if c == '"' {
+      sb.write_char(c)
+      started = true
+    } else if is_ws(c) {""",
+        "killed",
+    ),
+    (
+        "Q2",
+        r"引号内的 \" 转义失效（字面引号退化成裸反斜杠）",
+        "agent/session.mbt",
+        r"""      } else if c == '\\' && i < n {""",
+        r"""      } else if false {""",
+        "killed",
+    ),
 ]
 
 
