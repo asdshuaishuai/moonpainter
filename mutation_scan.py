@@ -243,6 +243,22 @@ MUTS = [
         "killed",
     ),
     (
+        "R9",
+        "program_for_layer 不按图层过滤（图层级算子漏到所有层上）",
+        "core/mvsl.mbt",
+        '    if op.layer == layer_id {\n      ops.push(op)',
+        '    if op.layer != "" {\n      ops.push(op)',
+        "killed",
+    ),
+    (
+        "R10",
+        "program_has_layer_scope 判反（含图层级算子的表走单段路径）",
+        "core/mvsl.mbt",
+        '  for op in p.ops {\n    if op.layer != "" {\n      return true',
+        '  for op in p.ops {\n    if op.layer == "" {\n      return true',
+        "killed",
+    ),
+    (
         "R5",
         "圆角矩形 SDF 漏掉 min(max(q),0) 项（内部所有点的内距算成 0）",
         "render/scene.mbt",

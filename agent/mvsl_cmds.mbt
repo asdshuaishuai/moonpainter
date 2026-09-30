@@ -79,6 +79,34 @@ fn mvsl_decode(tok : String) -> Result[@core.EditProgram, String] {
 }
 
 ///|
+/// 图层级算子的入口校验（共享给 mvsl-set 与 lint）。
+///
+/// 两类静默失败必须在这里拦掉：
+///   * 引用了**不存在的层** —— `program_for_layer` 永远匹配不上，算子在表里、
+///     跑得通、什么都不改；
+///   * `layer=` 与 `STAGE` 基准组合 —— 两段式分段执行后 STAGE 序号不再连续，
+///     放行会取到错的中间缓冲（render 侧另有兜底）。
+fn layer_scope_check(doc : @core.Document, prog : @core.EditProgram) -> String? {
+  for id in @core.program_layer_ids(prog) {
+    if @core.find_layer(doc.layers, id) is None {
+      let known = StringBuilder()
+      let mut n = 0
+      for l in doc.layers {
+        if n > 0 {
+          known.write_string("、")
+        }
+        known.write_string(l.id)
+        n = n + 1
+      }
+      return Some(
+        "算子引用了不存在的图层：\{id}（现有层：\{known.to_string()}）",
+      )
+    }
+  }
+  @core.layer_scope_error(prog)
+}
+
+///|
 /// mvsl-set <base64(canonical json)>：安装编辑表（校验 + 规范化）。
 fn cmd_mvsl_set(s : Session, tokens : Array[String]) -> String {
   if tokens.length() < 2 {
@@ -88,11 +116,16 @@ fn cmd_mvsl_set(s : Session, tokens : Array[String]) -> String {
     Ok(p) => p
     Err(e) => return err(e)
   }
-  s.mvsl = prog
   let doc = match require_doc(s) {
     Ok(d) => d
     Err(e) => return err(e)
   }
+  // 先校验再赋值：坏表不该留在 session 里（否则报错之后状态已被污染）。
+  match layer_scope_check(doc, prog) {
+    Some(e) => return err(e)
+    None => ()
+  }
+  s.mvsl = prog
   mvsl_reply(
     "mvsl-set",
     prog,

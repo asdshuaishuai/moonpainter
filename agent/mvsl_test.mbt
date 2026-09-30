@@ -28,6 +28,7 @@ fn recolor_program(guards : Array[@core.Guard]) -> @core.EditProgram {
     hue_deg: 120.0,
     temp_kelvin: 0.0,
     relight_gain: 1.0,
+    layer: "",
     refine: [],
     note: "",
     evidence: None,
@@ -193,6 +194,7 @@ test "MVSL：软色彩窗落在真实渐变上时，过渡带不算泄漏" {
     hue_deg: -70.0,
     temp_kelvin: 0.0,
     relight_gain: 1.0,
+    layer: "",
     refine: [],
     note: "",
     evidence: None,
@@ -380,6 +382,7 @@ test "MVSL：编辑表随 .mpd 落盘往返（编辑表是状态，edits 是轨�
     hue_deg: 120.0,
     temp_kelvin: 0.0,
     relight_gain: 1.0,
+    layer: "",
     refine: [@core.Feather(2.0)],
     note: "调色",
     evidence: Some(ev),
@@ -408,4 +411,104 @@ test "MVSL：编辑表随 .mpd 落盘往返（编辑表是状态，edits 是轨�
   // 再打包一次必须逐字节一致（确定性 pack 的进程内闭环）
   let save2 = run(s2, "save-mpd-b64")
   assert_eq(save2, save, msg="open→save 字节不一致")
+}
+
+///|
+/// 带 `layer=` 作用域的算子（其余字段取中性值）。
+fn scope_prog(layer : String) -> @core.EditProgram {
+  let g : @core.GeoWindow = { x: 0.0, y: 0.0, w: 16.0, h: 8.0, feather: 0.0 }
+  let op : @core.EditOp = {
+    id: "e1",
+    kind: @core.Recolor,
+    sel: { basis: @core.Base, expr: @core.Atom(@core.Geo(g, "rect")) },
+    amount: 1.0,
+    hue_deg: 120.0,
+    temp_kelvin: 0.0,
+    relight_gain: 1.0,
+    layer,
+    refine: [],
+    note: "",
+    evidence: None,
+  }
+  { ops: [op], guards: [] }
+}
+
+///|
+test "图层级算子：装得进、报得出，引用不存在的层被拒绝且不污染 session" {
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 16 8")
+  let _ = run(s, "add-rect x=0 y=0 w=8 h=8 fill=#FF0000FF id=l1")
+  // 正常路径：layer=l1 存在 → 装得进
+  let ok = run(s, "mvsl-set \{b64_of(@core.program_to_json(scope_prog("l1")))}")
+  assert_true(ok.contains("\"ok\":true"), msg=ok)
+  // 报告里能读出这个作用域（解析 JSON，不做子串匹配）
+  let show = run(s, "mvsl-show")
+  let j = match @core.parse_json(show) {
+    Ok(x) => x
+    Err(e) => abort("mvsl-show 不是合法 JSON: \{e}")
+  }
+  let prog_text = match j.get("program") {
+    Some(JStr(t)) => t
+    _ => abort("mvsl-show 应当带 program 全文")
+  }
+  let pj = match @core.parse_json(prog_text) {
+    Ok(x) => x
+    Err(e) => abort("program 不是合法 JSON: \{e}")
+  }
+  let ops = match pj.get("ops") {
+    Some(JArr(a)) => a
+    _ => abort("program 里应有 ops")
+  }
+  assert_eq(ops.length(), 1, msg="算子数")
+  assert_eq(
+    match ops[0].get("layer") {
+      Some(JStr(t)) => t
+      _ => ""
+    },
+    "l1",
+    msg="作用域应当往返",
+  )
+  // 引用不存在的层 → 拒绝，并说清原因
+  let e = run(s, "mvsl-set \{b64_of(@core.program_to_json(scope_prog("nope")))}")
+  assert_true(e.has_prefix("{\"error\":\""), msg=e)
+  assert_true(e.contains("不存在的图层"), msg=e)
+  // 关键：坏表**不能**留在 session 里（校验必须在赋值之前）
+  let show2 = run(s, "mvsl-show")
+  let j2 = match @core.parse_json(show2) {
+    Ok(x) => x
+    Err(e) => abort("mvsl-show 不是合法 JSON: \{e}")
+  }
+  let text2 = match j2.get("program") {
+    Some(JStr(t)) => t
+    _ => abort("mvsl-show 应当带 program 全文")
+  }
+  assert_true(text2.contains("\"layer\":\"l1\""), msg="session 里应当仍是原来那张好表")
+  assert_true(!text2.contains("nope"), msg="坏表不该被写进 session")
+}
+
+///|
+test "图层级算子：layer= 与 STAGE 基准的组合在入口被拒绝" {
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 16 8")
+  let _ = run(s, "add-rect x=0 y=0 w=8 h=8 fill=#FF0000FF id=l1")
+  let g : @core.GeoWindow = { x: 0.0, y: 0.0, w: 16.0, h: 8.0, feather: 0.0 }
+  let op : @core.EditOp = {
+    id: "e1",
+    kind: @core.Recolor,
+    sel: { basis: @core.Stage(0), expr: @core.Atom(@core.Geo(g, "rect")) },
+    amount: 1.0,
+    hue_deg: 120.0,
+    temp_kelvin: 0.0,
+    relight_gain: 1.0,
+    layer: "l1",
+    refine: [],
+    note: "",
+    evidence: None,
+  }
+  let prog : @core.EditProgram = { ops: [op], guards: [] }
+  let e = run(s, "mvsl-set \{b64_of(@core.program_to_json(prog))}")
+  assert_true(e.has_prefix("{\"error\":\""), msg=e)
+  assert_true(e.contains("STAGE"), msg=e)
 }

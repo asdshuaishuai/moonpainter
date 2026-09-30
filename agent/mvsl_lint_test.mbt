@@ -70,6 +70,7 @@ fn eop(id : String, sel : @core.SelSpec) -> @core.EditOp {
     hue_deg: 120.0,
     temp_kelvin: 0.0,
     relight_gain: 1.0,
+    layer: "",
     refine: [],
     note: "",
     evidence: None,

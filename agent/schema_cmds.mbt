@@ -203,6 +203,7 @@ fn cmd_sel_schema(s : Session, _tokens : Array[String]) -> String {
     hue_deg: 120.0,
     temp_kelvin: 0.0,
     relight_gain: 1.0,
+    layer: "",
     refine: [@core.Feather(2.0)],
     note: "把红色区域换成绿色",
     evidence: None,

@@ -53,6 +53,15 @@ pub fn lint_mvsl(base : @codec.RgbaBuf, prog : @core.EditProgram) -> Array[Strin
   if prog.ops.length() == 0 {
     return v
   }
+  // ── 静态：图层级算子的硬约束（不依赖画布）──
+  //
+  // `layer=` 与 `STAGE` 基准组合会被两段式渲染拒绝，但那张表**能装进 session**
+  // 只要走的是不经过校验的路径（手改容器、旧版本产物）。lint 的价值就在这：
+  // 引擎知道自己没干活时得有人告诉调用方。
+  match @core.layer_scope_error(prog) {
+    Some(msg) => v.push("P4 \{msg}")
+    None => ()
+  }
   // ── 静态：构造性空算子（不依赖画布）──
   let statically_null : Map[String, Bool] = Map([])
   for op in prog.ops {
