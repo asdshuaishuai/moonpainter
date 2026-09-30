@@ -7,6 +7,13 @@
 
 1. **测试口径是唯一口径**：任何改动后 `moon check`（0 error / 0 warning）+
    `moon test --target native`（全绿）才算完成。golden sha256 变化必须是有意为之并同步更新。
+   **但全绿不等于被守护**：核心语义（编辑表的软权重混合/羽化/量化、三个指纹、
+   保护断言）必须有**能抓住注入 bug** 的测试。`python3 mutation_scan.py` 是这件事的
+   度量——往实现注入语义 bug，看测试能否抓住。实测这条纪律值多少：把 MVSL 的
+   `lerp(in, op(in), w)` 的 w 换成常量 1.0（核心语义硬边化）时，**当时全部
+   150 条测试统统通过**（因为断言全是契约/结构，而 render 的 golden 走空编辑表、
+   根本不经过 `lerp_argb`）。
+   新增核心语义时同步往 `MUTS` 加一条变异。
 2. **`.mpd` 是唯一事实源**：不要发明旁路状态；一切变更走 agent 命令面
    （canonical design.json + 指纹），像素资产只增不改（内容寻址）。
 3. **诚实边界**：新能力做多少写多少（README 能力表 + DESIGN 边界节同步）；
@@ -64,6 +71,8 @@
                                 # 走编辑表）；渐变端点单位等静默失败也在此拦
 ./build_demo.sh                 # AI 修图 demo 构建 + Node headless 自检 + npm SDK 冒烟
                                 # + demo 测试（工具面与 MVSL 闭环可达，需 Node）
+python3 mutation_scan.py        # 变异门：注入语义 bug 看测试能否抓住（约 5 分钟；
+                                # 「测试全绿」不等于「行为被守护」）
 moon run --target native cli    # stdin 行协议；help 查看全部 57 个命令
 ```
 
@@ -91,17 +100,21 @@ open→save 字节一致断言会变化——这必须是有意为之，并同�
 <!-- deepgit:begin progress -->
 ## 当前进度（deepGit 维护）
 
-> 浅更新 · 2026-09-30 17:43 · 追踪 2 个分支
+> 浅更新 · 2026-10-01 00:05 · 追踪 2 个分支 · 3 处未提交改动
 
 ### 工程脉搏
 
-- 提交构成：`feat` ×4 · `fix` ×5 · `other` ×1
+- 提交构成：`feat` ×10 · `fix` ×12 · `docs` ×3 · `other` ×1
+- 注意：1 个未跟踪文件；`dev` 可直接 fast-forward 到 `main`
 
-- **`dev`**（当前）：活跃 · head `4b72a1f3`（16 小时前） —— 最近 10 个提交：修复×5、新增×4、更新×1
-- **`main`**（默认）：活跃 · head `bc27a023`（22 小时前） —— 最近 1 个提交：更新×1
+- **`dev`**（当前）：活跃 · head `adc33d9c`（9 分钟前） —— 新增 16 个提交（修复×7、新增×6、文档×3），涉及 agent（12 文件）、docs（10 文件）、pixel（10 文件）
+- **`main`**（默认）：活跃 · head `bc27a023`（1 天前） —— 最近 1 个提交：更新×1
+
+**需要注意**
+- 工作区有 3 处未提交改动
 
 **最近提交**
-- `4b72a1f3` feat(retouch): 画笔/橡皮擦/裁剪/吸管/像素滤镜 —— 真实修图操作引擎+UI（2026-09-30）
-- `c3f9611d` fix: 图片导入 canvas 统一转 PNG + 文件选择器 value 清空（支持重复选同一文件）（2026-09-29）
-- `7bcfa1f0` fix: index.html 根节点 id mp-root → app（与 MoonBit 代码一致）（2026-09-29）
+- `adc33d9c` docs: 说准数字 —— 5 处子串断言是 4 处 leak + 1 处 coverage（2026-09-30）
+- `81525b69` fix(pixel): leak_ratio 判据用错阈值 —— 软过渡带被误报成「选区外泄漏」（2026-09-30）
+- `a6a33505` fix(core): 渐变端点是归一化 0..1 —— 写成像素不再静默变成纯色（2026-09-30）
 <!-- deepgit:end progress -->
