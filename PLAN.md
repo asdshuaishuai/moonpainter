@@ -995,6 +995,33 @@ canonical JSON 有一条很强的性质测试：`to_json → from_json → to_js
 样本取默认值的字段，等于没在这条性质里出现。所以样本要刻意"每个字段都非默认"，
 而覆盖与否必须用注入去问，不能用读代码去猜。
 
+**六之十二、容器里有四处"自述"，各自写一遍，谁也没跟真实内容对过账。**
+
+沿用六之十一那把尺子（逐处"不写/写错"看有没有测试红）量容器，扫出两处**只写
+不读**的条目：`meta/params.json` 与 `meta/vision.json`。其中
+
+    fn vision_json() -> String {
+      "{\"previews\":[\"previews/flat.png\",\"previews/thumb.png\"],\"anchors\":[]}"
+    }
+
+是**硬编码常量**——它自称容器里有 `previews/flat.png` 与 `previews/thumb.png`，
+而这个说法从不与容器比对（`anchors` 为空是 DESIGN 已声明的"本轮占位"，
+不算撒谎）。参数与它无关，它们其实走 `design.json`，所以 `params.json`
+是同一事实的**第二份编码**。
+
+于是把容器的**四处自述**一次对上账：`manifest.counts.{layers,assets,params}`、
+`manifest.asset_index`、`design.assets`、`vision.previews` —— 全部与
+"容器里真实有什么"逐项比对。写第一版时我把层数算成 4，测试立刻报红，
+一查是我漏数了组内两层（`all_layers` 本来就是递归的，实际 5）——
+**测试先抓住了写测试的人**。
+
+另加 2 个变异：`counts.layers` 改用非递归的顶层层数、`vision.previews`
+登记一个不存在的预览。这两个在修之前都是活的。
+
+**教训**：一个容器里只要有**第二处**描述同一事实的地方，就多一个撒谎点；
+"自述对账"应该做成一条性质（每处自述 × 真实内容），而不是等某个数字
+出问题时再去对那一个。
+
 **七、一个字段可以同时"存下来、报出来、被文档承诺"，而没有人读过它。**
 准备给蒙版加羽化、去读 `render/scene.mbt` 的 `mask_cover_at` 时，发现它**只读
 `kind/x/y/w/h/invert`——`radius` 一个字都没提**。而：

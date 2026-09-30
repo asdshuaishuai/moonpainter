@@ -267,6 +267,22 @@ MUTS = [
         "killed",
     ),
     (
+        "R21",
+        "counts.layers 用非递归的顶层层数（组内层漏计）",
+        "mpd/mpd.mbt",
+        """  let layers_n = @core.all_layers(d.layers).length()""",
+        """  let layers_n = d.layers.length()""",
+        "killed",
+    ),
+    (
+        "R22",
+        "vision.previews 登记一个不存在的预览（自述撒谎）",
+        "mpd/mpd.mbt",
+        r"""[\"previews/flat.png\",\"previews/thumb.png\"]""",
+        r"""[\"previews/flat.png\",\"previews/gone.png\"]""",
+        "killed",
+    ),
+    (
         "R18",
         "蒙版羽化解析恒 0（软边蒙版重开后变硬边）",
         "core/json.mbt",

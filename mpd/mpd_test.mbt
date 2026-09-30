@@ -535,3 +535,129 @@ test "pack 源头拒绝：资产 hash 与字节不符 / 引用未登记资产 / 
     Ok(_) => abort("超大画布不该 pack")
   }
 }
+
+///|
+test "容器自述对账：manifest/design/vision 的每个数字都必须与容器里真实的东西对上" {
+  // 容器里有**四处自述**在描述容器自己：
+  //   manifest.counts.{layers,assets,params} / manifest.asset_index
+  //   design.assets / vision.previews
+  // 它们分散在三个文件里、由三段代码各写一遍，却都只是"说法"。
+  // round 19 修过 counts.assets（自述 1、实际 0），这里把四处一次对上，
+  // 免得再一个个症状地发现。
+  //
+  // 样本故意让**顶层 2 个、递归 4 个**（一个组装两层）——计数若用非递归的
+  // `layers.length()` 就会写 2，一眼可见。
+  let doc = @core.new_document("uuid-selfdesc", 120, 80)
+  let l1 = @core.default_layer("l1", "bg", 0.0, 0.0, 120.0, 80.0)
+  let l2 = @core.default_layer("l2", "a", 10.0, 10.0, 20.0, 20.0)
+  let l3 = @core.default_layer("l3", "b", 40.0, 10.0, 20.0, 20.0)
+  let g = {
+    ..@core.default_layer("g1", "grp", 10.0, 10.0, 50.0, 20.0),
+    kind: @core.ShapeKind::Group,
+    fill: @core.Fill::NoFill,
+    children: [l2, l3],
+  }
+  doc.layers.push(l1)
+  doc.layers.push(g)
+  let img = @codec.rgba_new(4, 3)
+  @codec.fill_rect_rgba(img, 0, 0, 4, 3, @codec.color_from_hex("#3366CC"))
+  let png = @codec.png_encode(img)
+  let hash = @base.sha256_hex(png)
+  doc.assets.push({ hash, width: 4, height: 3 })
+  let pic = {
+    ..@core.default_layer("l4", "pic", 80.0, 20.0, 24.0, 18.0),
+    kind: @core.ShapeKind::Image,
+    fill: @core.Fill::NoFill,
+    asset_hash: hash,
+  }
+  doc.layers.push(pic)
+  doc.params.push({ name: "k", value: "v" })
+  let m = @mpd.MpdDoc::new(doc)
+  m.add_asset(hash, png)
+  let packed = match @mpd.pack(m) {
+    Ok(b) => b
+    Err(e) => abort("pack 失败: \{e}")
+  }
+  let z = @codec.Zip::open(packed)
+  // 容器里真实的条目
+  let real_assets : Array[String] = []
+  for e in z.entries {
+    if e.name.has_prefix("assets/sha256/") {
+      real_assets.push(e.name)
+    }
+  }
+  assert_eq(real_assets.length(), 1, msg="样本应有 1 份资产字节")
+  let j = match @core.parse_json(z.read_text("manifest.json")) {
+    Ok(x) => x
+    Err(e) => abort("manifest 解析失败: \{e}")
+  }
+  let counts = match j.get("counts") {
+    Some(c) => c
+    None => abort("manifest 缺 counts")
+  }
+  // 1) 层数是**递归**的：l1 + g1 + 组内 l2/l3 + l4 = 5（顶层只有 3）
+  assert_eq(
+    num_field(counts, "layers"),
+    5.0,
+    msg="counts.layers 应数组内层（顶层只有 3）",
+  )
+  // 2) 资产数与容器里真实条目一致
+  assert_eq(num_field(counts, "assets"), 1.0, msg="counts.assets 应为 1")
+  assert_eq(
+    num_field(counts, "assets").to_int(),
+    real_assets.length(),
+    msg="counts.assets 与容器里真实资产条目数不一致",
+  )
+  // 3) 参数数与 design.json 里的一致
+  assert_eq(num_field(counts, "params"), 1.0)
+  // 4) asset_index 必须与真实条目**逐个**对上（不许漏、不许多）
+  let idx = match j.get("asset_index") {
+    Some(@core.JValue::JArr(a)) => a
+    _ => abort("manifest 缺 asset_index 数组")
+  }
+  let listed : Array[String] = []
+  for it in idx {
+    match it.as_str() {
+      Some(s) => listed.push("assets/sha256/" + s)
+      None => abort("asset_index 元素不是字符串")
+    }
+  }
+  assert_eq(
+    listed.length(),
+    real_assets.length(),
+    msg="asset_index 与真实资产条目数不一致：listed=\{listed.length()} real=\{real_assets.length()}",
+  )
+  for p in listed {
+    assert_true(real_assets.contains(p), msg="asset_index 列了不存在的条目：\{p}")
+  }
+  // 5) vision.previews 的每个路径都必须在容器里真实存在
+  let vj = match @core.parse_json(z.read_text("meta/vision.json")) {
+    Ok(x) => x
+    Err(e) => abort("vision.json 解析失败: \{e}")
+  }
+  let pv = match vj.get("previews") {
+    Some(@core.JValue::JArr(a)) => a
+    _ => abort("vision.json 缺 previews 数组")
+  }
+  assert_eq(pv.length(), 2, msg="previews 应登记 flat + thumb 两张")
+  for it in pv {
+    let name = match it.as_str() {
+      Some(s) => s
+      None => abort("previews 元素不是字符串")
+    }
+    assert_true(
+      z.has(name),
+      msg="vision.json 登记了容器里不存在的预览：\{name}",
+    )
+  }
+  // 6) 三处自述互相对账：design.assets == manifest.asset_index == 真实条目
+  let dj = match @core.parse_json(z.read_text("meta/design.json")) {
+    Ok(x) => x
+    Err(e) => abort("design.json 解析失败: \{e}")
+  }
+  let da = match dj.get("assets") {
+    Some(@core.JValue::JArr(a)) => a
+    _ => abort("design.json 缺 assets")
+  }
+  assert_eq(da.length(), real_assets.length(), msg="design.assets 与真实条目数不一致")
+}
