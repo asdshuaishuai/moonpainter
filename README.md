@@ -33,13 +33,13 @@
 | 图层蒙版 | 几何蒙版（矩形/椭圆 + **圆角 `radius`（仅矩形，超过半边长按半边长夹住）** + **边缘羽化 `feather`（按到边界的真实内距线性过渡，`0`=硬边）** + `invert` 反选，**蒙版外不渲染**）：人类前端可拖拽创建（工具条 ▭/◯），拖拽前用工具条上的滑块设**圆角**（仅矩形）与**羽化**，另有「蒙版反选 / 去蒙版」按钮，AI 可走 `add_mask` / `set_mask` / `remove_mask` 工具；`query-layer` / `list-layers` 报告 `mask` 状态（否则加了蒙版看不出来） |
 | 渲染 | 2×2 子采样 AA、取景渲染（归一化 viewport + 目标宽）、**overlay=1（层 bbox 序号线框 + 3×5 数字标注，像素↔结构对位辅助）**、pick 像素→层 id、直方图/覆盖统计、渲染确定性（golden sha256 锁定） |
 | 容器 | pack/unpack 全环、确定性 pack（两次打包字节一致）、原子落盘（tmp+rename）、八类拒绝路径全测试 |
-| 会话 | 57 个命令（字典 = agent/tools.mbt）、vision 闸、undo/redo（快照栈 ≤64）、编辑历史、P0–P2 lint |
+| 会话 | 58 个命令（字典 = agent/tools.mbt）、vision 闸、undo/redo（快照栈 ≤64）、编辑历史、P0–P2 lint |
 | MVSL 编辑表 | 确定性声明式编辑 IR：**图层级作用域 `layer=<id>`**（算子只作用于指定层——该层先单独栅格化到透明底，选择子在**这一层自己的像素**上求值，再合成回去；**这同时是 `recolor` 边界去污染的正确做法**：半透明边缘的颜色是前景与背景的混合，在合成图上变换会连背景一起偏移，在层栅格上则只作用于纯前景色）+ 谓词选择子（OKLCh 色相环/彩度/OKLab 亮度/几何/渐变/种子连通域/外部 mask 资产，全部输出 [0,1] 软权重场，可 Union/And/Diff 组合）+ 有序算子程序（recolor/temperature/relight，`out=lerp(in,op(in),w)` 软权重过渡）+ 选区精修（grow/shrink/feather/fill_holes/keep_largest/guided filter）+ 保护断言；**是渲染的最终一遍**（`最终图 = apply(编辑表, 层合成底图)`，`render`/`previews/`/`mvsl-impact` 三条出口同一张图）；canonical JSON 往返幂等、旧引擎遇未知算子/更高版本一律拒绝、前视 `stage:` 与带 `stage:` 基准的断言在校验期拦下 |
 | MVSL 闭环 affordance | `select-preview`（选择子→overlay PNG + 覆盖率/bbox/连通域事实，"AI 选 ID 不报坐标"）、`mvsl-impact`（逐算子 diff 证书：改动像素数/ΔE/选区外泄漏率 + 结果 PNG；泄漏率判据是**选择子支撑集**，软过渡带不算泄漏——`out=lerp(in,op(in),w)` 保证支撑集外逐位不变，所以它是不变量/安全网）、`mvsl-assert`（保护区约束违反则命令信封直接 fail，"别动人物"变成机器可验证约束）、`census`（hue×sat 12×3 桶普查 + OKLab L 与 HSV V 均值对照，`within=` 可收窄到某条选择子）、`probe`（邻域统计 + 边缘置信度 + 当前编辑表每个算子/断言在该点的 membership 与连通域 id；**支持 `points=x1,y1;x2,y2;…` 一次探 64 点**，返回数组且每点字段与单点模式逐字段一致——探九宫格不用往返 9 次）、`sel-schema`（选择子/算子语法自证清单：canonical 示例由写出器产出、由同一解析器验回，附量纲与"数值该取哪个字段"）；**lint 也查编辑表**（空操作/断言被违反/空断言/白装算子）；预览**先全分辨率生成再盒平均降采样**，防发丝级软边界被抹掉误判 |
 | wasm SDK | `wasm/` 包：经典 wasm 零 import（默认会话面 `mp_version/mp_reset/mp_exec_in` + in 槽；多会话句柄面 `mp_open/mp_close/mp_exec_h`），Node/浏览器双宿主冒烟 + 合同测试；JS 宿主胶水 `npm/moonpainter-sdk/`（.d.ts 类型化门面） |
 | 底座 | 手写 ZIP 读写 / DEFLATE 压缩 / inflate 解压 / PNG 编解码 / SHA-256（NIST 向量验证）——zip/deflate/inflate 复用自 deepOffice（自有 MIT），PNG 编码复用自 moonviz（自有 MIT），余为本仓库新写 |
 
-**诚实边界**：`params`（命名元参数，`set-param`/`list-params`）是**纯元数据，
+**诚实边界**：`params`（命名元参数，`set-param`/`list-params`/`remove-param`）是**纯元数据，
 没有 live 绑定**——它会被存进容器、被 `list-params` 报出来、随 `inspect` 一起
 显示，但**不影响渲染**，改它不会改任何像素。这是声明过的边界，不是待办埋伏；
 蒙版只有**几何**的（矩形/椭圆 + 圆角 + 羽化 + 反选）——栅格蒙版（画笔涂抹）、live mask（引用下层 alpha）都未做；调整层是叠加式像素算子（不是可反复编辑参数的独立调整层）；文本层只有 ASCII 点阵字形（无 CJK、无字体文件，见 `demo` 的字形表）；其余未做：贝塞尔、图层样式 fx、PSD/AI 等外部格式兼容（远期，见 DESIGN 远期章节）、16/32-bit、CMYK、自由笔刷。线段层占位矩形 w/h 必须为正（水平线请给 h≥描边宽）。

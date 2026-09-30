@@ -189,6 +189,7 @@ pub fn exec(s : Session, line : String) -> String {
     "remove-mask" => cmd_remove_mask(s, tokens)
     "list-params" => cmd_list_params(s)
     "set-param" => cmd_set_param(s, tokens)
+    "remove-param" => cmd_remove_param(s, tokens)
     "render" => cmd_render(s, tokens)
     "pick" => cmd_pick(s, tokens)
     "stats" => cmd_stats(s)
@@ -1285,6 +1286,39 @@ fn cmd_set_param(s : Session, tokens : Array[String]) -> String {
     doc.params.push(p)
   }
   "{\"ok\":true,\"op\":\"set-param\",\"name\":\"\{@core.json_escape(name)}\",\"value\":\"\{@core.json_escape(value)}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+}
+
+///|
+/// 删掉一个命名元参数。`set-param` 的对偶——在此之前 `Param` 表**只增不减**：
+/// `set-param x ""` 只是把值清空，条目还在（实测 count 不变），所以名字写错
+/// 一次就永久留在容器里。纯元数据不参与渲染，但它是会被 `unzip` 读到、
+/// 会随容器分发出去的对外事实。
+fn cmd_remove_param(s : Session, tokens : Array[String]) -> String {
+  if tokens.length() < 2 {
+    return err("用法：remove-param <name>")
+  }
+  let doc = match require_doc(s) {
+    Ok(d) => d
+    Err(e) => return err(e)
+  }
+  let name = tokens[1]
+  let before = doc.params.length()
+  let next : Array[@core.Param] = []
+  for p in doc.params {
+    if p.name != name {
+      next.push(p)
+    }
+  }
+  if next.length() == before {
+    // 不存在就明确报错，不静默成功——静默成功会让调用方以为删掉了
+    return err("元参数不存在：\{name}（list-params 查看现有条目）")
+  }
+  snapshot(s, doc, "remove-param \{name}")
+  doc.params.clear()
+  for p in next {
+    doc.params.push(p)
+  }
+  "{\"ok\":true,\"op\":\"remove-param\",\"name\":\"\{@core.json_escape(name)}\",\"removed\":1,\"count\":\{doc.params.length()},\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
 }
 
 ///|

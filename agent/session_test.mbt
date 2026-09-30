@@ -569,3 +569,36 @@ test "add-text 的显式 fill 不再被写死的黑色盖掉" {
   }
   assert_true(any, msg="半透明文本也必须真的画出像素")
 }
+
+///|
+test "remove-param：只有它是 set-param 的对偶，删不掉就删不掉" {
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 32 32")
+  let _ = run(s, "set-param 主色 #C81E1E")
+  let _ = run(s, "set-param 网点 300")
+  assert_true(run(s, "list-params").contains("\"count\":2"), msg=run(s, "list-params"))
+  // **这是补它的理由**：`set-param 主色 ""` 只是把值清空，条目还在
+  let _ = run(s, "set-param 主色 \"\"")
+  assert_true(
+    run(s, "list-params").contains("\"count\":2"),
+    msg="清空值不该删掉条目（这正是需要 remove-param 的原因）",
+  )
+  // 真删
+  let rm = run(s, "remove-param 主色")
+  assert_true(rm.contains("\"op\":\"remove-param\""), msg=rm)
+  assert_true(rm.contains("\"count\":1"), msg=rm)
+  let lp = run(s, "list-params")
+  assert_true(lp.contains("\"count\":1"), msg=lp)
+  assert_true(!lp.contains("主色"), msg="删掉的参数不该还在列表里：\{lp}")
+  assert_true(lp.contains("网点"), msg="不该误删别的参数：\{lp}")
+  // 不存在 → 明确报错（静默成功会让调用方以为删掉了）
+  let miss = run(s, "remove-param 不存在")
+  assert_true(miss.has_prefix("{\"error\":"), msg=miss)
+  assert_true(miss.contains("元参数不存在"), msg=miss)
+  // 删得掉也要撤得回
+  let fp_after = @agent.exec(s, "fingerprint")
+  let _ = run(s, "undo")
+  assert_true(run(s, "list-params").contains("\"count\":2"), msg="undo 应把参数恢复回来")
+  assert_true(@agent.exec(s, "fingerprint") != fp_after, msg="undo 后指纹应变")
+}

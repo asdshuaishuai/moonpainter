@@ -267,6 +267,16 @@ MUTS = [
         "killed",
     ),
     (
+        "R12",
+        "remove-param 不真删（只清空值，条目留下）",
+        "agent/session.mbt",
+        """    if p.name != name {
+      next.push(p)
+    }""",
+        """    next.push({ name: p.name, value: "" })""",
+        "killed",
+    ),
+    (
         "R5",
         "圆角矩形 SDF 漏掉 min(max(q),0) 项（内部所有点的内距算成 0）",
         "render/scene.mbt",

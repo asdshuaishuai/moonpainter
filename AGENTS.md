@@ -94,7 +94,7 @@ python3 mutation_scan.py        # 变异门：注入语义 bug 看测试能否�
 python3 mutation_scan.py --check-anchors   # 只校验锚点唯一命中（秒级，已进 verify.sh）
 python3 mutation_scan.py R3 R4  # 按 id 只跑指定的变异（改完测试想快速复验）
 # 锚点失效 → INVALID → **退出码 1**（不再被静默排除在统计之外）
-moon run --target native cli    # stdin 行协议；help 查看全部 57 个命令
+moon run --target native cli    # stdin 行协议；help 查看全部 58 个命令
 ```
 
 ## demo/agent 层附加纪律（demo 包不适用"零第三方依赖"铁律）

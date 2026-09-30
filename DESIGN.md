@@ -196,11 +196,11 @@ manifest 的 `mvsl` 版本块 pin 住四个独立版本号（`render_contract` /
   **空断言**即保护断言的选择子零命中（P1——恒真，比"被违反"更坏，因为它给的是虚假的安心）。
   空编辑表是合法状态，不报条目——lint 不该对「我还没改任何东西」报警。
 
-## 6. 命令集（57 个；字典 = agent/tools.mbt 单一事实源）
+## 6. 命令集（58 个；字典 = agent/tools.mbt 单一事实源）
 
 会话：`session-open` `list-tools` `help`；文档：`new` `set-canvas` `list-layers` `query-layer` `lint`；
 绘制：`add-rect/ellipse/polygon/line` `add-image`（b64）`set-style` `move` `resize` `rotate` `rename` `tag` `delete` `visible` `reorder` `group` `ungroup`；
-元参数：`list-params` `set-param`；视觉：`render` `pick` `stats` `census` `probe`；
+元参数：`list-params` `set-param` `remove-param`；视觉：`render` `pick` `stats` `census` `probe`；
 修图：`add-paint` `brush` `erase` `crop` `sample` `add-adjust` `add-mask` `set-mask` `remove-mask`；
 MVSL：`mvsl-set` `mvsl-show` `mvsl-clear` `select-preview` `mvsl-impact` `mvsl-assert`；
 历史/容器：`fingerprint` `inspect` `edits` `undo` `redo` `save-mpd-b64` `open-mpd-b64`；

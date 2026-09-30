@@ -71,7 +71,8 @@ pub fn list_tools() -> Array[AgentTool] {
   add("sample", "sample <x> <y>：吸管取色（合成像素 hex + 命中层）", "vision")
   // 元参数
   add("list-params", "元参数表", "meta")
-  add("set-param", "set-param <name> <value>（纯元数据；live 绑定属下轮）", "meta")
+  add("set-param", "set-param <name> <value>（纯元数据，不影响渲染；同名覆盖。live 绑定属下轮）", "meta")
+  add("remove-param", "remove-param <name>：删掉一个命名元参数（set-param 的对偶；不存在则报错，不静默成功）", "meta")
   // 视觉
   add("render", "render [width] [vx0 vy0 vx1 vy1] [overlay=1]：取景渲染 → PNG b64 + sha256；overlay 叠加层 bbox 序号线框", "vision")
   add("pick", "pick <x> <y>：画布坐标 → 最上层层 id", "both")
