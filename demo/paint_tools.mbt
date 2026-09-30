@@ -219,6 +219,11 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
     // MVSL 确定性编辑表（B5）：谓词选择子 + 有序算子程序 + 保护断言。
     // 这些工具是"改颜色"的正路——比叠加调整层更精确、可断言、可随容器落盘。
     make_tool(
+      "sel_schema",
+      "选择子/算子语法自证清单：每种原子选择子与组合子的 canonical 示例 + 量纲/取值范围 + **颜色数值该从哪个字段取**。写任何选择子之前先调它——字段名与量纲猜错的表现是「命令成功但一个像素都没选中」，非常难自查。",
+      [],
+    ),
+    make_tool(
       "census",
       "颜色普查：全图 hue×sat 桶（12×3）+ OKLab L 与 HSV V 均值。给 within_json 时只统计该选择子的区域，并附覆盖率/bbox/连通域事实。**先普查再选色**，不要靠猜。",
       [
@@ -362,6 +367,7 @@ pub impl @posoco.ToolProvider for PaintTools with fn execute(
     "lint" => "lint"
     "save_mpd" => "save-mpd-b64"
     // MVSL 编辑表（B5）
+    "sel_schema" => "sel-schema"
     "census" => "census"
     "probe" => "probe"
     "select_preview" => "select-preview"
@@ -463,6 +469,7 @@ pub impl @posoco.ToolProvider for PaintTools with fn execute(
       l
     }
     // MVSL：模型只写 JSON，base64 由 SDK 做（不该让 LLM 手搓 base64）
+    "sel_schema" => "sel-schema"
     "census" => {
       let mut l = "census"
       let within = arg(call, "within_json")

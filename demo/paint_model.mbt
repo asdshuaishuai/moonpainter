@@ -523,7 +523,8 @@ fn PaintModel::mock_chat(
   let wants_badge = request.contains("徽章") || request.contains("圆")
   let wants_cool = request.contains("冷") || request.contains("蓝")
   let wants_precise = request.contains("精准") || request.contains("编辑表")
-  // 脚本：精准改色 = MVSL 闭环 4 轮；徽章 = 3 工具轮；换色 = 2 轮；默认 = 2 轮
+  // 脚本：精准改色 = MVSL 闭环 5 轮（先看语法再取数值）；
+  // 徽章 = 3 工具轮；换色 = 2 轮；默认 = 2 轮
   if wants_precise {
     // 选择子：整幅画布（demo 场景小，几何谓词足够）
     let sel = "{\"basis\":\"base\",\"expr\":{\"t\":\"geo\",\"shape\":\"rect\",\"w\":{\"x\":0,\"y\":0,\"w\":640,\"h\":480,\"feather\":0}}}"
@@ -531,32 +532,37 @@ fn PaintModel::mock_chat(
     match step {
       0 =>
         return with_calls(
-          "先普查画面颜色，不猜。",
-          [call("p1", "census", "{}")],
+          "先看选择子语法，再取数值——不猜字段名和量纲。",
+          [call("p1", "sel_schema", "{}")],
         )
       1 =>
+        return with_calls(
+          "普查画面颜色，数值只取 sel_ 前缀的字段。",
+          [call("p2", "census", "{}")],
+        )
+      2 =>
         return with_calls(
           "试选一下目标区域，看图确认。",
           [
             call(
-              "p2",
+              "p3",
               "select_preview",
               "{\"sel_json\":" + json_quote(sel) + ",\"max\":320}",
             ),
           ],
         )
-      2 =>
+      3 =>
         return with_calls(
           "装编辑表：整体转暖。",
-          [call("p3", "mvsl_set", "{\"program_json\":" + json_quote(prog) + "}")],
+          [call("p4", "mvsl_set", "{\"program_json\":" + json_quote(prog) + "}")],
         )
-      3 =>
+      4 =>
         return with_calls(
           "看影响证书 + 校验保护断言 + 渲染确认。",
           [
-            call("p4", "mvsl_impact", "{\"max\":320}"),
-            call("p5", "mvsl_assert", "{}"),
-            call("p6", "render", "{\"w\":480}"),
+            call("p5", "mvsl_impact", "{\"max\":320}"),
+            call("p6", "mvsl_assert", "{}"),
+            call("p7", "render", "{\"w\":480}"),
           ],
         )
       _ => {

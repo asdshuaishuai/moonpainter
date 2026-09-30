@@ -100,7 +100,8 @@ async test "AI 修图端到端：mock 模型 × wasm 引擎 × 全程可见 × u
   let mut mvsl_tools = 0
   for i = log_before; i < log_lines.val.length(); i = i + 1 {
     let l = log_lines.val[i]
-    if l.contains("census") ||
+    if l.contains("sel_schema") ||
+      l.contains("census") ||
       l.contains("select_preview") ||
       l.contains("mvsl_set") ||
       l.contains("mvsl_impact") ||
@@ -108,7 +109,7 @@ async test "AI 修图端到端：mock 模型 × wasm 引擎 × 全程可见 × u
       mvsl_tools = mvsl_tools + 1
     }
   }
-  assert_true(mvsl_tools >= 5, msg="MVSL 工具调用过少：\{mvsl_tools}")
+  assert_true(mvsl_tools >= 6, msg="MVSL 工具调用过少：\{mvsl_tools}")
   // 图像附件：试选覆盖图 + 影响结果图 + 渲染 = 3 次
   assert_eq(renders - renders_before, 3, msg="MVSL 回合的图像附件数")
   // 编辑表真的装上了，且进了渲染管线
