@@ -32,9 +32,9 @@
 | 绘制 | 矩形（圆角）/椭圆/线段/多边形，纯色+线性渐变填充，描边，7 种混合（normal/multiply/screen/overlay/darken/lighten/difference，W3C 合成公式），透明度，旋转（Taylor 三角）+ **翻转（flip h/v/both，先翻转后旋转）**，编组（直通），PNG 位图导入（8-bit RGB/RGBA/灰非交错） |
 | 渲染 | 2×2 子采样 AA、取景渲染（归一化 viewport + 目标宽）、**overlay=1（层 bbox 序号线框 + 3×5 数字标注，像素↔结构对位辅助）**、pick 像素→层 id、直方图/覆盖统计、渲染确定性（golden sha256 锁定） |
 | 容器 | pack/unpack 全环、确定性 pack（两次打包字节一致）、原子落盘（tmp+rename）、八类拒绝路径全测试 |
-| 会话 | 56 个命令（字典 = agent/tools.mbt）、vision 闸、undo/redo（快照栈 ≤64）、编辑历史、P0–P2 lint |
-| MVSL 编辑表 | 确定性声明式编辑 IR：谓词选择子（OKLCh 色相环/OKLab 亮度/几何/渐变/种子连通域/外部 mask 资产，全部输出 [0,1] 软权重场，可 Union/And/Diff 组合）+ 有序算子程序（recolor/temperature/relight，`out=lerp(in,op(in),w)` 去污染）+ 选区精修（grow/shrink/feather/fill_holes/keep_largest/guided filter）+ 保护断言；**是渲染的最终一遍**（`最终图 = apply(编辑表, 层合成底图)`，`render`/`previews/`/`mvsl-impact` 三条出口同一张图）；canonical JSON 往返幂等、旧引擎遇未知算子/更高版本一律拒绝、前视 `stage:` 与带 `stage:` 基准的断言在校验期拦下 |
-| MVSL 闭环 affordance | `select-preview`（选择子→overlay PNG + 覆盖率/bbox/连通域事实，"AI 选 ID 不报坐标"）、`mvsl-impact`（逐算子 diff 证书：改动像素数/ΔE/选区外泄漏率 + 结果 PNG）、`mvsl-assert`（保护区约束违反则命令信封直接 fail，"别动人物"变成机器可验证约束）、`census`（hue×sat 12×3 桶普查 + OKLab L 与 HSV V 均值对照，`within=` 可收窄到某条选择子）、`probe`（单点邻域统计 + 边缘置信度 + 当前编辑表每个算子/断言在该点的 membership 与连通域 id）；预览**先全分辨率生成再盒平均降采样**，防发丝级软边界被抹掉误判 |
+| 会话 | 57 个命令（字典 = agent/tools.mbt）、vision 闸、undo/redo（快照栈 ≤64）、编辑历史、P0–P2 lint |
+| MVSL 编辑表 | 确定性声明式编辑 IR：谓词选择子（OKLCh 色相环/彩度/OKLab 亮度/几何/渐变/种子连通域/外部 mask 资产，全部输出 [0,1] 软权重场，可 Union/And/Diff 组合）+ 有序算子程序（recolor/temperature/relight，`out=lerp(in,op(in),w)` 去污染）+ 选区精修（grow/shrink/feather/fill_holes/keep_largest/guided filter）+ 保护断言；**是渲染的最终一遍**（`最终图 = apply(编辑表, 层合成底图)`，`render`/`previews/`/`mvsl-impact` 三条出口同一张图）；canonical JSON 往返幂等、旧引擎遇未知算子/更高版本一律拒绝、前视 `stage:` 与带 `stage:` 基准的断言在校验期拦下 |
+| MVSL 闭环 affordance | `select-preview`（选择子→overlay PNG + 覆盖率/bbox/连通域事实，"AI 选 ID 不报坐标"）、`mvsl-impact`（逐算子 diff 证书：改动像素数/ΔE/选区外泄漏率 + 结果 PNG）、`mvsl-assert`（保护区约束违反则命令信封直接 fail，"别动人物"变成机器可验证约束）、`census`（hue×sat 12×3 桶普查 + OKLab L 与 HSV V 均值对照，`within=` 可收窄到某条选择子）、`probe`（单点邻域统计 + 边缘置信度 + 当前编辑表每个算子/断言在该点的 membership 与连通域 id）、`sel-schema`（选择子/算子语法自证清单：canonical 示例由写出器产出、由同一解析器验回，附量纲与"数值该取哪个字段"）；**lint 也查编辑表**（空操作/断言被违反/空断言/白装算子）；预览**先全分辨率生成再盒平均降采样**，防发丝级软边界被抹掉误判 |
 | wasm SDK | `wasm/` 包：经典 wasm 零 import（默认会话面 `mp_version/mp_reset/mp_exec_in` + in 槽；多会话句柄面 `mp_open/mp_close/mp_exec_h`），Node/浏览器双宿主冒烟 + 合同测试；JS 宿主胶水 `npm/moonpainter-sdk/`（.d.ts 类型化门面） |
 | 底座 | 手写 ZIP 读写 / DEFLATE 压缩 / inflate 解压 / PNG 编解码 / SHA-256（NIST 向量验证）——zip/deflate/inflate 复用自 deepOffice（自有 MIT），PNG 编码复用自 moonviz（自有 MIT），余为本仓库新写 |
 
@@ -119,7 +119,7 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
 4. CLI 子进程端到端：管道喂命令（含 add-image 位图资产）→ 落盘 `.mpd`；
 5. **独立外部验证**：系统 `unzip -t` 校验容器 + 条目齐全性 + manifest 格式标识 + 元参数层可直接文本阅读——不依赖引擎自证；
 6. **open→save 字节一致**：载入容器后原样重打包，与原文件逐字节相同（确定性 pack 的进程级闭环）；
-7. **MVSL 命令面 + 渲染管线闭环（子进程 e2e）**：安装编辑表 → `render` 与 `mvsl-impact` 的 sha256 必须**相同**（编辑表真的进了渲染管线，不只是被存下来）→ 校验改动像素数与选区外泄漏率 0 → `mvsl-assert`（合法程序放行、侵犯保护区的程序被拦下并给出条数）→ 编辑表随容器往返且开→存字节一致 → 带/不带编辑表的 `previews/flat.png` 必须不同（预览不撒谎）。
+7. **MVSL 命令面 + 渲染管线闭环（子进程 e2e）**：安装编辑表 → `render` 与 `mvsl-impact` 的 sha256 必须**相同**（编辑表真的进了渲染管线，不只是被存下来）→ 校验改动像素数与选区外泄漏率 0 → `mvsl-assert`（合法程序放行、侵犯保护区的程序被拦下并给出条数）→ **`lint` 必须报出必然空选的编辑表与违约的保护断言**（这类失败其它命令全返回 ok）→ 编辑表随容器往返且开→存字节一致 → 带/不带编辑表的 `previews/flat.png` 必须不同（预览不撒谎）。
 
 ## 包结构（依赖严格无环）
 
