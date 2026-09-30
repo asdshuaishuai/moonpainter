@@ -1,7 +1,7 @@
 # MoonPainter — Agent 驱动的图层绘制引擎
 
 > 状态：**0.1.0（.mpd 容器 v2 + 参数化绘制 + AI 修图 demo + MVSL 确定性编辑 IR 引擎已落地：
-> native 177 项 / wasm-gc 175 项测试全绿；`./verify.sh` 八步验证门全过）**。
+> native 185 项 / wasm-gc 183 项测试全绿；`./verify.sh` 八步验证门全过）**。
 > 设计书 [DESIGN.md](./DESIGN.md) · 方案与验收 [PLAN.md](./PLAN.md) ·
 > MVSL 规划与评审对照 [PLAN-MVSL.md](./PLAN-MVSL.md) · AI 修图 demo 见下节。
 
@@ -29,7 +29,7 @@
 
 | 域 | 内容 |
 | :-- | :-- |
-| 绘制 | 矩形（圆角）/椭圆/线段/多边形，纯色+线性渐变填充（**端点归一化到本层 bbox 的 0..1**；与同命令的像素参数 x/y/w/h 不同，写错会被入口拒绝并给出换算值），描边，7 种混合（normal/multiply/screen/overlay/darken/lighten/difference，W3C 合成公式），透明度，旋转（Taylor 三角）+ **翻转（flip h/v/both，先翻转后旋转）**，编组（直通），PNG 位图导入（8-bit RGB/RGBA/灰非交错） |
+| 绘制 | 矩形（圆角）/椭圆/线段/多边形，纯色+线性渐变填充（颜色支持 `#RRGGBB[AA]`，**AA 真的参与混合**：50% 红压白 = `#FF7F7F`；**端点归一化到本层 bbox 的 0..1**；与同命令的像素参数 x/y/w/h 不同，写错会被入口拒绝并给出换算值），描边，7 种混合（normal/multiply/screen/overlay/darken/lighten/difference，W3C 合成公式），透明度，旋转（Taylor 三角）+ **翻转（flip h/v/both，先翻转后旋转）**，编组（直通），PNG 位图导入（8-bit RGB/RGBA/灰非交错） |
 | 图层蒙版 | 几何蒙版（矩形/椭圆 + **圆角 `radius`（仅矩形，超过半边长按半边长夹住）** + **边缘羽化 `feather`（按到边界的真实内距线性过渡，`0`=硬边）** + `invert` 反选，**蒙版外不渲染**）：人类前端可拖拽创建（工具条 ▭/◯）并有「蒙版反选 / 去蒙版」按钮，AI 可走 `add_mask` / `set_mask` / `remove_mask` 工具；`query-layer` / `list-layers` 报告 `mask` 状态（否则加了蒙版看不出来） |
 | 渲染 | 2×2 子采样 AA、取景渲染（归一化 viewport + 目标宽）、**overlay=1（层 bbox 序号线框 + 3×5 数字标注，像素↔结构对位辅助）**、pick 像素→层 id、直方图/覆盖统计、渲染确定性（golden sha256 锁定） |
 | 容器 | pack/unpack 全环、确定性 pack（两次打包字节一致）、原子落盘（tmp+rename）、八类拒绝路径全测试 |
@@ -54,8 +54,7 @@ MVSL 侧的诚实边界：编辑表是**文档级的最终一遍**——`最终�
 编辑**，与上面"`stage:` 只切到算子序号"是同一件事的两面。渲染底图**永远不透明**
 （`render_layers` 先铺满白底再画图层，`render_test` 有整幅"无半透明像素"断言），
 所以编辑表根本处理不到半透明像素。外部 mask 资产只能引用、引擎不
-内置任何分割模型（未登记即报精确错误，不降级）。`probe` 的单命令多点批量
-入口未加（多次 probe 可覆盖）。
+内置任何分割模型（未登记即报精确错误，不降级）。
 HSV 只做 selector/analysis affordance，算子一律走 OKLab/OKLCh（V 不是感知亮度）。
 
 ## 快速上手
@@ -147,7 +146,7 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
 - **P3 manifest 的 `counts` 无人校验**：把 `layers` 和 `assets` 计数互换全部测试通过——
   而 `counts` 正是工具/审阅者据以判断"容器里有什么"的对外事实。
 
-当前 35 个变异中 34 个被抓住，唯一存活的 M2 是**已确认的等价变异**。
+当前 37 个变异中 36 个被抓住，唯一存活的 M2 是**已确认的等价变异**。
 变异门自己也有一个静默失效模式：锚点文本被重构改掉或变得不唯一，那个变异就
 **再也没跑过**，而汇总里的「N 个变异全部通过」照旧好看（实测踩过：两个变异
 静静失效了一轮）。所以 `verify.sh` 第 9 步用 `--check-anchors` 秒级校验

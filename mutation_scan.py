@@ -227,6 +227,22 @@ MUTS = [
     ),
     # ---- 命令行分词（自由文本的空格靠它，见 tokenize_line）----
     (
+        "R7",
+        "填充/描边色自带的 alpha 又被丢掉（半透明渲染成不透明）",
+        "render/scene.mbt",
+        '        let ca = (color >> 24) & 0xFF\n        let cover = if ca >= 255 { cover } else { (cover * ca + 127) / 255 }',
+        '        let cover = cover',
+        "killed",
+    ),
+    (
+        "R8",
+        "add-text 又无条件覆盖用户 fill（显式颜色静默失效）",
+        "agent/session.mbt",
+        '  let text_fill = match m.get("fill") {\n    Some(_) => layer.fill\n    None => @core.Fill::Solid(0xFF000000)\n  }',
+        '  let text_fill = @core.Fill::Solid(0xFF000000)',
+        "killed",
+    ),
+    (
         "R5",
         "圆角矩形 SDF 漏掉 min(max(q),0) 项（内部所有点的内距算成 0）",
         "render/scene.mbt",
