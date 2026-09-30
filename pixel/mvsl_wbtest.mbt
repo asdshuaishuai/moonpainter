@@ -582,6 +582,36 @@ test "smoothstep：羽化曲线是平滑曲线而非线性（线性退化会被�
 }
 
 ///|
+test "半透明像素：recolor 旋转的是直通前景色（当前行为正确，别去乱修）" {
+  // 渲染输出的是**直通**色：alpha=128 的纯红像素，RGB 仍是 (255,0,0)
+  // ——合成到透明背景时 unpremul 把 α 除掉了（见 render 的半透明合成
+  // 测试）。所以对它做 recolor，旋转的就是前景色本身，**这是正确的**，
+  // 不需要"去污染"。把它锁住，防止有人照"半透明边缘要先去污染"的直觉
+  // 去改错地方（那个问题在合成底图上根本无解，见 render 的判定性测试）。
+  let half_red = 0x80FF0000
+  let rotated = apply_recolor(half_red, 120.0)
+  assert_eq(lsr32(rotated, 24), 0x80, msg="alpha 必须原样保留")
+  let a = oklab_to_oklch(argb_to_oklab(rotated))
+  let pure = apply_recolor(0xFFFF0000, 120.0)
+  let b = oklab_to_oklch(argb_to_oklab(pure))
+  let dh = if a.h > b.h {
+    a.h - b.h
+  } else {
+    b.h - a.h
+  }
+  assert_true(dh < 0.5, msg="半透明红与不透明红必须转到同一色相，差 \{dh}")
+  let dc = if a.c > b.c {
+    a.c - b.c
+  } else {
+    b.c - a.c
+  }
+  assert_true(
+    dc < 0.01,
+    msg="彩度也必须一致（说明 RGB 没被背景稀释），差 \{dc}",
+  )
+}
+
+///|
 test "MVSL 数值：几何选择子的 feather 真的产生软边界" {
   // 上面那条覆盖的是**色彩窗**的羽化。几何窗（rect/ellipse）是另一个入口：
   // 把 `window_membership(d, g.feather, 1.0)` 的 feather 改成 0（硬边）时

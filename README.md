@@ -33,7 +33,7 @@
 | 渲染 | 2×2 子采样 AA、取景渲染（归一化 viewport + 目标宽）、**overlay=1（层 bbox 序号线框 + 3×5 数字标注，像素↔结构对位辅助）**、pick 像素→层 id、直方图/覆盖统计、渲染确定性（golden sha256 锁定） |
 | 容器 | pack/unpack 全环、确定性 pack（两次打包字节一致）、原子落盘（tmp+rename）、八类拒绝路径全测试 |
 | 会话 | 57 个命令（字典 = agent/tools.mbt）、vision 闸、undo/redo（快照栈 ≤64）、编辑历史、P0–P2 lint |
-| MVSL 编辑表 | 确定性声明式编辑 IR：谓词选择子（OKLCh 色相环/彩度/OKLab 亮度/几何/渐变/种子连通域/外部 mask 资产，全部输出 [0,1] 软权重场，可 Union/And/Diff 组合）+ 有序算子程序（recolor/temperature/relight，`out=lerp(in,op(in),w)` 去污染）+ 选区精修（grow/shrink/feather/fill_holes/keep_largest/guided filter）+ 保护断言；**是渲染的最终一遍**（`最终图 = apply(编辑表, 层合成底图)`，`render`/`previews/`/`mvsl-impact` 三条出口同一张图）；canonical JSON 往返幂等、旧引擎遇未知算子/更高版本一律拒绝、前视 `stage:` 与带 `stage:` 基准的断言在校验期拦下 |
+| MVSL 编辑表 | 确定性声明式编辑 IR：谓词选择子（OKLCh 色相环/彩度/OKLab 亮度/几何/渐变/种子连通域/外部 mask 资产，全部输出 [0,1] 软权重场，可 Union/And/Diff 组合）+ 有序算子程序（recolor/temperature/relight，`out=lerp(in,op(in),w)` 软权重过渡）+ 选区精修（grow/shrink/feather/fill_holes/keep_largest/guided filter）+ 保护断言；**是渲染的最终一遍**（`最终图 = apply(编辑表, 层合成底图)`，`render`/`previews/`/`mvsl-impact` 三条出口同一张图）；canonical JSON 往返幂等、旧引擎遇未知算子/更高版本一律拒绝、前视 `stage:` 与带 `stage:` 基准的断言在校验期拦下 |
 | MVSL 闭环 affordance | `select-preview`（选择子→overlay PNG + 覆盖率/bbox/连通域事实，"AI 选 ID 不报坐标"）、`mvsl-impact`（逐算子 diff 证书：改动像素数/ΔE/选区外泄漏率 + 结果 PNG；泄漏率判据是**选择子支撑集**，软过渡带不算泄漏——`out=lerp(in,op(in),w)` 保证支撑集外逐位不变，所以它是不变量/安全网）、`mvsl-assert`（保护区约束违反则命令信封直接 fail，"别动人物"变成机器可验证约束）、`census`（hue×sat 12×3 桶普查 + OKLab L 与 HSV V 均值对照，`within=` 可收窄到某条选择子）、`probe`（单点邻域统计 + 边缘置信度 + 当前编辑表每个算子/断言在该点的 membership 与连通域 id）、`sel-schema`（选择子/算子语法自证清单：canonical 示例由写出器产出、由同一解析器验回，附量纲与"数值该取哪个字段"）；**lint 也查编辑表**（空操作/断言被违反/空断言/白装算子）；预览**先全分辨率生成再盒平均降采样**，防发丝级软边界被抹掉误判 |
 | wasm SDK | `wasm/` 包：经典 wasm 零 import（默认会话面 `mp_version/mp_reset/mp_exec_in` + in 槽；多会话句柄面 `mp_open/mp_close/mp_exec_h`），Node/浏览器双宿主冒烟 + 合同测试；JS 宿主胶水 `npm/moonpainter-sdk/`（.d.ts 类型化门面） |
 | 底座 | 手写 ZIP 读写 / DEFLATE 压缩 / inflate 解压 / PNG 编解码 / SHA-256（NIST 向量验证）——zip/deflate/inflate 复用自 deepOffice（自有 MIT），PNG 编码复用自 moonviz（自有 MIT），余为本仓库新写 |
@@ -45,7 +45,11 @@ MVSL 侧的诚实边界：编辑表是**文档级的最终一遍**——`最终�
 （`verify.sh` 第 7 步断言 render 与 impact 的 sha256 相同）。它还不能
 "只作用于某几个图层"或参与图层内部的混合序（那需要把图层单独栅格化的中间
 缓冲；`stage:` 基准目前只切到算子序号，不切图层）。`recolor` 的半透明边缘
-混色分离（`I = αF + (1−α)B`，只改 F）未做。外部 mask 资产只能引用、引擎不
+混色分离（`I = αF + (1−α)B`，只改 F）**在合成底图上无解**（不是"未做"）：反演要
+同时知道前景覆盖率 α 与背景色 B，而 α 在层合成那一刻就被乘掉了——"白底 + 50% 红"
+与"纯粉红"在底图上逐位相同（`render_test` 有判定性测试）。前置条件是**图层级
+编辑**，与上面"`stage:` 只切到算子序号"是同一件事的两面。当前对半透明像素的
+recolor 是**对的**：输出是直通色，旋转的就是前景色本身（`mvsl_wbtest` 锁住）。外部 mask 资产只能引用、引擎不
 内置任何分割模型（未登记即报精确错误，不降级）。`probe` 的单命令多点批量
 入口未加（多次 probe 可覆盖）。
 HSV 只做 selector/analysis affordance，算子一律走 OKLab/OKLCh（V 不是感知亮度）。
