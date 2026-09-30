@@ -219,6 +219,22 @@ MUTS = [
     ),
     # ---- 命令行分词（自由文本的空格靠它，见 tokenize_line）----
     (
+        "R5",
+        "圆角矩形 SDF 漏掉 min(max(q),0) 项（内部所有点的内距算成 0）",
+        "render/scene.mbt",
+        '  let mx = if qx > qy { qx } else { qy }\n  let mn = if mx < 0.0 { mx } else { 0.0 }\n  Double::sqrt(ox * ox + oy * oy) + mn - r',
+        '  Double::sqrt(ox * ox + oy * oy) - r',
+        "killed",
+    ),
+    (
+        "R6",
+        "蒙版 feather 被忽略（羽化参数存了不用）",
+        "render/scene.mbt",
+        '  let cover = if mask.feather > 0.0 {',
+        '  let cover = if mask.feather > 1000000.0 {',
+        "killed",
+    ),
+    (
         "R3",
         "蒙版 radius 又被忽略（存了不用，退回静默失败）",
         "render/scene.mbt",

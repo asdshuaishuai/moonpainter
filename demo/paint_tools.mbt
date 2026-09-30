@@ -270,7 +270,11 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
         ("y", "number:req:蒙版左上 y（像素，画布坐标）"),
         ("w", "number:req:蒙版宽（像素）"),
         ("h", "number:req:蒙版高（像素）"),
-        ("radius", "number:圆角（像素，仅 rect）"),
+        ("radius", "number:圆角（像素，仅 rect；超过半边长按半边长夹住）"),
+        (
+          "feather",
+          "number:边缘羽化（像素，默认 0=硬边）。过渡带在**蒙版内侧**：边界处覆盖 0，向内 feather 像素处到满覆盖。矩形与椭圆都吃",
+        ),
         ("invert", "string:true 则反选（蒙版内反而不渲染）"),
       ],
     ),
@@ -526,7 +530,7 @@ pub impl @posoco.ToolProvider for PaintTools with fn execute(
     "add_mask" => {
       let id = arg(call, "id")
       let kind = arg(call, "kind")
-      let tail = args_to_tail(call.arguments, ["x", "y", "w", "h", "radius", "invert"])
+      let tail = args_to_tail(call.arguments, ["x", "y", "w", "h", "radius", "feather", "invert"])
       "add-mask \{id} kind=\{kind} \{tail}"
     }
     "set_mask" => "set-mask \{arg(call, "id")} \{arg(call, "invert")}"

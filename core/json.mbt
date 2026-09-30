@@ -515,7 +515,7 @@ fn mask_json(m : LayerMask?) -> String {
         Ellipse => "ellipse"
         _ => "rect"
       }
-      "{\"kind\":\"\{kind}\",\"x\":\{fmt_num(mask.x)},\"y\":\{fmt_num(mask.y)},\"w\":\{fmt_num(mask.w)},\"h\":\{fmt_num(mask.h)},\"radius\":\{fmt_num(mask.radius)},\"invert\":\{mask.invert}}"
+      "{\"kind\":\"\{kind}\",\"x\":\{fmt_num(mask.x)},\"y\":\{fmt_num(mask.y)},\"w\":\{fmt_num(mask.w)},\"h\":\{fmt_num(mask.h)},\"radius\":\{fmt_num(mask.radius)},\"feather\":\{fmt_num(mask.feather)},\"invert\":\{mask.invert}}"
     }
   }
 }
@@ -753,6 +753,7 @@ fn mask_of(v : JValue) -> LayerMask? {
               w: num_f(mv, "w"),
               h: num_f(mv, "h"),
               radius: num_f(mv, "radius"),
+              feather: num_f(mv, "feather"),
               invert: bool_field(mv, "invert"),
             },
           )
@@ -765,6 +766,7 @@ fn mask_of(v : JValue) -> LayerMask? {
               w: num_f(mv, "w"),
               h: num_f(mv, "h"),
               radius: num_f(mv, "radius"),
+              feather: num_f(mv, "feather"),
               invert: bool_field(mv, "invert"),
             },
           )

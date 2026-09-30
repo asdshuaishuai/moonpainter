@@ -458,3 +458,40 @@ test "蒙版圆角：radius 真的切掉四角（曾经是存了不用的死参�
   assert_eq(@codec.rgba_get(ell_r, 0, 0), @codec.rgba_get(ell, 0, 0))
   assert_eq(@codec.rgba_get(ell_r, 5, 5), @codec.rgba_get(ell, 5, 5))
 }
+
+///|
+test "蒙版羽化：feather 按内距线性过渡，0 时仍是硬边" {
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 40 40")
+  let _ = run(s, "add-rect x=0 y=0 w=40 h=40 fill=#FF0000FF id=r")
+  let env = @render.RenderEnv::new()
+  // feather=0（默认）：硬边，(1,1) 已是满覆盖
+  let _ = run(s, "add-mask r kind=rect x=0 y=0 w=20 h=20")
+  let hard = @render.render_doc(unwrap_doc(s), env)
+  assert_eq(@codec.rgba_get(hard, 1, 1), 0xFFFF0000)
+  // feather=4：内距 1/2/3/4 → 覆盖 0.25/0.5/0.75/1.0
+  // （红 25/50/75/100% 压在白底上 → 255×0.75=191、×0.5=127、×0.25=64）
+  let _ = run(s, "remove-mask r")
+  let _ = run(s, "add-mask r kind=rect x=0 y=0 w=20 h=20 feather=4")
+  let soft = @render.render_doc(unwrap_doc(s), env)
+  assert_eq(@codec.rgba_get(soft, 1, 1), 0xFFFFBFBF) // 覆盖 0.25
+  assert_eq(@codec.rgba_get(soft, 2, 2), 0xFFFF7F7F) // 覆盖 0.50
+  assert_eq(@codec.rgba_get(soft, 3, 3), 0xFFFF4040) // 覆盖 0.75
+  assert_eq(@codec.rgba_get(soft, 4, 4), 0xFFFF0000) // 覆盖 1.00（内距达 feather）
+  assert_eq(@codec.rgba_get(soft, 10, 10), 0xFFFF0000) // 深处仍是满覆盖
+  assert_eq(@codec.rgba_get(soft, 25, 25), 0xFFFFFFFF) // 蒙版外仍完全不渲染
+  // 羽化只影响边界带：远离边界的区域与 hard 完全一致
+  assert_eq(@codec.rgba_get(soft, 15, 15), @codec.rgba_get(hard, 15, 15))
+  // 反选后过渡带跟着反向：覆盖度 = 1 − 原覆盖度
+  let _ = run(s, "set-mask r invert=true")
+  let inv = @render.render_doc(unwrap_doc(s), env)
+  assert_eq(@codec.rgba_get(inv, 1, 1), 0xFFFF4040) // 1−0.25 = 0.75
+  assert_eq(@codec.rgba_get(inv, 4, 4), 0xFFFFFFFF) // 1−1.00 = 0（原满覆盖处全透）
+  assert_eq(@codec.rgba_get(inv, 25, 25), 0xFFFF0000) // 原蒙版外反而满覆盖
+  // 坏 feather 不再静默变 0
+  let e1 = run(s, "add-mask r kind=rect x=0 y=0 w=10 h=10 feather=abc")
+  assert_true(e1.contains("feather=abc 不是数字"), msg=e1)
+  let e2 = run(s, "add-mask r kind=rect x=0 y=0 w=10 h=10 feather=-1")
+  assert_true(e2.contains("不能为负"), msg=e2)
+}

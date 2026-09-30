@@ -1497,9 +1497,65 @@ fn rounded_rect_inside(
 }
 
 ///|
+/// 圆角矩形的**有符号距离**：≤0 在内（值为到边界的负距离），>0 在外。
+/// 羽化要的是"离边界多远"，所以这里必须给出距离而不是布尔——
+/// `rounded_rect_inside` 保留平方比较（硬边路径与历史逐位一致），
+/// 两者数学等价但浮点路径不同，不合并。
+fn rounded_rect_sdf(
+  dx : Double,
+  dy : Double,
+  w : Double,
+  h : Double,
+  radius : Double,
+) -> Double {
+  let hw = w / 2.0
+  let hh = h / 2.0
+  let r0 = if radius > hw { hw } else { radius }
+  let r = if r0 > hh { hh } else { r0 }
+  let ax = if dx > hw { dx - hw } else { hw - dx }
+  let ay = if dy > hh { dy - hh } else { hh - dy }
+  let qx = ax - (hw - r)
+  let qy = ay - (hh - r)
+  let ox = if qx > 0.0 { qx } else { 0.0 }
+  let oy = if qy > 0.0 { qy } else { 0.0 }
+  // 标准圆角矩形 SDF 的第二项：`min(max(qx,qy), 0)` 给出"在矩形内部时的
+  // 内距"。**少了它，内部所有点的距离都会算成 0**（`ox/oy` 在内侧恒为 0），
+  // 羽化就会变成"整块要么全 0 要么全 1"——这个错误只有实测像素才看得出来。
+  let mx = if qx > qy { qx } else { qy }
+  let mn = if mx < 0.0 { mx } else { 0.0 }
+  Double::sqrt(ox * ox + oy * oy) + mn - r
+}
+
+///|
+/// 到蒙版边界的"**内距**"：>0 = 在内且离边界这么远，≤0 = 在外。
+/// 羽化按它做线性过渡。
+///
+/// 椭圆的距离用归一化半径差 `1 - ρ` 乘以**短半轴**近似——精确的椭圆
+/// 距离要解四次方程，而羽化只是视觉过渡，短半轴尺度已经够用（圆形时精确）。
+fn mask_inner_dist(mask : @core.LayerMask, dx : Double, dy : Double) -> Double {
+  match mask.kind {
+    @core.ShapeKind::Ellipse =>
+      if mask.w <= 0.0 || mask.h <= 0.0 {
+        -1.0
+      } else {
+        let nx = dx / mask.w * 2.0 - 1.0
+        let ny = dy / mask.h * 2.0 - 1.0
+        let rho = Double::sqrt(nx * nx + ny * ny)
+        let short = if mask.w < mask.h { mask.w } else { mask.h }
+        let half = short / 2.0
+        (1.0 - rho) * half
+      }
+    _ => -rounded_rect_sdf(dx, dy, mask.w, mask.h, mask.radius)
+  }
+}
+
+///|
 /// 蒙版覆盖度：画布坐标 (px,py) 在层蒙版内=1 外=0（invert 反选）。
-/// 矩形蒙版按 `radius` 切圆角；`radius <= 0` 时**走原先的硬直角分支**，
-/// 与"radius 还没被实现"之前的行为逐位相同。
+/// 矩形蒙版按 `radius` 切圆角；`radius <= 0` 时**走原先的硬直角分支**。
+///
+/// `feather <= 0` 时**整段走硬边分支**，与"还没有 feather 这个参数"之前
+/// 的行为逐位相同；`feather > 0` 时按内距做线性软过渡（边界处 0，向内
+/// `feather` 像素处到 1）。
 fn mask_cover_at(l : @core.Layer, px : Double, py : Double) -> Double {
   let mask = match l.mask {
     Some(m) => m
@@ -1507,26 +1563,37 @@ fn mask_cover_at(l : @core.Layer, px : Double, py : Double) -> Double {
   }
   let dx = px - mask.x
   let dy = py - mask.y
-  let inside = match mask.kind {
-    @core.ShapeKind::Ellipse => {
-      if mask.w <= 0.0 || mask.h <= 0.0 {
-        false
-      } else {
-        let nx = dx / mask.w * 2.0 - 1.0
-        let ny = dy / mask.h * 2.0 - 1.0
-        nx * nx + ny * ny <= 1.0
-      }
+  let cover = if mask.feather > 0.0 {
+    let d = mask_inner_dist(mask, dx, dy)
+    if d <= 0.0 {
+      0.0
+    } else if d >= mask.feather {
+      1.0
+    } else {
+      d / mask.feather
     }
-    _ =>
-      if dx < 0.0 || dy < 0.0 || dx >= mask.w || dy >= mask.h {
-        false
-      } else if mask.radius <= 0.0 {
-        true
-      } else {
-        rounded_rect_inside(dx, dy, mask.w, mask.h, mask.radius)
+  } else {
+    let inside = match mask.kind {
+      @core.ShapeKind::Ellipse => {
+        if mask.w <= 0.0 || mask.h <= 0.0 {
+          false
+        } else {
+          let nx = dx / mask.w * 2.0 - 1.0
+          let ny = dy / mask.h * 2.0 - 1.0
+          nx * nx + ny * ny <= 1.0
+        }
       }
+      _ =>
+        if dx < 0.0 || dy < 0.0 || dx >= mask.w || dy >= mask.h {
+          false
+        } else if mask.radius <= 0.0 {
+          true
+        } else {
+          rounded_rect_inside(dx, dy, mask.w, mask.h, mask.radius)
+        }
+    }
+    if inside { 1.0 } else { 0.0 }
   }
-  let cover = if inside { 1.0 } else { 0.0 }
   if mask.invert {
     1.0 - cover
   } else {

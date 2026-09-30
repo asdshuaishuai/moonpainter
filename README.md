@@ -1,7 +1,7 @@
 # MoonPainter — Agent 驱动的图层绘制引擎
 
 > 状态：**0.1.0（.mpd 容器 v2 + 参数化绘制 + AI 修图 demo + MVSL 确定性编辑 IR 引擎已落地：
-> native 172 项 / wasm-gc 170 项测试全绿；`./verify.sh` 八步验证门全过）**。
+> native 176 项 / wasm-gc 174 项测试全绿；`./verify.sh` 八步验证门全过）**。
 > 设计书 [DESIGN.md](./DESIGN.md) · 方案与验收 [PLAN.md](./PLAN.md) ·
 > MVSL 规划与评审对照 [PLAN-MVSL.md](./PLAN-MVSL.md) · AI 修图 demo 见下节。
 
@@ -30,7 +30,7 @@
 | 域 | 内容 |
 | :-- | :-- |
 | 绘制 | 矩形（圆角）/椭圆/线段/多边形，纯色+线性渐变填充（**端点归一化到本层 bbox 的 0..1**；与同命令的像素参数 x/y/w/h 不同，写错会被入口拒绝并给出换算值），描边，7 种混合（normal/multiply/screen/overlay/darken/lighten/difference，W3C 合成公式），透明度，旋转（Taylor 三角）+ **翻转（flip h/v/both，先翻转后旋转）**，编组（直通），PNG 位图导入（8-bit RGB/RGBA/灰非交错） |
-| 图层蒙版 | 几何蒙版（矩形/椭圆 + **圆角 `radius`（仅矩形，超过半边长按半边长夹住）** + `invert` 反选，**蒙版外不渲染**）：人类前端可拖拽创建（工具条 ▭/◯）并有「蒙版反选 / 去蒙版」按钮，AI 可走 `add_mask` / `set_mask` / `remove_mask` 工具；`query-layer` / `list-layers` 报告 `mask` 状态（否则加了蒙版看不出来） |
+| 图层蒙版 | 几何蒙版（矩形/椭圆 + **圆角 `radius`（仅矩形，超过半边长按半边长夹住）** + **边缘羽化 `feather`（按到边界的真实内距线性过渡，`0`=硬边）** + `invert` 反选，**蒙版外不渲染**）：人类前端可拖拽创建（工具条 ▭/◯）并有「蒙版反选 / 去蒙版」按钮，AI 可走 `add_mask` / `set_mask` / `remove_mask` 工具；`query-layer` / `list-layers` 报告 `mask` 状态（否则加了蒙版看不出来） |
 | 渲染 | 2×2 子采样 AA、取景渲染（归一化 viewport + 目标宽）、**overlay=1（层 bbox 序号线框 + 3×5 数字标注，像素↔结构对位辅助）**、pick 像素→层 id、直方图/覆盖统计、渲染确定性（golden sha256 锁定） |
 | 容器 | pack/unpack 全环、确定性 pack（两次打包字节一致）、原子落盘（tmp+rename）、八类拒绝路径全测试 |
 | 会话 | 57 个命令（字典 = agent/tools.mbt）、vision 闸、undo/redo（快照栈 ≤64）、编辑历史、P0–P2 lint |
@@ -39,7 +39,7 @@
 | wasm SDK | `wasm/` 包：经典 wasm 零 import（默认会话面 `mp_version/mp_reset/mp_exec_in` + in 槽；多会话句柄面 `mp_open/mp_close/mp_exec_h`），Node/浏览器双宿主冒烟 + 合同测试；JS 宿主胶水 `npm/moonpainter-sdk/`（.d.ts 类型化门面） |
 | 底座 | 手写 ZIP 读写 / DEFLATE 压缩 / inflate 解压 / PNG 编解码 / SHA-256（NIST 向量验证）——zip/deflate/inflate 复用自 deepOffice（自有 MIT），PNG 编码复用自 moonviz（自有 MIT），余为本仓库新写 |
 
-**诚实边界**：蒙版只有**几何**的（矩形/椭圆 + 圆角 + 反选）——栅格蒙版（画笔涂抹）、live mask（引用下层 alpha）、羽化都未做；调整层是叠加式像素算子（不是可反复编辑参数的独立调整层）；文本层只有 ASCII 点阵字形（无 CJK、无字体文件，见 `demo` 的字形表）；其余未做：贝塞尔、图层样式 fx、PSD/AI 等外部格式兼容（远期，见 DESIGN 远期章节）、16/32-bit、CMYK、自由笔刷。线段层占位矩形 w/h 必须为正（水平线请给 h≥描边宽）。
+**诚实边界**：蒙版只有**几何**的（矩形/椭圆 + 圆角 + 羽化 + 反选）——栅格蒙版（画笔涂抹）、live mask（引用下层 alpha）都未做；调整层是叠加式像素算子（不是可反复编辑参数的独立调整层）；文本层只有 ASCII 点阵字形（无 CJK、无字体文件，见 `demo` 的字形表）；其余未做：贝塞尔、图层样式 fx、PSD/AI 等外部格式兼容（远期，见 DESIGN 远期章节）、16/32-bit、CMYK、自由笔刷。线段层占位矩形 w/h 必须为正（水平线请给 h≥描边宽）。
 
 （这一行原先写着"文本层、蒙版、调整层不做"——那三项**后来都做了**却没人回来改，属于少报能力；顺手纠正。）
 
@@ -147,10 +147,10 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
 - **P3 manifest 的 `counts` 无人校验**：把 `layers` 和 `assets` 计数互换全部测试通过——
   而 `counts` 正是工具/审阅者据以判断"容器里有什么"的对外事实。
 
-当前 31 个变异中 30 个被抓住，唯一存活的 M2 是**已确认的等价变异**（去掉空表短路后行为逐位相同）。
+当前 35 个变异中 34 个被抓住，唯一存活的 M2 是**已确认的等价变异**（去掉空表短路后行为逐位相同）。
 覆盖路径：编辑表数值语义 / 三个指纹 / 保护断言 / lint / W3C alpha 合成与 blend 模式 /
 几何选择子 / 覆盖预览与盒降采样 / SHA-256 / PNG / ZIP-CRC / 容器 manifest /
-命令行分词（自由文本的引号与转义）/ 字典与实现的一致性（set-mask 不许静默无效）/ 批量入口与单点入口的字段一致性（probe 的两条路不许走样）。
+命令行分词（自由文本的引号与转义）/ 字典与实现的一致性（set-mask 不许静默无效）/ 批量入口与单点入口的字段一致性（probe 的两条路不许走样）/ 蒙版参数真的被消费（radius 圆角、feather 羽化与它的内距）。
 新增核心语义（新的算子/选择子判据/指纹/断言）时，同步往 `MUTS` 加一条变异。
 
 ## 包结构（依赖严格无环）

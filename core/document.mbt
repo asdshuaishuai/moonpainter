@@ -133,7 +133,8 @@ pub(all) struct Stroke {
 /// 坐标是**画布坐标**（不是层局部坐标）：`render/scene.mbt` 的 `mask_cover_at`
 /// 直接拿画布点与 `x/y` 比，所以 `move`/`rotate` 图层时蒙版**不跟着走**
 /// （DESIGN §8 有实测记录）。`radius` 是矩形蒙版的圆角半径
-/// （`<=0` 为直角；超过半边长按半边长夹住）。
+/// （`<=0` 为直角；超过半边长按半边长夹住）。`feather` 是边缘软过渡宽度
+/// （像素，`0` 为硬边——与"还没有 feather"之前的行为逐位相同）。
 pub(all) struct LayerMask {
   kind : ShapeKind // Rect 或 Ellipse
   x : Double
@@ -141,6 +142,7 @@ pub(all) struct LayerMask {
   w : Double
   h : Double
   radius : Double
+  feather : Double // 边缘软过渡宽度（像素）；0 = 硬边（历史行为）
   invert : Bool
 }
 

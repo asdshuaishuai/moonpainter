@@ -6,6 +6,13 @@
 /// 差一个像素的圆角肉眼看不出来，但"有没有生效"必须能分辨。
 
 ///|
+/// 浮点近似相等（内距含开方，别用 ==）。
+fn near_d(a : Double, b : Double) -> Bool {
+  let d = if a > b { a - b } else { b - a }
+  d < 0.000001
+}
+
+///|
 test "rounded_rect_inside：radius=0 退化为硬直角矩形" {
   assert_true(rounded_rect_inside(0.0, 0.0, 20.0, 20.0, 0.0))
   assert_true(rounded_rect_inside(19.9, 19.9, 20.0, 20.0, 0.0))
@@ -65,4 +72,69 @@ test "rounded_rect_inside：小 radius 只啃掉角上一小块" {
   assert_true(rounded_rect_inside(1.0, 1.0, 20.0, 20.0, 2.0))
   // 边中点 (10,0): qx=−8、qy=2 → 0+4 = 4 ≤ 4 → 内（刚好在圆角切线上）
   assert_true(rounded_rect_inside(10.0, 0.0, 20.0, 20.0, 2.0))
+}
+
+///|
+test "mask_inner_dist：内距是到边界的真实像素距离（SDF 的第二项不能漏）" {
+  // 矩形蒙版 20×20、无圆角。内距 = 到最近边界的像素距离。
+  let m : @core.LayerMask = {
+    kind: @core.ShapeKind::Rect,
+    x: 0.0,
+    y: 0.0,
+    w: 20.0,
+    h: 20.0,
+    radius: 0.0,
+    feather: 0.0,
+    invert: false,
+  }
+  assert_true(near_d(mask_inner_dist(m, 1.0, 1.0), 1.0))
+  assert_true(near_d(mask_inner_dist(m, 2.0, 5.0), 2.0))
+  assert_true(near_d(mask_inner_dist(m, 3.0, 9.0), 3.0))
+  // 中心到最近边界 10
+  assert_true(near_d(mask_inner_dist(m, 10.0, 10.0), 10.0))
+  // 边界外侧为负（点 x=25 → 出界 5）
+  assert_true(near_d(mask_inner_dist(m, 25.0, 5.0), 0.0 - 5.0))
+  // 角外侧：点在 (−3,−4) 时到角的距离是 5
+  assert_true(near_d(mask_inner_dist(m, 0.0 - 3.0, 0.0 - 4.0), 0.0 - 5.0))
+}
+
+///|
+test "mask_inner_dist：圆角矩形在圆角处按圆弧算内距" {
+  // 20×20、radius=10（内切圆）。圆心 (10,10)、半径 10。
+  let m : @core.LayerMask = {
+    kind: @core.ShapeKind::Rect,
+    x: 0.0,
+    y: 0.0,
+    w: 20.0,
+    h: 20.0,
+    radius: 10.0,
+    feather: 0.0,
+    invert: false,
+  }
+  // 中心 → 内距 10
+  assert_true(near_d(mask_inner_dist(m, 10.0, 10.0), 10.0))
+  // (3,3)：到圆心距离 √98 ≈ 9.8995 → 内距 ≈ 0.1005（很贴近边界）
+  let d = mask_inner_dist(m, 3.0, 3.0)
+  assert_true(d > 0.0 && d < 0.11)
+  // (2,2)：到圆心距离 √128 ≈ 11.3137 → 在外 1.3137
+  assert_true(mask_inner_dist(m, 2.0, 2.0) < 0.0)
+}
+
+///|
+test "mask_inner_dist：椭圆用短半轴做尺度（圆形时精确）" {
+  // 10×10 的椭圆就是半径 5 的圆
+  let c : @core.LayerMask = {
+    kind: @core.ShapeKind::Ellipse,
+    x: 0.0,
+    y: 0.0,
+    w: 10.0,
+    h: 10.0,
+    radius: 0.0,
+    feather: 0.0,
+    invert: false,
+  }
+  assert_true(near_d(mask_inner_dist(c, 5.0, 5.0), 5.0))
+  assert_true(near_d(mask_inner_dist(c, 0.0, 5.0), 0.0))
+  assert_true(near_d(mask_inner_dist(c, 2.5, 5.0), 2.5))
+  assert_true(mask_inner_dist(c, 0.0, 0.0) < 0.0)
 }

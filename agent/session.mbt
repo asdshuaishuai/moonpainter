@@ -358,7 +358,7 @@ fn layer_summary(l : @core.Layer) -> String {
   match l.mask {
     Some(m) =>
       sb.write_string(
-        ",\"mask\":{\"kind\":\"\{kind_str(m.kind)}\",\"x\":\{@core.fmt_num(m.x)},\"y\":\{@core.fmt_num(m.y)},\"w\":\{@core.fmt_num(m.w)},\"h\":\{@core.fmt_num(m.h)},\"radius\":\{@core.fmt_num(m.radius)},\"invert\":\{m.invert}}",
+        ",\"mask\":{\"kind\":\"\{kind_str(m.kind)}\",\"x\":\{@core.fmt_num(m.x)},\"y\":\{@core.fmt_num(m.y)},\"w\":\{@core.fmt_num(m.w)},\"h\":\{@core.fmt_num(m.h)},\"radius\":\{@core.fmt_num(m.radius)},\"feather\":\{@core.fmt_num(m.feather)},\"invert\":\{m.invert}}",
       )
     None => ()
   }
@@ -814,7 +814,7 @@ fn cmd_add_adjust(s : Session, tokens : Array[String]) -> String {
 fn cmd_add_mask(s : Session, tokens : Array[String]) -> String {
   if tokens.length() < 2 {
     return err(
-      "用法：add-mask <id> kind=rect|ellipse x= y= w= h= [radius=<圆角 px，仅矩形，默认 0>] [invert=true]",
+      "用法：add-mask <id> kind=rect|ellipse x= y= w= h= [radius=<圆角 px，仅矩形，默认 0>] [feather=<边缘羽化 px，默认 0=硬边>] [invert=true]",
     )
   }
   let doc = match require_doc(s) {
@@ -864,13 +864,28 @@ fn cmd_add_mask(s : Session, tokens : Array[String]) -> String {
       }
     None => 0.0
   }
+  // feather 与 radius 同样"不静默降级"：它直接决定蒙版边缘是硬的还是软的，
+  // 悄悄当 0 会让"羽化没生效"和"羽化很小"分不出来。
+  let feather = match m.get("feather") {
+    Some(v) =>
+      match to_d(v) {
+        Some(d) =>
+          if d < 0.0 {
+            return err("蒙版 feather 不能为负：\{v}")
+          } else {
+            d
+          }
+        None => return err("feather=\{v} 不是数字")
+      }
+    None => 0.0
+  }
   let invert = match m.get("invert") {
     Some("true") | Some("1") => true
     _ => false
   }
   snapshot(s, doc, "add-mask \{id}")
   let _ = update_layer(doc.layers, id, fn(l) {
-    { ..l, mask: Some({ kind, x, y, w, h, radius, invert }) }
+    { ..l, mask: Some({ kind, x, y, w, h, radius, feather, invert }) }
   })
   "{\"ok\":true,\"op\":\"add-mask\",\"id\":\"\{id}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
 }
