@@ -79,8 +79,13 @@
                                 # 而汇总里的「N 个变异全部通过」照旧好看——实测
                                 # 踩过，两个变异静静失效了一轮
 ./build_demo.sh                 # AI 修图 demo 构建 + Node headless 自检 + npm SDK 冒烟
-                                # + demo 测试（工具面与 MVSL 闭环可达，需 Node；
-                                # 含 undispatched_tools 工具面自检）
+                                # （含 save→open 往返）+ 页面接线源码核对 + demo 测试
+                                # （工具面与 MVSL 闭环可达，需 Node；
+                                # 含 undispatched_tools 工具面自检、HTML 接线自检）
+                                # **页面接线的两层**：demo_test 拿真的拼出来的
+                                # HTML 查 globalThis 处理器与 id；build_demo.sh
+                                # 第 6 步额外罩住动态拼出来的图层列表/属性面板。
+                                # 别把"在浏览器里点一下"当整块——静态那半可机器验
 
 # 门禁脚本别写 `cmd | tail -1`：管道的退出码是 tail 的，set -e 抓不到失败。
 # 两个脚本都用 run_quiet 包裹长输出命令。
