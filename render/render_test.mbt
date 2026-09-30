@@ -58,6 +58,29 @@ test "半透明层透明度并入：50% 蓝盖白 → 127/255 蓝" {
 }
 
 ///|
+test "合成：半透明 src over 半透明 dst 必须去预乘" {
+  // 已有的混合测试全用**不透明**层（alpha=255）：此时 ao=1、预乘即直通，
+  // "去预乘"那一步对结果毫无影响——把它换成"直接返回预乘值"，全部测试通过。
+  // 半透明合成因此没人守护（颜色整片偏暗）。这里锁住 W3C 公式的数值：
+  //   dst=0x80000000（半透明黑）、src=0x80FFFFFF（半透明白）、Normal
+  //   sa = da = 128/255
+  //   ao  = sa + da(1-sa)          = 0.75198 → A = 192 = 0xC0
+  //   o_r = sa(1-da)sr + sa·da·sr  = 0.50198
+  //   r   = o_r / ao               = 0.66755 → 170 = 0xAA   ← 去预乘
+  //   （不去预乘会得到 128 = 0x80）
+  assert_eq(
+    @render.composite_pixel(0x80000000, 0x80FFFFFF, @core.BlendMode::Normal),
+    0xC0AAAAAA,
+    msg="半透明合成必须去预乘（否则整片偏暗）",
+  )
+  // 双方不透明时预乘即直通——这条保证上面的差异确实来自去预乘那一步
+  assert_eq(
+    @render.composite_pixel(0xFF000000, 0xFF808080, @core.BlendMode::Normal),
+    0xFF808080,
+  )
+}
+
+///|
 test "椭圆 + 渐变 + 旋转 golden 渲染确定性" {
   let doc = @core.new_document("u-golden", 64, 64)
   let bg = @core.default_layer("l1", "bg", 0.0, 0.0, 64.0, 64.0)

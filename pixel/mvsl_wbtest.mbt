@@ -582,6 +582,34 @@ test "smoothstep：羽化曲线是平滑曲线而非线性（线性退化会被�
 }
 
 ///|
+test "MVSL 数值：几何选择子的 feather 真的产生软边界" {
+  // 上面那条覆盖的是**色彩窗**的羽化。几何窗（rect/ellipse）是另一个入口：
+  // 把 `window_membership(d, g.feather, 1.0)` 的 feather 改成 0（硬边）时
+  // 全部测试通过——软边界没人守护。
+  let base = mk_buf(16, 16)
+  fill(base, 0, 0, 16, 16, argb(200, 200, 200))
+  let ctx = SelCtx::new(base)
+  // 矩形覆盖左半边，边缘软带宽 4 像素
+  let g : @core.GeoWindow = { x: 0.0, y: 0.0, w: 8.0, h: 16.0, feather: 4.0 }
+  let f = geo_field(g, "rect", ctx)
+  let mut mids = 0
+  let mut k = 0
+  while k < 256 {
+    if f.v[k] > 0.0 && f.v[k] < 1.0 {
+      mids = mids + 1
+    }
+    k = k + 1
+  }
+  assert_true(
+    mids > 0,
+    msg="几何选择子 feather=4 没有任何中间权重——羽化被忽略（硬边化）",
+  )
+  // 核心区 = 1、远处 = 0（采样在像素中心：x=2,y=0 → (2.5,0.5)，距边界 0）
+  assert_eq(f.v[2], 1.0, msg="矩形内部应为 1")
+  assert_eq(f.v[15], 0.0, msg="远离矩形应为 0")
+}
+
+///|
 test "MVSL 数值：色窗的 s_half（彩度半宽）真的参与判据" {
   // 彩度梯度：灰白（彩度≈0）→ 红（彩度高）。色相/亮度项放开，
   // 场只由彩度项决定——拿 s_half 之外的东西判彩度会立刻暴露。
