@@ -166,6 +166,51 @@ test "lint：保护断言被违反 = P0（用户的「别动 XX」不许静默�
 }
 
 ///|
+test "lint：空断言（选择子零命中）= P1 —— 它给的是虚假的安心" {
+  let s = lint_scene("lint-vacuous")
+  // 改红区，却拿「绿区不许变」当保护——而画布上根本没有绿
+  let vacuous : @core.Guard = {
+    id: "keep_green",
+    sel: dead_green_sel(),
+    max_de: 0.001,
+    max_changed_ratio: 0.0,
+  }
+  let prog : @core.EditProgram = { ops: [eop("e1", red_sel())], guards: [vacuous] }
+  // 前提：断言本身"通过"——这才是危险所在（0 违规 ≠ 约束被守住）
+  let _ = lint_install(s, prog)
+  let asr = run(s, "mvsl-assert")
+  assert_true(asr.contains("\"violations\":0"), msg="空断言本就会通过：\{asr}")
+  let r = run(s, "lint")
+  assert_true(r.contains("空断言"), msg="lint 必须点出空断言：\{r}")
+  assert_true(r.contains("keep_green"), msg=r)
+  // 不得与"断言被违反"混淆：这条断言并没有被违反
+  assert_true(!r.contains("保护断言被违反"), msg="空断言 ≠ 被违反：\{r}")
+  // 非空的保护断言不许被误判为空断言
+  let real : @core.Guard = {
+    id: "keep_blue",
+    sel: {
+      basis: @core.Base,
+      expr: @core.Atom(
+        @core.Color({
+          h_center: 264.0,
+          h_half: 25.0,
+          s_center: 0.19,
+          s_half: 0.10,
+          l_center: 0.50,
+          l_half: 0.15,
+          feather: 0.1,
+        }),
+      ),
+    },
+    max_de: 0.01,
+    max_changed_ratio: 0.0,
+  }
+  let _ = lint_install(s, { ops: [eop("e1", red_sel())], guards: [real] })
+  let r2 = run(s, "lint")
+  assert_true(!r2.contains("空断言"), msg="命中的断言不该被判为空断言：\{r2}")
+}
+
+///|
 test "lint：空编辑表是合法状态，不报任何条目（不制造噪音）" {
   let s = lint_scene("lint-empty")
   let _ = run(s, "mvsl-clear")

@@ -235,9 +235,9 @@ native **67/67**、js **66/66**、wasm-gc **65/65**；`moon check` 0 错误
 
 ### 验收口径
 
-`moon check` 0 error / 0 warning；`moon test --target native` **145/145**、
-`--target wasm-gc` **143/143**；`./verify.sh` **七步全过**。
-（对比补遗 4：native 67 → 145。）
+`moon check` 0 error / 0 warning；`moon test --target native` **146/146**、
+`--target wasm-gc` **144/144**；`./verify.sh` **七步全过**。
+（对比补遗 4：native 67 → 146。）
 
 ### 补遗 5 追加：区域级 affordance（census / probe）
 
@@ -389,6 +389,11 @@ coverage 0**——一个像素都没选中，而且命令返回 `ok:true`。
 - **P1** 某条算子未改动任何像素（其余算子正常时点名是哪一条，而不是只报整表）；
 - **P1** 构造性空算子（`hue_deg=0` / `temp_kelvin=0` / `relight_gain=1` /
   `amount=0`）——与画布无关，一眼可判。
+
+同一轮里补上的第六条：**空断言**（保护断言的选择子零命中）。它比"断言被违反"
+更坏——被违反至少会响，空断言恒真，给出的是**虚假的安心**：用户以为
+「别动背景」被机器守着，实际上那条断言什么都没守。实测 `mvsl-assert` 对它是
+`violations: 0`，正是"通过"让人不再怀疑。
 
 两处刻意的分寸：**空编辑表不报**（= 未编辑是合法状态，lint 不该对我还没改
 任何东西报警）；**归因要准**——全是构造性空算子时说"选择子没命中"是误导，

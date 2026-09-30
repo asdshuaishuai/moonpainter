@@ -121,5 +121,20 @@ pub fn lint_mvsl(base : @codec.RgbaBuf, prog : @core.EditProgram) -> Array[Strin
     }
     Err(e) => v.push("P0 mvsl 保护断言无法求值：\{e}")
   }
+  // 空断言：选择子一个像素都没命中 → 断言恒真，永远不会失败。
+  // 这比"断言被违反"更坏：它给出的是**虚假的安心**——用户以为"别动背景"
+  // 被机器守着，实际上什么都没守。
+  for g in prog.guards {
+    let f = match @pixel.eval_sel(g.sel, base_ctx, cache) {
+      Ok(f) => f
+      Err(_) => continue
+    }
+    let cert = @pixel.certify(base, f)
+    if cert.coverage <= 0.0 {
+      v.push(
+        "P1 mvsl 保护断言 \{g.id} 的选择子一个像素都没命中——它是空断言，永远不会失败。用户以为这条约束被守着，实际上什么都没守；请用 probe/census 重新取数",
+      )
+    }
+  }
   v
 }
