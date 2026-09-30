@@ -116,6 +116,11 @@ pub fn paint_system_prompt() -> String {
     "   意义，也会拖累你自己后续判断）；edits 可以看编辑历史，撤销过头时先看它再",
     "   决定 redo 到哪；set_canvas 改画布尺寸——**它只改画布，不移动也不缩放图层**，",
     "   变大只是多出空白、变小会把超出的内容裁掉，要缩放内容得逐层 resize/transform。",
+    "8. 元参数 list_params / set_param / remove_param：给容器记**设计意图**（品牌",
+    "   主色、网点密度这类），是纯元数据、**不影响渲染**——改画面必须走 MVSL 或",
+    "   图形命令。开场先 list_params 看一眼有没有既有规范（有就照着它配色，别自己",
+    "   另立一套）；用户说了新的设计约定就用 set_param 记下来。写错名字用",
+    "   remove_param 删掉，**别用 set_param x \"\" 清空**——那只是把值改成空串，条目还在。",
   ]
   join_lines(lines)
 }

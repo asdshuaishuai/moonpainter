@@ -120,6 +120,9 @@ fn tool_cmd(name : String) -> String? {
     "redo" => Some("redo")
     "edits" => Some("edits")
     "rename" => Some("rename")
+    "list_params" => Some("list-params")
+    "set_param" => Some("set-param")
+    "remove_param" => Some("remove-param")
     "set_canvas" => Some("set-canvas")
     _ => None
   }
@@ -261,6 +264,21 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
     ),
     make_tool("ungroup", "解组", [("gid", "string:req:组 id")]),
     make_tool("tag", "给图层打语义标签（如 hero/background/logo）", [("id", "string:req:图层 id"), ("tag", "string:req:标签")]),
+    make_tool(
+      "list_params",
+      "读命名元参数（如品牌主色、网点密度这类设计系统元数据）。它是**纯元数据**，不影响渲染——改画面要走 MVSL/图形命令，这里只读写「设计说明」。",
+      [],
+    ),
+    make_tool(
+      "set_param",
+      "写一个命名元参数（同名覆盖）。纯元数据、不影响渲染；用来把设计意图写进容器让后续会话/人类看得到。",
+      [("name", "string:req:参数名，如 主色"), ("value", "string:req:参数值，如 #C81E1E")],
+    ),
+    make_tool(
+      "remove_param",
+      "删掉一个命名元参数（set_param 的对偶；不存在会报错）。名字写错时用它撤销，而不是把值清空——清空只是把值改成空串，条目还在。",
+      [("name", "string:req:参数名")],
+    ),
     make_tool("undo", "撤销上一次修改（工具出错后自我纠正用）", []),
     make_tool("redo", "重做被撤销的修改（undo 的对偶；撤销过头时恢复）", []),
     make_tool(
@@ -633,6 +651,13 @@ pub fn tool_line(name : String, args : Json) -> String {
       "ungroup \{gid}"
     }
     "tag" => "tag \{arg_of(args, "id")} \{arg_of(args, "tag")}"
+    "list_params" => "list-params"
+    "set_param" => {
+      let name = quote_arg(arg_of(args, "name"))
+      let value = quote_arg(arg_of(args, "value"))
+      "set-param \{name} \{value}"
+    }
+    "remove_param" => "remove-param \{quote_arg(arg_of(args, "name"))}"
     "undo" => "undo"
     "redo" => "redo"
     "edits" => "edits"

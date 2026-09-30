@@ -106,11 +106,16 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
 - **视觉闭环**：`render` / `select_preview` / `mvsl_impact` 三个图像类工具把 PNG 以附件
   （`SuccessWithAttachments`）回传给多模态模型，AI 真的看图确认效果再继续
   （试选不看图 = 闭眼改色；影响证书不看图 = 发现不了选区跑偏）；
-- **49 个工具，MVSL 闭环可达**：`sel_schema`（先看语法：字段名/量纲/示例自证）/
+- **52 个工具，MVSL 闭环可达**：`sel_schema`（先看语法：字段名/量纲/示例自证）/
   `census`（先普查再选色）/`probe`（这个点选中没有）/
   `select_preview`（试选 + 连通域事实）/`mvsl_set`（装编辑表）/`mvsl_impact`
   （影响证书）/`mvsl_assert`（保护断言）/`mvsl_show`/`mvsl_clear`。模型只写 **JSON**
   选择子与编辑表，base64 由 SDK 做——不该让 LLM 手搓 base64；
+- **元参数通道**：`list_params` / `set_param` / `remove_param` 读写命名元参数
+  （品牌主色、网点密度这类设计系统元数据）。**纯元数据、不影响渲染**——改画面
+  仍要走 MVSL 或图形命令；它的用途是让 AI 在开场先读既有规范（而不是凭空配色）、
+  把用户说的设计约定写进容器。删条目用 `remove_param`，**`set_param x ""` 只把值
+  改成空串、条目还在**（前者是对偶，后者是改名不改存在）；
 - **两套颜色坐标系分家**：`probe`/`census` 报 `sel_h`/`sel_c`/`sel_l`
   （= OKLCh 色相 / OKLCh 彩度 / OKLab 亮度，**直接喂选择子的那三个数**）
   与 `hsv_h`/`hsv_s`/`hsv_v`（仅分析对照）。纯红 #C81E1E 的

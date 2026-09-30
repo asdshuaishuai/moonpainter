@@ -319,3 +319,31 @@ test "蒙版命令行：圆角只给矩形，羽化都给；为 0 时不写进�
     "add-mask l1 kind=rect x=10 y=20 w=30 h=40 feather=12",
   )
 }
+
+///|
+test "元参数工具接得上引擎（含带空格的名字必须加引号）" {
+  // round 18 给引擎加了 `remove-param`，但**没有加进工具面**——AI 连既有的
+  // `set-param`/`list-params` 也用不上（`grep param demo/paint_tools.mbt` 为空）。
+  // DESIGN 的「读元参数 → 拟命令」双通道里明确列了 `list-params`，所以这是
+  // 一条真的断链：引擎有能力 ≠ 产品里的 AI 用得上。
+  let p = @demo.tool_line("list_params", @demo.parse_json_safe("{}"))
+  assert_eq(p, "list-params")
+  let sp = @demo.tool_line(
+    "set_param",
+    @demo.parse_json_safe("{\"name\":\"品牌主色\",\"value\":\"#C81E1E\"}"),
+  )
+  // `quote_arg` **总是**加引号（并转义反斜杠/引号）——这是更稳的选择：
+  // 协议的分词器会剥掉成对引号，所以没空格时加引号也无害。
+  assert_eq(sp, "set-param \"品牌主色\" \"#C81E1E\"")
+  // 名字里有空格必须加引号（协议按空白分词，不加就会被切成两个参数）
+  let sp2 = @demo.tool_line(
+    "set_param",
+    @demo.parse_json_safe("{\"name\":\"主 色\",\"value\":\"#fff\"}"),
+  )
+  assert_eq(sp2, "set-param \"主 色\" \"#fff\"")
+  let rp = @demo.tool_line(
+    "remove_param",
+    @demo.parse_json_safe("{\"name\":\"主 色\"}"),
+  )
+  assert_eq(rp, "remove-param \"主 色\"")
+}
