@@ -232,6 +232,14 @@ pub fn apply_style_kv(
           None => return Err("lgrad 端点 \{parts[i + 2]} 不是数字")
         }
       }
+      // 端点是归一化坐标而非像素——写错会静默变成一个「几乎看不出过渡」的
+      // 渐变（见 core.grad_endpoint_error 的注释）。入口就拦，并给出换算建议。
+      let gerr = @core.grad_endpoint_error(
+        nums[0], nums[1], nums[2], nums[3], nl.w, nl.h,
+      )
+      if gerr != "" {
+        return Err(gerr)
+      }
       nl = {
         ..nl,
         fill: @core.Fill::LinearGradient(c0, c1, nums[0], nums[1], nums[2], nums[3]),
@@ -408,6 +416,18 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
     }
     if l.opacity < 0.0 || l.opacity > 1.0 {
       v.push("P2 style 层 \{l.id} opacity 越界")
+    }
+    // 渐变端点越界：命令面已拦（add-rect/set-style 直接报错），这里兜住
+    // 手改 design.json 或外部构造的容器——它渲染出来是个「几乎看不出过渡」
+    // 的渐变，不报就没人知道。
+    match l.fill {
+      @core.Fill::LinearGradient(_gc0, _gc1, gx0, gy0, gx1, gy1) => {
+        let ge = @core.grad_endpoint_error(gx0, gy0, gx1, gy1, l.w, l.h)
+        if ge != "" {
+          v.push("P0 fill 层 \{l.id} 的渐变端点越界：\{ge}")
+        }
+      }
+      _ => ()
     }
     // P1 引用
     if l.kind is @core.ShapeKind::Image {

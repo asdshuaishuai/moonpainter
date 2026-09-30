@@ -89,7 +89,7 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
         ("w", "number:req:宽"),
         ("h", "number:req:高"),
         ("fill", "string:填充色"),
-        ("lgrad", "string:线性渐变 c0,c1,x0,y0,x1,y1（0..1 局部端点）"),
+        ("lgrad", "string:线性渐变 c0,c1,x0,y0,x1,y1（端点**归一化到本层 bbox**，0..1；注意不是像素，x/y/w/h 才是像素）"),
         ("name", "string:图层名"),
         ("blend", "string:混合模式"),
       ],
@@ -127,7 +127,7 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
       [
         ("id", "string:req:图层 id"),
         ("fill", "string:填充色 #RRGGBB[AA] 或 none"),
-        ("lgrad", "string:线性渐变 c0,c1,x0,y0,x1,y1"),
+        ("lgrad", "string:线性渐变 c0,c1,x0,y0,x1,y1（端点归一化 0..1，非像素）"),
         ("stroke", "string:描边色"),
         ("stroke_w", "number:描边宽"),
         ("opacity", "number:透明度 0..1"),

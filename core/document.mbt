@@ -77,6 +77,50 @@ pub(all) enum Fill {
 }
 
 ///|
+/// 线性渐变端点的合法域检查：**归一化到本层 bbox 的 [0,1]**。
+///
+/// 这是 `Fill::LinearGradient` 的契约——`(0,0)` = 本层左上、`(1,1)` = 本层右下，
+/// 与画布分辨率无关。返回空串表示合法，否则返回可直接呈现的错误文本。
+///
+/// **为什么必须在入口拦下**：`add-rect` 的其它几何参数（x/y/w/h/stroke_w）
+/// **全是像素**，顺手把 `lgrad` 端点也写成像素是极自然的错误。写错之后引擎
+/// 一切正常：层建好了、渲染成功了、颜色也确实是渐变——只是几乎看不出过渡。
+/// 实测 `lgrad=…,0,0,60,40`（本想写像素）渲染出来与纯色无异，且没有任何提示。
+/// 这类「看起来生效了」的静默错误，比直接报错难查得多。
+///
+/// 错误文本带上换算后的建议值，让调用方一步就能改对。
+pub fn grad_endpoint_error(
+  x0 : Double,
+  y0 : Double,
+  x1 : Double,
+  y1 : Double,
+  w : Double,
+  h : Double,
+) -> String {
+  let bad = x0 < 0.0 ||
+    x0 > 1.0 ||
+    y0 < 0.0 ||
+    y0 > 1.0 ||
+    x1 < 0.0 ||
+    x1 > 1.0 ||
+    y1 < 0.0 ||
+    y1 > 1.0
+  if !bad {
+    return ""
+  }
+  let sb = StringBuilder()
+  sb.write_string("渐变端点必须落在 0..1（归一化到本层 bbox：(0,0)=本层左上，(1,1)=本层右下，与画布分辨率无关）；收到 ")
+  sb.write_string("(\{fmt_num(x0)},\{fmt_num(y0)})→(\{fmt_num(x1)},\{fmt_num(y1)})")
+  if w > 0.0 && h > 0.0 {
+    sb.write_string("。若你写的是像素坐标，本层 \{fmt_num(w)}×\{fmt_num(h)} 应写作 ")
+    sb.write_string(
+      "(\{fmt_num(x0 / w)},\{fmt_num(y0 / h)})→(\{fmt_num(x1 / w)},\{fmt_num(y1 / h)})",
+    )
+  }
+  sb.to_string()
+}
+
+///|
 /// 描边（width ≤ 0 视为无描边）。
 pub(all) struct Stroke {
   color : Int // 0xAARRGGBB

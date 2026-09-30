@@ -160,6 +160,85 @@ test "闭环：用 probe 报出来的数字拼选择子，精确命中该区域�
 }
 
 ///|
+test "渐变端点：像素坐标写进归一化端点必须被拒绝，并给出换算建议" {
+  let s = scene("grad-units")
+  // 归一化 0..1 是契约：合法
+  let ok = run(
+    s,
+    "add-rect x=0 y=0 w=160 h=180 lgrad=#E8B23CFF,#B4361EFF,0,0,1,1 name=g",
+  )
+  assert_true(ok.contains("\"ok\":true"), msg=ok)
+  // 像素坐标（60,40）是极自然的手误——引擎本来会静静渲染成一个「几乎看不出
+  // 过渡」的渐变，现在必须在入口拦下并给出换算值
+  let bad = run(
+    s,
+    "add-rect x=0 y=0 w=160 h=180 lgrad=#E8B23CFF,#B4361EFF,0,0,60,40 name=bad",
+  )
+  assert_true(bad.contains("渐变端点必须落在 0..1"), msg=bad)
+  assert_true(bad.contains("0.375"), msg="错误信息应给出换算后的归一化值：\{bad}")
+  assert_true(bad.contains("0.2222222222222222"), msg=bad)
+  // 负数同样越界
+  let neg = run(s, "set-style l1 lgrad=#FF0000FF,#0000FFFF,-0.5,0,1,1")
+  assert_true(neg.contains("渐变端点必须落在 0..1"), msg=neg)
+  // 合法值不受影响（含端点恰为边界）
+  let edge = run(s, "set-style l1 lgrad=#FF0000FF,#0000FFFF,0,0,1,1")
+  assert_true(edge.contains("\"ok\":true"), msg=edge)
+}
+
+///|
+test "lint 兜住手改容器的越界渐变端点（命令面之外的入口）" {
+  // 命令面已拦，但手改 design.json 或外部构造的容器仍可能带越界端点。
+  // 它渲染出来是「几乎看不出过渡」的渐变，lint 必须说出来。
+  let doc = @core.new_document("grad-lint", 160, 180)
+  let l : @core.Layer = {
+    id: "l1",
+    name: "g",
+    kind: @core.ShapeKind::Rect,
+    visible: true,
+    opacity: 1.0,
+    blend: @core.BlendMode::Normal,
+    x: 0.0,
+    y: 0.0,
+    w: 160.0,
+    h: 180.0,
+    rotation_deg: 0.0,
+    corner_radius: 0.0,
+    flip_h: false,
+    flip_v: false,
+    text: "",
+    font_size: 12.0,
+    mask: None,
+    adjust: None,
+    points: [],
+    dabs: [],
+    fill: @core.Fill::LinearGradient(0xFFE8B23C, 0xFFB4361E, 0.0, 0.0, 60.0, 40.0),
+    stroke: { color: 0, width: 0.0 },
+    asset_hash: "",
+    tags: [],
+    children: [],
+  }
+  doc.layers.push(l)
+  let v = @agent.lint_doc(doc)
+  let mut hit = false
+  for it in v {
+    if it.contains("渐变端点越界") {
+      hit = true
+    }
+  }
+  assert_true(hit, msg="lint 未报出手改容器的越界渐变端点：\{v.join(" | ")}")
+  // 合法端点不得误报
+  let doc2 = @core.new_document("grad-lint-ok", 160, 180)
+  doc2.layers.push({
+    ..l,
+    fill: @core.Fill::LinearGradient(0xFFE8B23C, 0xFFB4361E, 0.0, 0.0, 1.0, 1.0),
+  })
+  let v2 = @agent.lint_doc(doc2)
+  for it in v2 {
+    assert_true(!it.contains("渐变端点"), msg="合法端点被误报：\{it}")
+  }
+}
+
+///|
 test "文档里的范围就是执行时的范围（文档不许漂移）" {
   let s = scene("schema-ranges")
   // geo：w/h 必须为正、shape 只支持 rect|ellipse、feather 0..256px

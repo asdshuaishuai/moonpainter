@@ -65,6 +65,18 @@ grep -q '"op":"add-image"' "$OUT/cli.log" || { echo "FAIL: add-image 未成功";
 grep -q '"op":"lint","violations":0' "$OUT/cli.log" || { echo "FAIL: lint 非零违规"; exit 1; }
 grep -q '"op":"save-mpd"' "$OUT/cli.log" || { echo "FAIL: save-mpd 未成功"; cat "$OUT/cli.log"; exit 1; }
 test -f "$OUT/verify.mpd" || { echo "FAIL: 落盘文件不存在"; exit 1; }
+# 渐变端点在命令面上是**归一化 0..1**，而同一条命令的 x/y/w/h 是像素——
+# 这个不一致极易写错。写错后引擎一切正常：层建好了、渲染成功了、颜色也确实是
+# 渐变，只是几乎看不出过渡（把 60,40 写进端点的实测结果与纯色无异）。
+# 这类「看起来生效了」的静默错误必须在入口拦下，并给出换算后的建议值。
+printf '%s\n' \
+  'session-open full_image' \
+  'new 160 180 uuid=verify-grad' \
+  'add-rect x=0 y=0 w=160 h=180 lgrad=#E8B23CFF,#B4361EFF,0,0,60,40 name=px' \
+  ':exit' \
+  | moon run --target native cli > "$OUT/grad.log"
+grep -q '渐变端点必须落在 0..1' "$OUT/grad.log" || { echo "FAIL: 像素坐标写进渐变端点未被拒绝（静默变成纯色）"; exit 1; }
+grep -q '0.375' "$OUT/grad.log" || { echo "FAIL: 拒绝信息未给出换算建议"; exit 1; }
 
 echo "== 5/7 独立外部验证（系统 unzip，非引擎自证） =="
 unzip -t "$OUT/verify.mpd" > /dev/null && echo "unzip -t: 容器完整性 OK"

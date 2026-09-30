@@ -27,12 +27,20 @@ pub fn list_tools() -> Array[AgentTool] {
   add("query-layer", "query-layer <id>：单层详情", "meta")
   add("lint", "P0–P2 谓词检查（引用/几何/限额）", "both")
   // 绘制
-  add("add-rect", "add-rect x= y= w= h= [id= name= fill= radius= lgrad= stroke= stroke_w= opacity= blend= rot=]", "meta")
+  add(
+    "add-rect",
+    "add-rect x= y= w= h= [id= name= fill= radius= lgrad= stroke= stroke_w= opacity= blend= rot=]。**x/y/w/h/stroke_w 是像素，但 lgrad 端点是归一化 0..1**（lgrad=c0,c1,x0,y0,x1,y1，(0,0)=本层左上，(1,1)=本层右下，与画布分辨率无关）——把像素写进端点会被拒绝",
+    "meta",
+  )
   add("add-ellipse", "同 add-rect（椭圆）", "meta")
   add("add-polygon", "同 add-rect，另需 points=x,y;x,y;…（局部坐标）", "meta")
   add("add-line", "同 add-rect，默认对角线，可 points= 自定义折线；fill 不生效", "meta")
   add("add-image", "add-image x= y= w= h= b64=<png base64>：导入位图资产并置入", "both")
-  add("set-style", "set-style <id> fill=/lgrad=/stroke=/stroke_w=/opacity=/blend=/radius=/rot=/visible=/name=", "meta")
+  add(
+    "set-style",
+    "set-style <id> fill=/lgrad=/stroke=/stroke_w=/opacity=/blend=/radius=/rot=/visible=/name=（lgrad 端点归一化 0..1，非像素）",
+    "meta",
+  )
   add("move", "move <id> <x> <y>", "meta")
   add("resize", "resize <id> <w> <h>", "meta")
   add("rotate", "rotate <id> <deg>（绕层中心，顺时针）", "meta")
