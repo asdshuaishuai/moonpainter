@@ -133,6 +133,62 @@ test "MVSL：编辑表随容器往返，版本块自洽（list 条目 + manifest
 }
 
 ///|
+test "MVSL：预览走编辑表（预览是「保存后会看到什么」的承诺）" {
+  let plain = sample_mpd()
+  let packed_plain = match @mpd.pack(plain) {
+    Ok(b) => b
+    Err(e) => abort("pack 失败: \{e}")
+  }
+  let z0 = @codec.Zip::open(packed_plain)
+  let flat0 = z0.read("previews/flat.png")
+  let thumb0 = z0.read("previews/thumb.png")
+  // 同一文档 + 非空编辑表 → 预览必须变
+  let edited = sample_mpd()
+  edited.mvsl = sample_mvsl_program()
+  let packed_edited = match @mpd.pack(edited) {
+    Ok(b) => b
+    Err(e) => abort("pack 失败: \{e}")
+  }
+  let z1 = @codec.Zip::open(packed_edited)
+  let flat1 = z1.read("previews/flat.png")
+  let thumb1 = z1.read("previews/thumb.png")
+  assert_true(
+    @base.sha256_hex(flat1) != @base.sha256_hex(flat0),
+    msg="带编辑表的 flat 预览与不带的一致（预览漏渲染了编辑表）",
+  )
+  assert_true(
+    @base.sha256_hex(thumb1) != @base.sha256_hex(thumb0),
+    msg="thumb 预览漏渲染了编辑表",
+  )
+  // 确定性：同一状态再打包一次，预览字节一致
+  let again = match @mpd.pack(edited) {
+    Ok(b) => b
+    Err(e) => abort("repack 失败: \{e}")
+  }
+  let z2 = @codec.Zip::open(again)
+  assert_eq(@base.sha256_hex(z2.read("previews/flat.png")), @base.sha256_hex(flat1))
+  // 坏编辑表不该被打包成"预览悄悄退回底图"
+  let bad = sample_mpd()
+  let op : @core.EditOp = {
+    id: "e1",
+    kind: @core.Recolor,
+    sel: { basis: @core.Stage(3), expr: sample_mvsl_program().ops[0].sel.expr },
+    amount: 1.0,
+    hue_deg: 10.0,
+    temp_kelvin: 0.0,
+    relight_gain: 1.0,
+    refine: [],
+    note: "",
+    evidence: None,
+  }
+  bad.mvsl = { ops: [op], guards: [] }
+  match @mpd.pack(bad) {
+    Err(msg) => assert_true(msg.has_prefix("MVSL 编辑表校验失败"), msg=msg)
+    Ok(_) => abort("越界 stage 不该 pack")
+  }
+}
+
+///|
 test "MVSL 拒绝：编辑表被改写 / 半截状态 / 更高 render contract" {
   let m = sample_mpd()
   m.mvsl = sample_mvsl_program()

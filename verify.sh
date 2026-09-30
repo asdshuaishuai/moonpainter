@@ -91,7 +91,7 @@ else
   exit 1
 fi
 
-echo "== 7/7 MVSL 编辑表命令面（子进程 e2e：安装 → impact → 断言 → 容器往返） =="
+echo "== 7/7 MVSL 编辑表命令面 + 渲染管线闭环（安装 → render/impact 同图 → 断言 → 容器往返） =="
 # canonical 编辑表由引擎自己产出（不手写 JSON——少一个大括号就会得到
 # 指不到病根的解析错误）。这里用固定文本：字段序即 canonical 字段序。
 MVSL_PROG='{"version":1,"ops":[{"id":"e1","kind":"recolor","sel":{"basis":"base","expr":{"t":"geo","shape":"rect","w":{"x":0,"y":0,"w":160,"h":240,"feather":0}}},"amount":1,"hue_deg":120,"temp_kelvin":0,"relight_gain":1,"refine":[],"note":"","evidence":null}],"guards":[{"id":"g1","sel":{"basis":"base","expr":{"t":"geo","shape":"rect","w":{"x":160,"y":0,"w":160,"h":240,"feather":0}}},"max_de":0.001,"max_changed_ratio":0}]}'
@@ -101,6 +101,7 @@ printf '%s\n' \
   'new 320 240 uuid=mvsl-verify' \
   'add-rect x=0 y=0 w=320 h=240 fill=#1E5ACCFF name=bg' \
   "mvsl-set $MVSL_B64" \
+  'render 320' \
   'mvsl-impact max=160' \
   'mvsl-assert' \
   "save-mpd $OUT/mvsl.mpd" \
@@ -111,6 +112,17 @@ grep -q '"op":"mvsl-impact"' "$OUT/mvsl.log" || { echo "FAIL: mvsl-impact 未成
 # 左半边 160x240 必须被改动，且几何硬边 + 去污染 → 选区外泄漏率 0
 grep -q '"changed":38400' "$OUT/mvsl.log" || { echo "FAIL: impact 改动像素数不对"; exit 1; }
 grep -q '"leak_ratio":0' "$OUT/mvsl.log" || { echo "FAIL: 选区外有泄漏"; exit 1; }
+# **编辑表真的进了渲染管线**：render 与 mvsl-impact 必须给出同一张最终图。
+# 这是本轮最要紧的一条断言——它把"编辑表只是一份被存下来的数据"和
+# "编辑表真的改变了渲染结果"区分开。
+RSHA=$(sed -n 's/.*"render_sha256":"\([0-9a-f]*\)".*/\1/p' "$OUT/mvsl.log" | head -1)
+ISHA=$(sed -n 's/.*"result_sha256":"\([0-9a-f]*\)".*/\1/p' "$OUT/mvsl.log" | head -1)
+if [ -z "$RSHA" ]; then echo "FAIL: render 回包缺 render_sha256"; exit 1; fi
+if [ -z "$ISHA" ]; then echo "FAIL: mvsl-impact 回包缺 result_sha256"; exit 1; fi
+if [ "$RSHA" != "$ISHA" ]; then
+  echo "FAIL: render($RSHA) 与 impact($ISHA) 不是同一张图——编辑表没进渲染管线"
+  exit 1
+fi
 # 保护断言命中右半边（未改动）→ 通过；再验一条必然违反的断言
 grep -q '"op":"mvsl-assert","guards":1,"violations":0' "$OUT/mvsl.log" || { echo "FAIL: 合法程序被断言拦下"; exit 1; }
 MVSL_BAD='{"version":1,"ops":[{"id":"e1","kind":"recolor","sel":{"basis":"base","expr":{"t":"geo","shape":"rect","w":{"x":0,"y":0,"w":320,"h":240,"feather":0}}},"amount":1,"hue_deg":120,"temp_kelvin":0,"relight_gain":1,"refine":[],"note":"","evidence":null}],"guards":[{"id":"g1","sel":{"basis":"base","expr":{"t":"geo","shape":"rect","w":{"x":0,"y":0,"w":160,"h":240,"feather":0}}},"max_de":0.001,"max_changed_ratio":0}]}'
@@ -136,7 +148,22 @@ printf '%s\n' \
   | moon run --target native cli > "$OUT/mvsl_reopen.log"
 grep -q '"ops":1' "$OUT/mvsl_reopen.log" || { echo "FAIL: 重开后编辑表丢失"; exit 1; }
 cmp -s "$OUT/mvsl.mpd" "$OUT/mvsl-resave.mpd" || { echo "FAIL: 带编辑表的容器 open→save 字节不一致"; exit 1; }
-echo "MVSL：安装/impact/断言/容器往返 全部 OK"
+# 预览必须走编辑表：同一文档，装与不装编辑表的 flat 预览必须不同
+printf '%s\n' \
+  'session-open full_image' \
+  'new 320 240 uuid=mvsl-verify' \
+  "open-mpd $OUT/mvsl.mpd" \
+  'mvsl-clear' \
+  "save-mpd $OUT/mvsl-noprog.mpd" \
+  ':exit' \
+  | moon run --target native cli > /dev/null
+unzip -p "$OUT/mvsl.mpd" previews/flat.png > "$OUT/flat_prog.png"
+unzip -p "$OUT/mvsl-noprog.mpd" previews/flat.png > "$OUT/flat_noprog.png"
+if cmp -s "$OUT/flat_prog.png" "$OUT/flat_noprog.png"; then
+  echo "FAIL: 带/不带编辑表的预览字节相同——预览漏渲染了编辑表"
+  exit 1
+fi
+echo "MVSL：安装/render≡impact/断言/容器往返/预览走编辑表 全部 OK"
 
 echo ""
 echo "ALL VERIFY PASS ✓"

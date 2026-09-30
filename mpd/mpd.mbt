@@ -145,6 +145,9 @@ fn agent_json(m : MpdDoc) -> String {
 
 ///|
 /// 渲染预览 PNG（长边 ≤ max_side；viewport 全景）。
+///
+/// **预览必须走编辑表**：预览是「保存后会看到什么」的承诺，
+/// 少渲染一批编辑就等于撒谎。
 fn preview_png(
   m : MpdDoc,
   env : @render.RenderEnv,
@@ -163,7 +166,7 @@ fn preview_png(
   if out_w < 1 {
     return Err("预览宽度过小")
   }
-  let buf = match @render.render_view(d, env, 0.0, 0.0, 1.0, 1.0, out_w) {
+  let buf = match @render.render_view_with(d, env, 0.0, 0.0, 1.0, 1.0, out_w, m.mvsl) {
     Ok(b) => b
     Err(e) => return Err(e)
   }

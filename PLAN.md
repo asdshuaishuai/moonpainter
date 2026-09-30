@@ -235,9 +235,9 @@ native **67/67**、js **66/66**、wasm-gc **65/65**；`moon check` 0 错误
 
 ### 验收口径
 
-`moon check` 0 error / 0 warning；`moon test --target native` **129/129**、
-`--target wasm-gc` **127/127**；`./verify.sh` **七步全过**。
-（对比补遗 4：native 67 → 129。）
+`moon check` 0 error / 0 warning；`moon test --target native` **136/136**、
+`--target wasm-gc` **134/134**；`./verify.sh` **七步全过**。
+（对比补遗 4：native 67 → 136。）
 
 ### 补遗 5 追加：区域级 affordance（census / probe）
 
@@ -252,11 +252,37 @@ membership 与所属连通域 id。连通域 id 由新加的标签场给出，�
 两个命令共同破的是同一个循环依赖：AI 得先知道「画面里有什么」才能提选择子，
 而定位恰是 VLM 最弱的一环。现在引擎把区域事实算成数值，模型只做语义判断。
 
+### 补遗 5 追加二：编辑表接进渲染管线（`pixel ← render`）
+
+这是上一轮自己写下的最大诚实缺口。语义钉死为
+**`最终图 = apply(编辑表, 层合成底图)`**：
+
+- `render` 新增 `render_layers`（层合成底图 = 编辑表求值与渲染的唯一基准）、
+  `render_doc_with` / `render_view_with` / `render_view_overlay_with`；
+  `render/doc`/`render_view` 保持原签名（= 空编辑表路径），调用方零改动；
+- **先全画布求编辑表，再裁剪缩放**：选择子定义在画布坐标里，先裁剪会让同一条
+  选择子在不同取景下命中不同的东西。`render_view_impl` 本就是"先全画布渲染
+  再最近邻缩放"，插入点是天然的；
+- **空编辑表逐位等价**：`run_program` 在 `ops` 为空时直接返回 base，所以
+  既有 golden 与 open→save 字节一致断言全部不受影响（实测 129 → 136 全绿，
+  没有一条 golden 需要改）；
+- `previews/`、`render`、`stats`、`sample` 全部改用最终图——视觉通道给模型看
+  底图，等于让它基于错图决策；
+- **三条出口同一张图**：`render` 的 sha256 ≡ `mvsl-impact` 的 `result_sha256`
+  ≡ 容器里 `previews/flat.png` 的 sha256。`verify.sh` 第 7 步把这条做成硬断言，
+  它把"编辑表只是一份被存下来的数据"和"编辑表真的改变了渲染结果"区分开。
+
+顺带补上两处**静态可判却漏在运行期**的校验（本轮发现的真问题）：
+算子**前视 `stage:` 引用**（`n > 自身序号`）永远不可能满足，留到执行期会变成
+"命令面收下了、渲染时才失败"；**带 `stage:` 基准的保护断言**在旧实现里声明与
+实际求值基准不一致（`check_guards` 静默按 base 求值），这比直接拒绝更坏。
+两者现在都在 `validate_program` 期拒绝——声明与行为必须一致。
+
 ### 仍未落地（诚实边界，详见 README 与 DESIGN §8）
 
-- **MVSL 编辑表还没接进渲染管线**：`render` / `previews/` 仍只画
-  `design.json` 的层，`mvsl-impact` 的结果图是编辑表当前唯一的可视化出口。
-  接进管线需要新增层类型并显式引入 `pixel ← render` 依赖。
+- **MVSL 编辑表是文档级的最终一遍**，不是图层：能改整张合成图，但还不能
+  "只作用于某几个图层"或参与图层内部的混合序（`stage:n` 只切到算子序号）。
+  要那种粒度得先有把图层单独栅格化的中间缓冲。
 - `probe` 的单命令多点批量入口未加（多次 probe 可覆盖同一需求）。
 - `recolor` 的边界带去污染（`I = αF + (1−α)B` 只改前景）未做。
 - PLAN-MVSL §P3 Phase 2 的真 VLM 消融实验未做（需要真实多模态模型）。

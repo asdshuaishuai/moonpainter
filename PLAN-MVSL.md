@@ -128,7 +128,7 @@ affordance，人机同一编辑表、同一撤销栈。
 
 ## 4.5 实施进度（每轮更新；未勾选 = 尚未落地）
 
-### P0 钉语义 —— 已完成
+### P0 钉语义 —— 已完成（含渲染管线闭环）
 
 - [x] 编辑表 IR（core/mvsl.mbt）：选择子/算子/断言 + canonical JSON 双向；
       求值基准默认 `base`、显式 `stage:n` 且**拒绝前视引用**；
@@ -138,6 +138,25 @@ affordance，人机同一编辑表、同一撤销栈。
 - [x] 空编辑表逐位还原短路（`run_program` 在 ops 为空时直接返回 base 本身）。
 - [x] 参数定点格式化：复用 `@core.fmt_num`（禁 -0/NaN 入容器），
       并做范围校验（amount/hue/temp/gain/refine 半径与 eps）。
+- [x] **编辑表接进渲染管线**：`render/depends-on/pixel`（`pixel ← render`，
+      AGENTS 铁律 5 / DESIGN §2 已同步）。语义钉死为
+      `最终图 = apply(program, 层合成底图)`：
+      · 新增 `render_layers`（层合成底图，编辑表求值与渲染的唯一基准）、
+        `render_doc_with` / `render_view_with` / `render_view_overlay_with`；
+      · **先全画布求编辑表，再裁剪缩放**——取景只是观看方式，不该改变
+        选择子语义；`render_view_impl` 本就"先全画布渲染再缩放"，插入点天然；
+      · 空编辑表走与"没有编辑表"逐位相同的代码路径（`ops` 为空时
+        `run_program` 直接返回 base）→ 既有 golden 与 open→save 字节一致
+        断言不受影响；
+      · `previews/`、`render`、`stats`、`sample` 全部改用最终图
+        （视觉通道不能给模型看底图）；
+      · 静态校验补齐：算子**前视 `stage:` 引用**（`n > 自身序号`）与
+        **带 `stage:` 基准的保护断言**都在 `validate_program` 期拒绝——
+        前者留到执行期会变成"命令面收下了、渲染时才失败"，后者在旧实现里
+        声明与实际求值基准不一致（静默按 base 求值），比直接拒绝更坏。
+      · 不变量测试：`render/mvsl_render_test.mbt`（空程序逐位等价 / 只在
+        命中区改变 / 取景不改语义 / 坏程序报错 / 重复渲染幂等）+
+        `agent` 端「render ≡ impact ≡ 容器预览 三条出口同一张图」。
 
 ### P1 闭环 affordance —— 部分完成
 
@@ -180,11 +199,13 @@ affordance，人机同一编辑表、同一撤销栈。
 
 ### 下一步（按价值排序）
 
-1. **把 MVSL 层接进渲染管线**：新增层类型引用「底图资产 + 编辑表」，
-   引入 `pixel ← render` 依赖（AGENTS 铁律 5），让 `render`/`previews/`
-   真正体现编辑结果——这是当前最大的诚实缺口。
-2. `census`/`probe` 升级（AI 定位区域的最短路径）。
-3. Phase 2 的对抗集与消融实验（需要真实 VLM）。
+1. **`stage:n` 的粒度**：现在只切到"算子序号"（第 n 个算子之后的全画布中间
+   缓冲）。要支持"只作用于某几个图层"需要把图层单独栅格化的中间缓冲，
+   这是比本轮更大的改动。
+2. **`recolor` 边界带去污染**：`I = αF + (1−α)B` 只改 F。当前几何硬边 +
+   去污染已使选区外泄漏率为 0，但半透明边缘的混色仍未分离。
+3. `probe` 单命令多点批量入口。
+4. Phase 2 的对抗集与消融实验（需要真实 VLM）。
 
 ## 5. 风险清单（评审原话摘要，实现时对照自查）
 

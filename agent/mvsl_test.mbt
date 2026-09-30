@@ -36,6 +36,23 @@ fn recolor_program(guards : Array[@core.Guard]) -> @core.EditProgram {
 }
 
 ///|
+/// 取回包 JSON 里的字符串字段（失败即 abort，测试里不留静默分支）。
+fn jfield(text : String, key : String) -> String {
+  let obj = match @core.parse_json(text) {
+    Ok(o) => o
+    Err(e) => abort("回包不是 JSON（\{e}）：\{text}")
+  }
+  let v = match obj.get(key) {
+    Some(x) => x
+    None => abort("回包缺字段 \{key}：\{text}")
+  }
+  match v.as_str() {
+    Some(x) => x
+    None => abort("回包字段 \{key} 不是字符串：\{text}")
+  }
+}
+
+///|
 fn scene(uuid : String) -> @agent.Session {
   let s = @agent.Session::new()
   let _ = run(s, "session-open full_image")
@@ -124,6 +141,58 @@ test "MVSL：mvsl-impact 逐算子证书（改动数/ΔE/选区外泄漏率）" 
   let r2 = run(s, "mvsl-impact")
   assert_true(r2.contains("\"stages\":0"), msg=r2)
   assert_true(r2.contains("\"changed_total\":0"), msg=r2)
+}
+
+///|
+test "渲染管线闭环：render / previews / impact 三者必须给出同一张图" {
+  let s = scene("mvsl-pipeline")
+  // 装编辑表**之前**的最终图（用于证明"是编辑表改变了管线输出"）
+  let before_sha = jfield(run(s, "render 320"), "render_sha256")
+  let text = @core.program_to_json(recolor_program([]))
+  let _ = run(s, "mvsl-set \{b64_of(text)}")
+  // 1) render：取景 = 全画布 1:1 时，就是最终图
+  let render_sha = jfield(run(s, "render 320"), "render_sha256")
+  assert_true(
+    run(s, "render 0").contains("out_width 越界"),
+    msg="越界 out_width 应报错",
+  )
+  // 2) impact：result_sha256 是"全画布最终图"的指纹
+  let impact_sha = jfield(run(s, "mvsl-impact max=64"), "result_sha256")
+  // 3) previews：容器里的 flat.png 必须与上面两者逐字节一致
+  let mpd_b64 = jfield(run(s, "save-mpd-b64"), "mpd_b64")
+  let bytes = @base64.decode(mpd_b64) catch {
+    _ => abort("mpd base64 解码失败")
+  }
+  let z = @codec.Zip::open(bytes)
+  let flat_sha = @base.sha256_hex(z.read("previews/flat.png"))
+  // **编辑表真的进了渲染管线**：装表前后渲染结果必须不同
+  assert_true(render_sha != before_sha, msg="装了编辑表但 render 输出没变（管线漏渲染）")
+  // **三条出口同一张图**：render == impact == 容器预览
+  assert_eq(render_sha, impact_sha, msg="render 与 mvsl-impact 的结果图不一致")
+  assert_eq(flat_sha, impact_sha, msg="容器预览与 mvsl-impact 的结果图不一致")
+  assert_eq(
+    @base.sha256_hex(z.read("previews/thumb.png")),
+    flat_sha,
+    msg="flat/thumb 应一致",
+  )
+  // 4) 视觉通道（sample）看到的也必须是最终图，不是底图
+  let probe_in = run(s, "sample 80 120")
+  let probe_out = run(s, "sample 300 120")
+  assert_true(
+    !probe_in.contains("#1E5ACCFF"),
+    msg="编辑区内的 sample 仍返回底图颜色：\{probe_in}",
+  )
+  assert_true(
+    probe_out.contains("#1E5ACCFF"),
+    msg="编辑区外的 sample 应返回底图颜色：\{probe_out}",
+  )
+  // 5) 清空编辑表 → 回到装表前的那张图（管线无残留状态）
+  let _ = run(s, "mvsl-clear")
+  assert_eq(
+    jfield(run(s, "render 320"), "render_sha256"),
+    before_sha,
+    msg="清空编辑表后渲染未回到原图",
+  )
 }
 
 ///|

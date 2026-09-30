@@ -54,9 +54,15 @@ macOS 原生类 Photoshop 编辑器。对本工程最有价值的三块遗产：
 基座    codec（ZIP 读写 · DEFLATE/inflate · PNG 编解码 · 颜色） + base（SHA-256）
 ```
 
-依赖严格单向无环：`base ← codec ← core ← pixel/render ← mpd ← agent ← cli`
-（`pixel` 与 `render` 目前互不依赖——编辑表还没接进渲染管线，见 §8 边界；
-两者都只依赖 core/codec，方向仍然无环）。
+依赖严格单向无环：`base ← codec ← core ← pixel ← render ← mpd ← agent ← cli`。
+
+`render` 依赖 `pixel`：MVSL 编辑表是渲染的**最终一遍**
+（`最终图 = apply(program, 层合成底图)`）。三个约束：
+- `pixel` 绝不反向依赖 `render`（选择子/算子是纯数值层，不认识图层）；
+- 编辑表的求值基准是**层合成底图**（`render_layers`），不是上一次的最终图——
+  否则编辑表会自己吃自己，重复渲染不再幂等；
+- 空编辑表必须与"没有编辑表"走**逐位相同**的代码路径（`run_program` 在
+  `ops` 为空时直接返回 base），既有 golden 与 open→save 字节一致断言才不受影响。
 
 ## 3. IR 文档模型（core/document.mbt）
 
@@ -121,8 +127,9 @@ manifest 的 `mvsl` 版本块 pin 住四个独立版本号（`render_contract` /
   ΔE / 选区外泄漏率；AI 当色度计禁止，收敛判据全部是确定性数值；
 - **affordance 命令**：`select-preview`（overlay PNG + 证书）、`mvsl-impact`
   （逐算子 diff 证书 + 结果 PNG）、`mvsl-assert`（保护断言，违反即信封 fail）、
-  `mvsl-set/show/clear`。`base = 当前文档渲染`，由文档指纹隐式内容寻址，
-  信封回传 `base_sha256` 供显式 pin；
+  `mvsl-set/show/clear`。`base = 层合成底图`（`render_layers`，
+  **不含**编辑表本身），由文档指纹隐式内容寻址，信封回传 `base_sha256`
+  供显式 pin；
 - **区域级事实（破除循环依赖）**：`census`（hue×sat 12×3 桶 + OKLab L 与
   HSV V 均值对照； `within=<sel>` 时附覆盖率/bbox/连通域事实）与 `probe`
   （单点 r≤32 邻域：OKLab 均值/方差、环平均色相、边缘置信度 = 中心差分
@@ -130,21 +137,34 @@ manifest 的 `mvsl` 版本块 pin 住四个独立版本号（`render_contract` /
   与所属连通域 id**）。连通域 id 由 `pixel` 的标签场给出，与 `components()`
   共用同一趟栅格序扫描——用 bbox 做包含判断在重叠时会指错；
 - **覆盖预览顺序**：**先全分辨率生成 overlay，再盒平均降采样**——反过来会把
-  发丝级软边界平均掉，VLM 看到干净背景就判「没选中」。
+  发丝级软边界平均掉，VLM 看到干净背景就判「没选中」；
+- **在渲染管线里的位置**：编辑表是**文档级的最终一遍**
+  （`最终图 = apply(program, 层合成底图)`，`render_doc_with` / `render_view_with`
+  / `render_view_overlay_with`）。三条约束见 §2；三条出口
+  （`render` / `previews/` / `mvsl-impact`）必须给出**同一张图**，
+  `verify.sh` 第 7 步把 `render` 与 `mvsl-impact` 的 sha256 相等做成硬断言。
+  取景顺序不可交换：**先全画布求编辑表、再裁剪缩放**——选择子定义在画布坐标里，
+  先裁剪会让同一条选择子在不同取景下命中不同的东西；
+- **静态校验不留给运行期**：算子的前视 `stage:` 引用（`n > 自身序号`）与带
+  `stage:` 基准的保护断言都在 `validate_program` 期拒绝。前者留到执行期会变成
+  "命令面收下了、渲染时才失败"；后者在旧实现里声明与求值基准不一致
+  （`check_guards` 静默按 base 求值），声明与行为不符比直接拒绝更坏。
 
 ## 5. 视觉多模态交互协议（agent/session.mbt）
 
 - **vision 闸**：除 `help`/`session-open`/`list-tools` 外的一切命令都要求已 `session-open full_image`；其他声明（text_only 等）被明确拒绝并附三条出路；
-- **双通道闭环**：读元参数（list-layers/query-layer/list-params）→ 拟命令 → 应用（闸 + 零容忍参数校验 + 快照）→ `render`（取景 PNG b64 + sha256）→ 校验（pick/stats 给客观数值，模型看图判断）→ commit（save-mpd）；
+- **双通道闭环**：读元参数（list-layers/query-layer/list-params）→ 拟命令 → 应用（闸 + 零容忍参数校验 + 快照）→ `render`（取景 PNG b64 + sha256，**已含 MVSL 编辑表**）→ 校验（pick/stats/sample/census/probe 给客观数值，模型看图判断）→ commit（save-mpd）；
+- **视觉通道给的是最终图**：`render`/`stats`/`sample`/`previews/` 一律渲染
+  「底图 + 编辑表」。让模型看底图等于让它基于错图决策；
 - **编辑唯一写入通道是元参数层的结构化命令**——保证 canonical、可撤销、可门禁；视觉通道负责 grounding 与验收；
 - 归一化坐标协议：viewport 用 `[0,1]` 表述，消除分辨率歧义；
 - P0–P2 谓词（lint）：画布限额（P0）、重复 id/幽灵资产引用（P1）、零尺寸/完全越界/opacity 越界（P2）。
 
-## 6. 命令集（54 个；字典 = agent/tools.mbt 单一事实源）
+## 6. 命令集（56 个；字典 = agent/tools.mbt 单一事实源）
 
 会话：`session-open` `list-tools` `help`；文档：`new` `set-canvas` `list-layers` `query-layer` `lint`；
 绘制：`add-rect/ellipse/polygon/line` `add-image`（b64）`set-style` `move` `resize` `rotate` `rename` `tag` `delete` `visible` `reorder` `group` `ungroup`；
-元参数：`list-params` `set-param`；视觉：`render` `pick` `stats`；
+元参数：`list-params` `set-param`；视觉：`render` `pick` `stats` `census` `probe`；
 修图：`add-paint` `brush` `erase` `crop` `sample` `add-adjust` `add-mask` `set-mask` `remove-mask`；
 MVSL：`mvsl-set` `mvsl-show` `mvsl-clear` `select-preview` `mvsl-impact` `mvsl-assert`；
 历史/容器：`fingerprint` `inspect` `edits` `undo` `redo` `save-mpd-b64` `open-mpd-b64`；
@@ -164,12 +184,12 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
 - 大画布全量渲染 + 取景后再缩放（简单正确优先）；4096 渲染护栏；
 - Windows 原子写退化路径存在窗口期（README 已注明）；
 - params 为纯元数据（无 live 绑定）——DESIGN 与 README 双处声明；
-- **MVSL 编辑表尚未参与最终渲染**：`render` 与 `previews/` 仍只画 `design.json` 的层；
-  编辑表目前能被安装、求值、出图（`mvsl-impact`）、断言、随容器落盘，但
-  「MVSL 层」接进渲染管线（新增层类型 + `pixel ← render` 依赖）是下一步。
-  在此之前 `mvsl-impact` 的结果图是编辑表的**唯一**可视化出口；
-- MVSL 的 `census` 升级（hue×sat 桶、`within=`、`components()`）与 `probe` 升级
-  （batch + 5×5 邻域 + membership + component id）尚未落地；
+- MVSL 编辑表是**文档级的最终一遍**，不是图层：能改整张合成图，但还不能
+  "只作用于某几个图层"或参与图层内部的混合序。要那种粒度得先有把图层
+  单独栅格化的中间缓冲（`stage:` 基准目前只切到"算子序号"，不切图层）；
+- MVSL 的 `probe` 单命令多点批量入口未加（多次 `probe` 可覆盖同一需求）；
+- MVSL 的 `recolor` 边界带去污染（`I = αF + (1−α)B`，只改 F）未做：
+  当前几何硬边 + 去污染已使选区外泄漏率为 0，但半透明边缘的混色未分离；
 - 外部 mask 资产只能引用：引擎不内置分割模型，未登记即报精确错误（不降级）；
 - 软 mask 的 12MP < 2s 性能证伪线尚未实测（当前实现是逐像素 + O(N) 盒滤波，
   未做分块/惰性派生，见 PLAN-MVSL §5 风险清单）。

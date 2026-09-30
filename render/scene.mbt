@@ -853,7 +853,48 @@ fn sample_image(
 
 ///|
 /// 整文档渲染（白底，自底向上）。
+///
+/// 这是**底图**（base）：MVSL 编辑表求值与渲染都以它为准。
+/// 需要「底图 + 编辑表」时用 `render_doc_with`。
+///
+/// 与 `render_doc_with(doc, env, 空程序)` 逐位相等——`pixel.run_program`
+/// 在 ops 为空时直接返回 base 本身、不经任何色彩变换。所以这里直接调
+/// `render_layers` 是等价改写，不是"抄近路"。
 pub fn render_doc(
+  doc : @core.Document,
+  env : RenderEnv,
+) -> @codec.RgbaBuf {
+  render_layers(doc, env)
+}
+
+///|
+/// 整文档渲染 + 施加 MVSL 编辑表（最终一遍）。
+///
+/// 语义（PLAN-MVSL §P0）：`最终图 = apply(program, 层合成底图)`。
+/// **编辑表的 base 就是这个层合成底图**，不是上一次的最终图——否则
+/// 编辑表会自己吃自己（反复渲染导致选区漂移，且不可重放）。
+///
+/// 空编辑表时**逐位等于** `render_doc`：`run_program` 在 ops 为空时直接
+/// 返回 base 本身，不经过任何色彩变换。这是既有 golden 与
+/// open→save 字节一致断言不受影响的前提。
+///
+/// 编辑表里出现前视 STAGE 引用、未知算子等坏程序时返回 Err，**绝不当空
+/// 程序糊过去**——静默漏渲染一批编辑正是 PLAN-MVSL 明令禁止的错渲。
+pub fn render_doc_with(
+  doc : @core.Document,
+  env : RenderEnv,
+  prog : @core.EditProgram,
+) -> Result[@codec.RgbaBuf, String] {
+  let base = render_layers(doc, env)
+  match @pixel.run_program(base, prog) {
+    Ok(pair) => Ok(pair.0)
+    Err(e) => Err("MVSL 编辑表执行失败：\{e}")
+  }
+}
+
+///|
+/// 层合成底图（不含 MVSL；MVSL 求值与渲染的唯一基准）。
+pub fn render_layers(
   doc : @core.Document,
   env : RenderEnv,
 ) -> @codec.RgbaBuf {
@@ -883,7 +924,51 @@ pub fn render_view(
   vy1 : Double,
   out_width : Int,
 ) -> Result[@codec.RgbaBuf, String] {
-  render_view_impl(doc, env, vx0, vy0, vx1, vy1, out_width, false)
+  render_view_impl(
+    doc,
+    env,
+    vx0,
+    vy0,
+    vx1,
+    vy1,
+    out_width,
+    false,
+    @core.EditProgram::new(),
+  )
+}
+
+///|
+/// 取景渲染 + MVSL 编辑表。
+///
+/// 顺序不可交换：**先全画布求编辑表，再裁剪缩放**。选择子定义在画布
+/// 坐标系里（`geo` 的 x/y/w/h 是画布像素），先裁剪会让同一条选择子在
+/// 不同取景下命中不同的东西——取景只是观看方式，不该改变语义。
+pub fn render_view_with(
+  doc : @core.Document,
+  env : RenderEnv,
+  vx0 : Double,
+  vy0 : Double,
+  vx1 : Double,
+  vy1 : Double,
+  out_width : Int,
+  prog : @core.EditProgram,
+) -> Result[@codec.RgbaBuf, String] {
+  render_view_impl(doc, env, vx0, vy0, vx1, vy1, out_width, false, prog)
+}
+
+///|
+/// 取景渲染 + 编辑表 + overlay 序号线框（三者叠加，顺序同上）。
+pub fn render_view_overlay_with(
+  doc : @core.Document,
+  env : RenderEnv,
+  vx0 : Double,
+  vy0 : Double,
+  vx1 : Double,
+  vy1 : Double,
+  out_width : Int,
+  prog : @core.EditProgram,
+) -> Result[@codec.RgbaBuf, String] {
+  render_view_impl(doc, env, vx0, vy0, vx1, vy1, out_width, true, prog)
 }
 
 ///|
@@ -898,7 +983,17 @@ pub fn render_view_overlay(
   vy1 : Double,
   out_width : Int,
 ) -> Result[@codec.RgbaBuf, String] {
-  render_view_impl(doc, env, vx0, vy0, vx1, vy1, out_width, true)
+  render_view_impl(
+    doc,
+    env,
+    vx0,
+    vy0,
+    vx1,
+    vy1,
+    out_width,
+    true,
+    @core.EditProgram::new(),
+  )
 }
 
 ///|
@@ -911,6 +1006,7 @@ fn render_view_impl(
   vy1 : Double,
   out_width : Int,
   overlay : Bool,
+  prog : @core.EditProgram,
 ) -> Result[@codec.RgbaBuf, String] {
   if !(vx0 >= 0.0 && vy0 >= 0.0 && vx1 <= 1.0 && vy1 <= 1.0 && vx1 > vx0 && vy1 > vy0) {
     return Err("viewport 非法：[\{vx0},\{vy0},\{vx1},\{vy1}] 应为归一化且 x1>x0, y1>y0")
@@ -918,7 +1014,11 @@ fn render_view_impl(
   if out_width < 1 || out_width > RENDER_MAX_SIDE {
     return Err("out_width 越界（1..4096）")
   }
-  let full = render_doc(doc, env)
+  // 编辑表必须在全画布上求值，之后再裁剪/缩放（取景不改变选择子语义）
+  let full = match render_doc_with(doc, env, prog) {
+    Ok(b) => b
+    Err(e) => return Err(e)
+  }
   let cx0 = (vx0 * full.width.to_double()).to_int()
   let cy0 = (vy0 * full.height.to_double()).to_int()
   let cx1 = (vx1 * full.width.to_double()).to_int()

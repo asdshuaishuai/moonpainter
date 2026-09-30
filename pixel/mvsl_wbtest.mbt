@@ -506,6 +506,52 @@ test "参数校验：越界/重复 id/隐式参数错配一律拒绝" {
     @core.validate_program({ ops: dup, guards: [] }) is Err(_),
     msg="重复 id 必须拒绝",
   )
+  // 前视 STAGE：算子 0 引用 stage:1 —— 静态可判，必须在校验期拦下，
+  // 而不是留到渲染时才失败（命令面收下了、渲染才报错是最坏的时序）
+  let fwd : @core.EditOp = {
+    id: "f",
+    kind: @core.Recolor,
+    sel: { basis: @core.Stage(1), expr: sel_geo(0.0, 0.0, 1.0, 1.0).expr },
+    amount: 1.0,
+    hue_deg: 10.0,
+    temp_kelvin: 0.0,
+    relight_gain: 1.0,
+    refine: [],
+    note: "",
+    evidence: None,
+  }
+  match @core.validate_program({ ops: [fwd], guards: [] }) {
+    Ok(_) => abort("前视 STAGE 必须在校验期拒绝")
+    Err(e) => assert_true(e.contains("前视引用"), msg=e)
+  }
+  // 回视 STAGE(stage:0) 合法：自身序号 0 → 0 > 0 不成立
+  let back : @core.EditOp = {
+    id: "b2",
+    kind: @core.Recolor,
+    sel: { basis: @core.Stage(0), expr: sel_geo(0.0, 0.0, 1.0, 1.0).expr },
+    amount: 1.0,
+    hue_deg: 10.0,
+    temp_kelvin: 0.0,
+    relight_gain: 1.0,
+    refine: [],
+    note: "",
+    evidence: None,
+  }
+  assert_true(
+    @core.validate_program({ ops: [back], guards: [] }) is Ok(_),
+    msg="stage:0 在算子 0 上应合法（等于当前输入）",
+  )
+  // 断言带 stage 基准：拒绝（保护断言必须对不可变底图求值）
+  let gstage : @core.Guard = {
+    id: "g",
+    sel: { basis: @core.Stage(0), expr: sel_geo(0.0, 0.0, 1.0, 1.0).expr },
+    max_de: 0.01,
+    max_changed_ratio: 0.0,
+  }
+  match @core.validate_program({ ops: [], guards: [gstage] }) {
+    Ok(_) => abort("断言带 stage 基准必须拒绝")
+    Err(e) => assert_true(e.contains("保护断言必须对不可变底图求值"), msg=e)
+  }
 }
 
 ///|

@@ -1,9 +1,13 @@
 // render：软件光栅——形状覆盖（子采样 AA）、仿射变换、7 种混合、
-// 位图采样、取景渲染、pick、统计。依赖 core（IR）与 codec（RgbaBuf/PNG）。
+// 位图采样、取景渲染、pick、统计。
+// 依赖 core（IR）、codec（RgbaBuf/PNG）与 pixel（MVSL 编辑表作为最终一遍：
+// 层合成出底图 → 施加编辑表 → 再裁剪缩放。方向 base ← codec ← core ←
+// pixel ← render 无环，pixel 不反向依赖 render）。
 
 import {
   "moonpainter/core",
   "moonpainter/codec",
+  "moonpainter/pixel",
 }
 
 import {

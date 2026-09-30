@@ -1242,10 +1242,12 @@ fn cmd_render(s : Session, tokens : Array[String]) -> String {
       overlay = true
     }
   }
+  // 视觉通道必须看到**最终图**（底图 + 编辑表）：模型据此判断效果、
+  // 也据此决定下一步，漏掉编辑表等于给它看错图。
   let rendered : Result[@codec.RgbaBuf, String] = if overlay {
-    @render.render_view_overlay(doc, env, vx0, vy0, vx1, vy1, width)
+    @render.render_view_overlay_with(doc, env, vx0, vy0, vx1, vy1, width, s.mvsl)
   } else {
-    @render.render_view(doc, env, vx0, vy0, vx1, vy1, width)
+    @render.render_view_with(doc, env, vx0, vy0, vx1, vy1, width, s.mvsl)
   }
   let buf = match rendered {
     Ok(b) => b
@@ -1291,7 +1293,10 @@ fn cmd_stats(s : Session) -> String {
     Ok(e) => e
     Err(e) => return err(e)
   }
-  let buf = @render.render_doc(doc, env)
+  let buf = match @render.render_doc_with(doc, env, s.mvsl) {
+    Ok(b) => b
+    Err(e) => return err(e)
+  }
   let png = @codec.png_encode(buf)
   s.last_render_hash = @base.sha256_hex(png)
   let st = @render.stats(buf)
@@ -1726,7 +1731,10 @@ fn cmd_sample(s : Session, tokens : Array[String]) -> String {
     Ok(e) => e
     Err(e) => return err(e)
   }
-  let buf = @render.render_doc(doc, env)
+  let buf = match @render.render_doc_with(doc, env, s.mvsl) {
+    Ok(b) => b
+    Err(e) => return err(e)
+  }
   let px = if x >= buf.width { buf.width - 1 } else { x }
   let py = if y >= buf.height { buf.height - 1 } else { y }
   let c = @codec.rgba_get(buf, px, py)

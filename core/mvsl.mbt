@@ -242,8 +242,17 @@ fn is_relight(k : OpKind) -> Bool {
 
 ///|
 /// 参数范围校验（所有算子/选择子共用）。返回精确错误文本。
+///
+/// 两处**静态可判**的语义错误必须在这里拦下，而不是留到执行期：
+/// 1. 算子的 `stage:n` 前视引用（`n > 自身序号`）永远不可能满足——
+///    留到执行期会变成「命令面收下了、渲染时才失败」；
+/// 2. 断言带 `stage:` 基准。保护断言问的是「原图这块有没有被乱动」，
+///    求值基准必须是不可变底图；挂 `stage:n` 会让保护区随中间算子漂移，
+///    断言也就失去了意义（而且现有实现根本不认这个基准，会静默按 base
+///    求值——声明与行为不一致比直接拒绝更坏）。
 pub fn validate_program(p : EditProgram) -> Result[Unit, String] {
   let seen : Array[String] = []
+  let mut index = 0
   for op in p.ops {
     if op.id == "" {
       return Err("算子缺 id（编辑表 id 稳定，禁止空 id）")
@@ -296,6 +305,14 @@ pub fn validate_program(p : EditProgram) -> Result[Unit, String] {
         KeepLargest => ()
       }
     }
+    match op.sel.basis {
+      Base => ()
+      Stage(n) => if n > index {
+          return Err(
+            "算子 \{op.id} 的 STAGE(\{n}) 是前视引用（自身序号 \{index}）——前视永远无法满足，拒绝",
+          )
+        }
+    }
     let r0 = validate_sel(op.sel, "算子 \{op.id}")
     if r0 is Err(_) {
       let msg = match r0 {
@@ -304,6 +321,7 @@ pub fn validate_program(p : EditProgram) -> Result[Unit, String] {
       }
       return Err(msg)
     }
+    index = index + 1
   }
   let gseen : Array[String] = []
   for g in p.guards {
@@ -321,6 +339,13 @@ pub fn validate_program(p : EditProgram) -> Result[Unit, String] {
       return Err(
         "断言 \{g.id} 的 max_changed_ratio=\{fmt_num(g.max_changed_ratio)} 越界（0..1）",
       )
+    }
+    match g.sel.basis {
+      Base => ()
+      Stage(n) =>
+        return Err(
+          "断言 \{g.id} 的保护区域以 stage:\{n} 为基准：保护断言必须对不可变底图求值，否则保护区会随中间算子漂移",
+        )
     }
     let r1 = validate_sel(g.sel, "断言 \{g.id}")
     if r1 is Err(_) {
