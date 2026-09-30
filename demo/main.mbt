@@ -810,10 +810,16 @@ fn inject_css() -> Unit {
   )
 }
 
-fn inject_html() -> Unit {
-  js_html(
-    "app",
-    (
+///|
+/// 页面骨架 HTML。
+///
+/// 抽成 `pub` 是为了让测试能对它做**静态接线检查**：HTML 里引用的每个
+/// `globalThis.__x` 必须真的被 `register_globals()` 注册，`getElementById('y')`
+/// 里的每个 id 必须真的出现在同一份 HTML 里。这类断链以前只有"在浏览器里点
+/// 一下"才能发现——而走不到那条路的人就永远发现不了（仓库里 `undo` 与蒙版
+/// UI 都栽过这个形状）。
+pub fn app_html() -> String {
+  (
       #|<div class='topbar'>
       #|<span class='logo'>🎨 MoonPainter</span>
       #|<button onclick='globalThis.__new()'>新建</button>
@@ -909,8 +915,12 @@ fn inject_html() -> Unit {
       #|</div>
       #|<input type='file' id='file-in' accept='image/*' style='display:none' onchange='globalThis.__file_sel()'/>
       #|<input type='file' id='mpd-in' accept='.mpd,application/zip' style='display:none' onchange='globalThis.__mpd_sel()'/>
-    ),
   )
+}
+
+///|
+fn inject_html() -> Unit {
+  js_html("app", app_html())
   for p in provider_presets() {
     js_add_opt("ai-provider", p.id, p.name)
   }
@@ -944,13 +954,21 @@ async fn on_file_selected() -> Unit {
   }
 }
 
-fn register_globals() -> Unit {
+///|
+/// 把所有事件处理器挂到 `globalThis` 上（页面里 `onclick='globalThis.__x()'` 靠它）。
+/// `pub` 是为了让测试能注册一遍再去核对页面 HTML 的引用——见 `app_html`。
+pub fn register_globals() -> Unit {
   js_reg0("__run", fn() -> @js_async.Promise[Unit] { @js_async.Promise::from_async(async fn() { ai_turn() }) })
   js_reg0("__save", fn() -> @js_async.Promise[Unit] { @js_async.Promise::from_async(async fn() { do_save() }) })
   js_reg0("__export", fn() -> @js_async.Promise[Unit] { @js_async.Promise::from_async(async fn() { do_export() }) })
   js_reg0("__file_sel", fn() -> @js_async.Promise[Unit] { @js_async.Promise::from_async(async fn() { on_file_selected() }) })
   js_reg0("__mpd_sel", fn() -> @js_async.Promise[Unit] { @js_async.Promise::from_async(async fn() { on_mpd_selected() }) })
   js_reg0("__crop_apply", fn() -> @js_async.Promise[Unit] { @js_async.Promise::from_async(async fn() { do_crop_apply() }) })
+  // AI 面板折叠。**这个注册原先漏了**：HTML 里「🤖 AI 修图」按钮与面板标题
+  // 都写着 `onclick='globalThis.__toggle_ai()'`，而 `js_toggle_ai` 的 FFI 早就
+  // 写好了、却没有任何地方调用它——点下去是 `__toggle_ai is not a function`。
+  // 是"页面接线"那条测试抓到它的（在此之前只有人工点一下才看得见）。
+  js_reg1("__toggle_ai", fn(_ : String) { js_toggle_ai() })
   js_reg1("__sel", fn(id : String) { do_sel(id) })
   js_reg1("__vis", fn(id : String) { do_vis(id) })
   js_reg1("__del", fn(id : String) { do_del(id) })

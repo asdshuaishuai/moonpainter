@@ -180,6 +180,13 @@ extern "js" fn js_reg0(name : String, f : () -> @js_async.Promise[Unit]) -> Unit
   #| (name, f) => { globalThis[name] = async () => { try { await f(); } catch (e) { console.error('MP:', e); } }; }
 
 ///|
+///|
+/// `globalThis` 上有没有一个叫 `name` 的函数（页面接线检查用：HTML 里
+/// `onclick='globalThis.__x()'` 引用的处理器必须真的注册过）。
+pub extern "js" fn js_global_is_fn(name : String) -> Bool =
+  #| (name) => typeof globalThis[name] === 'function'
+
+///|
 extern "js" fn js_reg1(name : String, f : (String) -> Unit) -> Unit =
   #| (name, f) => { globalThis[name] = f; }
 

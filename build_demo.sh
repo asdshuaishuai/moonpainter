@@ -24,13 +24,13 @@ run_quiet() {
   rm -f "$log"
 }
 
-echo "== 1/6 引擎 wasm 构建 =="
+echo "== 1/7 引擎 wasm 构建 =="
 run_quiet moon build --target wasm
 
-echo "== 2/6 demo（MoonBit js 后端）构建 =="
+echo "== 2/7 demo（MoonBit js 后端）构建 =="
 run_quiet moon build --target js
 
-echo "== 3/6 组装 dist/ =="
+echo "== 3/7 组装 dist/ =="
 rm -rf dist
 mkdir -p dist
 cp _build/wasm/release/build/wasm/wasm.wasm dist/moonpainter.wasm 2>/dev/null ||
@@ -51,7 +51,7 @@ cat > dist/index.html << 'HTML'
 HTML
 ls -la dist | awk 'NR>1 {print $5, $9}'
 
-echo "== 4/6 Node headless 自检（mock 模型 × wasm 引擎） =="
+echo "== 4/7 Node headless 自检（mock 模型 × wasm 引擎） =="
 cd dist
 NODE_OUT=$(node demo.js)
 echo "$NODE_OUT" | python3 -c "
@@ -64,7 +64,7 @@ print('headless selftest OK:', d)
 "
 cd ..
 
-echo "== 5/6 npm SDK 冒烟（多会话 + 渲染 + 容器） =="
+echo "== 5/7 npm SDK 冒烟（多会话 + 渲染 + 容器） =="
 cp _build/wasm/debug/build/wasm/wasm.wasm npm/moonpainter-sdk/moonpainter.wasm
 cd npm/moonpainter-sdk
 node --input-type=module -e "
@@ -103,7 +103,33 @@ console.log('NPM SDK SMOKE OK: multi-session + render + save/open round-trip all
 "
 cd ../..
 
-echo "== 6/6 demo 测试（工具面 + MVSL 闭环可达；需 Node） =="
+echo "== 6/7 页面接线：HTML 引用的每个处理器的名字都出现过在注册表里 =="
+# 运行时那条测试（demo_test「页面接线」）比这条强——它拿的是**真的拼出来的
+# HTML**。但它只覆盖静态骨架 `app_html()`；图层列表与属性面板是
+# `sb.write_string(...)` **动态拼**出来的，那段 HTML 只有在浏览器里点开某个
+# 图层才会生成，测试拿不到。这里补一条源码级交叉核对，把两类引用都罩住。
+#
+# 这条不是理论上的：它当场抓到过 `__toggle_ai` —— HTML 里「🤖 AI 修图」按钮
+# 与面板标题都写着 `onclick='globalThis.__toggle_ai()'`，而 `js_toggle_ai` 的
+# FFI 早就写好、却没有任何地方调用它，点下去是 `__toggle_ai is not a function`。
+python3 - <<'PYW'
+import re, sys, glob
+refs, regs = set(), set()
+for path in glob.glob('demo/*.mbt'):
+    for line in open(path, encoding='utf-8'):
+        stripped = line.lstrip()
+        if stripped.startswith('//'):
+            continue                      # 注释里的示例不算引用
+        refs.update(re.findall(r'globalThis\.(__[A-Za-z_][A-Za-z_0-9]*)', line))
+        regs.update(re.findall(r'js_reg[0-9a-z]*\("(__[A-Za-z_][A-Za-z_0-9]*)"', line))
+missing = sorted(refs - regs)
+if missing:
+    print('FAIL: 页面引用了没注册的处理器（点了就是 JS 报错）：', '、'.join(missing))
+    sys.exit(1)
+print('页面接线 OK（%d 个处理器引用全部有注册）' % len(refs))
+PYW
+
+echo "== 7/7 demo 测试（工具面 + MVSL 闭环可达；需 Node） =="
 # 这条守住"引擎有能力"与"产品里的 AI 用得上"之间的缝：mock 模型经真实
 # tool provider 驱动真实 wasm 引擎，跑完整 MVSL 闭环（普查→试选→装表→
 # 影响/断言→渲染），并断言图像类回包走附件。

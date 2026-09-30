@@ -226,3 +226,70 @@ test "工具面的第二张表：tool_line 真的拼得出命令行（含自由�
     "sample 8 8",
   )
 }
+
+///|
+/// 抠出 `s` 里所有 `prefix` 之后、`stop` 之前的那一段。
+/// 用于从 HTML 里取 `globalThis.__x` 的名字与 `getElementById('y')` 的 id。
+fn collect_between(s : String, prefix : String, stop : String) -> Array[String] {
+  let out : Array[String] = []
+  let mut from = 0
+  while from < s.length() {
+    let rest = s[from:].to_owned()
+    let i = match rest.find(prefix) {
+      Some(i) => i
+      None => break
+    }
+    let after = rest[i + prefix.length():].to_owned()
+    let j = match after.find(stop) {
+      Some(j) => j
+      None => break
+    }
+    out.push(after[:j].to_owned())
+    from = from + i + prefix.length() + j
+  }
+  out
+}
+
+///|
+test "页面接线：HTML 引用的处理器都注册了，getElementById 的 id 都在同一份 HTML 里" {
+  // 这类断链以前只有"在浏览器里点一下"才能发现，而走不到那条路的人就永远
+  // 发现不了——仓库里 `undo`（工具面无映射）与蒙版 UI 都栽过这个形状。
+  // 点击的**视觉语义**仍然只能人工看，但"按钮背后有没有那个函数""那个 id
+  // 存不存在"是可以机器验的，而且正是最容易断的两处。
+  let html = @demo.app_html()
+  assert_true(html.length() > 2000, msg="HTML 不像页面骨架，长度 \{html.length()}")
+  // 1) 事件处理器必须真的挂在 globalThis 上
+  @demo.register_globals()
+  let handlers = collect_between(html, "globalThis.__", "(")
+  assert_true(
+    handlers.length() > 20,
+    msg="只抠到 \{handlers.length()} 个处理器，扫描大概坏了（应远多于 20）",
+  )
+  let missing : Array[String] = []
+  for h in handlers {
+    if !@demo.js_global_is_fn("__" + h) {
+      missing.push(h)
+    }
+  }
+  assert_eq(
+    missing.length(),
+    0,
+    msg="HTML 引用了没注册的处理器（点了就是 JS 报错）：\{missing.join("、")}",
+  )
+  // 2) getElementById 的 id 必须在同一份 HTML 里存在（两种引号都要扫）
+  let ids : Array[String] = []
+  ids.append(collect_between(html, "getElementById('", "'"))
+  ids.append(collect_between(html, "getElementById(\"", "\""))
+  assert_true(ids.length() > 0, msg="没抠到任何 getElementById，扫描大概坏了")
+  let no_el : Array[String] = []
+  for i in ids {
+    if !html.contains("id='" + i + "'") {
+      no_el.push(i)
+    }
+  }
+  assert_eq(
+    no_el.length(),
+    0,
+    msg="HTML 里 getElementById 指向了不存在的 id：\{no_el.join("、")}",
+  )
+}
