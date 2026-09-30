@@ -253,6 +253,19 @@ fn atom_field(a : @core.AtomSel, ctx : SelCtx) -> Result[Field, String] {
 }
 
 ///|
+/// 彩窗三项（色相 / 彩度 / 亮度）的**单一实现点**。
+///
+/// 三项的域不同（色相是环上角距、彩度/亮度是绝对差），但判据与羽化完全同构。
+/// 写成三行手写调用就是"三处各自算一遍"——实测往其中一行插入
+/// `feather: 0.0`（只让色相项失去羽化）时，全部 154 条测试通过：其中一行
+/// 被漏掉的羽化没有任何测试能发现。同一条教训见 AGENTS 铁律 7。
+fn window3(dh : Double, ds : Double, dl : Double, w : @core.ColorWindow) -> Double {
+  window_membership(dh, w.h_half, w.feather) *
+  window_membership(ds, w.s_half, w.feather) *
+  window_membership(dl, w.l_half, w.feather)
+}
+
+///|
 /// OKLCh 色相环 + 饱和度 + 亮度三维软窗。
 fn color_field(w : @core.ColorWindow, ctx : SelCtx) -> Field {
   let f = field_new(ctx.base.width, ctx.base.height)
@@ -271,10 +284,7 @@ fn color_field(w : @core.ColorWindow, ctx : SelCtx) -> Field {
     } else {
       w.l_center - lch.l
     }
-    let mh = window_membership(hd, w.h_half, w.feather)
-    let ms = window_membership(sd, w.s_half, w.feather)
-    let ml = window_membership(ld, w.l_half, w.feather)
-    f.v[i] = mh * ms * ml
+    f.v[i] = window3(hd, sd, ld, w)
     i = i + 1
   }
   f

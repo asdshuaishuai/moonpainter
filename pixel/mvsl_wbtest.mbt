@@ -424,6 +424,205 @@ test "diff 证书：选区外泄漏率为 0（软边界不越界）" {
   assert_true(rep.sel_de > 0.0, msg="选区内应有 ΔE")
 }
 
+// ---------------------------------------------------------------------------
+// 编辑表的**数值语义**。
+//
+// 这一组是变异测试逼出来的：往实现里注入下面这些 bug，全部 150 条测试通过——
+//   M1  把 `lerp_argb(in_c, op_c, w)` 的 w 换成 1.0（软权重被忽略、硬边化）
+//   M3  color 窗拿 h_half 去判彩度距离（s_half 失效）
+//   M7  quant8d 的 `v + 0.5` 去掉（四舍五入变截断）
+//   M8  color 窗的 feather 传 0（羽化失效）
+//
+// 原因：已有的测试全是**契约/结构**断言（覆盖率、连通域、泄漏率、canonical
+// 往返），而 render 的 golden 走 `render_doc`（空编辑表），**根本不经过
+// `lerp_argb`**。于是 MVSL 最核心的那句 `out = lerp(in, op(in), w)` 只有
+// 代码没有测试。这几条补上。
+// ---------------------------------------------------------------------------
+
+///|
+test "MVSL 数值：逐像素 out == lerp(in, op(in), w)（软权重真的参与混合）" {
+  let base = mk_buf(8, 8)
+  fill(base, 0, 0, 8, 8, argb(60, 120, 200))
+  // 手工软权重场覆盖 [0,1)：0, 1/64, …, 63/64
+  let w = field_new(8, 8)
+  let mut i = 0
+  while i < 64 {
+    w.v[i] = i.to_double() / 64.0
+    i = i + 1
+  }
+  let op : @core.EditOp = op_recolor("e1", sel_geo(0.0, 0.0, 8.0, 8.0), 120.0)
+  let out = apply_op(base, op, w)
+  let mut j = 0
+  while j < 64 {
+    let in_c = base.pixels[j]
+    let op_c = apply_recolor(in_c, 120.0)
+    assert_eq(
+      out.pixels[j],
+      lerp_argb(in_c, op_c, w.v[j]),
+      msg="第 \{j} 像素软混合不对（w=\{w.v[j]}）",
+    )
+    j = j + 1
+  }
+  // 关键：中间权重必须产生"中间色"。忽略权重（硬边化）的实现要么让
+  // w=0.5 处等于原像素，要么等于算子全量结果——两者都在这被抓。
+  let mid = 32
+  let in_mid = base.pixels[mid]
+  let op_mid = apply_recolor(in_mid, 120.0)
+  assert_true(out.pixels[mid] != in_mid, msg="w=0.5 不该等于原像素")
+  assert_true(
+    out.pixels[mid] != op_mid,
+    msg="w=0.5 等于算子全量结果——软权重被忽略（硬边化）",
+  )
+  // 端点硬约束：w=0 逐位还原（去污染契约 —— 编辑表不许碰没选中的地方）
+  assert_eq(out.pixels[0], base.pixels[0], msg="w=0 必须逐位还原原像素")
+}
+
+///|
+test "MVSL 数值：lerp_argb 是四舍五入而非截断（8 位量化的 .5 进位）" {
+  // 127.5 必须进位到 128。截断会得到 127。这条路径（编辑表混合 / overlay）
+  // 不走 render 的 golden，没有别的守护——差 1 也会整片偏暗。
+  assert_eq(lerp_argb(0xFF000000, 0xFFFFFFFF, 0.5), 0xFF808080)
+  // 63.75 → 64
+  assert_eq(lerp_argb(0xFF000000, 0xFFFFFFFF, 0.25), 0xFF404040)
+  // 端点
+  assert_eq(lerp_argb(0xFF000000, 0xFFFFFFFF, 0.0), 0xFF000000)
+  assert_eq(lerp_argb(0xFF000000, 0xFFFFFFFF, 1.0), 0xFFFFFFFF)
+}
+
+///|
+test "MVSL 数值：亮窗的 feather 真的产生中间权重（羽化被忽略会被抓）" {
+  // 16 级灰度的 OKLab L 单调递增，必然跨越亮窗边界
+  let base = mk_buf(16, 1)
+  let mut i = 0
+  while i < 16 {
+    let v = i * 17
+    base.pixels[i] = argb(v, v, v)
+    i = i + 1
+  }
+  let ctx = SelCtx::new(base)
+  // 色相/彩度项放开（h_half 覆盖整环、s_half 覆盖全彩度），只留亮度项
+  let hard : @core.ColorWindow = {
+    h_center: 0.0,
+    h_half: 180.0,
+    s_center: 0.15,
+    s_half: 1.0,
+    l_center: 0.5,
+    l_half: 0.4,
+    feather: 0.0,
+  }
+  let soft = { ..hard, feather: 0.5 }
+  let fh = color_field(hard, ctx)
+  let fs = color_field(soft, ctx)
+  let mut mid_hard = 0
+  let mut mid_soft = 0
+  let mut k = 0
+  while k < 16 {
+    if fh.v[k] > 0.0 && fh.v[k] < 1.0 {
+      mid_hard = mid_hard + 1
+    }
+    if fs.v[k] > 0.0 && fs.v[k] < 1.0 {
+      mid_soft = mid_soft + 1
+    }
+    k = k + 1
+  }
+  assert_eq(mid_hard, 0, msg="feather=0 应当是硬边，却出现中间权重")
+  assert_true(
+    mid_soft > 0,
+    msg="feather=0.5 没有产生任何中间权重——羽化被忽略",
+  )
+  // window_membership 自身的过渡形态：core 内 1、窗外 0、过渡带严格中间
+  assert_eq(window_membership(0.1, 0.4, 0.5), 1.0, msg="核心区内应为 1")
+  assert_eq(window_membership(0.45, 0.4, 0.5), 0.0, msg="窗外应为 0")
+  let t = window_membership(0.3, 0.4, 0.5)
+  assert_true(t > 0.0 && t < 1.0, msg="过渡带内应为严格中间值，得 \{t}")
+  // **三项必须各自都带羽化**。只查其中一项是不够的：实测把色相项的 feather
+  // 单独写成 0（彩度/亮度照旧）时，别的测试全过——一项被漏掉的羽化没人发现。
+  let w3 : @core.ColorWindow = {
+    h_center: 0.0,
+    h_half: 0.4,
+    s_center: 0.15,
+    s_half: 0.4,
+    l_center: 0.5,
+    l_half: 0.4,
+    feather: 0.5,
+  }
+  // 三项各取"落在过渡带内"的距离（core = 0.4*0.5 = 0.2，窗外 0.4）
+  let band = 0.3
+  let mh = window3(band, 0.0, 0.0, w3)
+  let ms = window3(0.0, band, 0.0, w3)
+  let ml = window3(0.0, 0.0, band, w3)
+  assert_true(mh > 0.0 && mh < 1.0, msg="色相项没有羽化（feather 被漏掉）：\{mh}")
+  assert_true(ms > 0.0 && ms < 1.0, msg="彩度项没有羽化（feather 被漏掉）：\{ms}")
+  assert_true(ml > 0.0 && ml < 1.0, msg="亮度项没有羽化（feather 被漏掉）：\{ml}")
+}
+
+///|
+test "smoothstep：羽化曲线是平滑曲线而非线性（线性退化会被抓）" {
+  // 把 smoothstep 换成 `t`（线性）是"看着像对"的退化：中间权重仍严格在
+  // (0,1)、核心区/窗外/覆盖率/泄漏率全都照旧——所有结构断言都抓不住它。
+  // 只有锁住曲线本身的数值才能发现。线性会让软边界出现可见的"折线"感，
+  // 这正是羽化用 smoothstep 的原因（端点一阶导为 0）。
+  assert_eq(smoothstep(0.0), 0.0)
+  assert_eq(smoothstep(1.0), 1.0)
+  assert_eq(smoothstep(0.5), 0.5, msg="对称点")
+  assert_eq(smoothstep(0.25), 0.15625, msg="3t²-2t³")
+  assert_eq(smoothstep(0.75), 0.84375)
+  // 越界钳位
+  assert_eq(smoothstep(-0.5), 0.0)
+  assert_eq(smoothstep(1.5), 1.0)
+  // 端点附近必须比线性更平（C1：一阶导为 0）——线性实现会在这里失败
+  assert_true(
+    smoothstep(0.05) < 0.05 * 0.5,
+    msg="起点附近不比线性平——羽化曲线退化成了线性",
+  )
+  assert_true(
+    smoothstep(0.95) > 1.0 - 0.05 * 0.5,
+    msg="终点附近不比线性平——羽化曲线退化成了线性",
+  )
+}
+
+///|
+test "MVSL 数值：色窗的 s_half（彩度半宽）真的参与判据" {
+  // 彩度梯度：灰白（彩度≈0）→ 红（彩度高）。色相/亮度项放开，
+  // 场只由彩度项决定——拿 s_half 之外的东西判彩度会立刻暴露。
+  let base = mk_buf(8, 1)
+  let mut i = 0
+  while i < 8 {
+    let g = 255 - i * 30
+    base.pixels[i] = argb(255, g, g)
+    i = i + 1
+  }
+  let ctx = SelCtx::new(base)
+  let narrow : @core.ColorWindow = {
+    h_center: 0.0,
+    h_half: 180.0,
+    s_center: 0.10,
+    s_half: 0.04,
+    l_center: 0.6,
+    l_half: 1.0,
+    feather: 0.0,
+  }
+  let wide = { ..narrow, s_half: 0.20 }
+  let fn_ = color_field(narrow, ctx)
+  let fw = color_field(wide, ctx)
+  let mut cn = 0
+  let mut cw = 0
+  let mut k = 0
+  while k < 8 {
+    if fn_.v[k] > 0.0 {
+      cn = cn + 1
+    }
+    if fw.v[k] > 0.0 {
+      cw = cw + 1
+    }
+    k = k + 1
+  }
+  assert_true(
+    cw > cn,
+    msg="加宽 s_half 没有命中更多像素（s_half 未参与判据）：\{cn} vs \{cw}",
+  )
+}
+
 ///|
 test "diff 证书：软过渡带不算泄漏（leak 判据是支撑集，不是 0.5 核心阈值）" {
   // 这条测试锁住一个已经被踩过的概念错误：leak 的判据曾经是
