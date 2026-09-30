@@ -348,6 +348,13 @@ fn paint_layer(
       }
       let (cover, color) = subsample_result(fill_hits, stroke_hits, sample_colors)
       if cover > 0 {
+        // 颜色自带的 alpha 要并进覆盖度。`Fill::Solid(0xAARRGGBB)` 的类型注释
+        // 和工具面的 `fill: #RRGGBB[AA]` 都承诺了它，但此前这里
+        // `color & 0x00FFFFFF` 把 alpha 直接丢了——`fill=#FF000080`（半透明红）
+        // 渲染成**完全不透明红**，而且不报错。仓库里没有任何测试用半透明
+        // 填充，所以这个缺口一直没人踩到。
+        let ca = (color >> 24) & 0xFF
+        let cover = if ca >= 255 { cover } else { (cover * ca + 127) / 255 }
         let src_alpha = ((cover & 0xFF) << 24)
         let rgb = color & 0x00FFFFFF
         let mut src = src_alpha | rgb
@@ -913,6 +920,84 @@ pub fn render_layers(
 }
 
 ///|
+/// 把**单个图层**栅格化到一张独立缓冲：透明底 + 只画这一层。
+///
+/// 这是「图层级编辑」的地基。`paint_layer` 只会往共享缓冲上叠，这里给它
+/// 一张干净的白纸，于是能拿到"这一层自己的 RGBA"（alpha = 该像素的覆盖度）。
+/// 连同下面的 `blend_buffer`，就能把"元素级混合"改写成"层级混合"。
+pub fn rasterize_layer(
+  l : @core.Layer,
+  w : Int,
+  h : Int,
+  env : RenderEnv,
+) -> @codec.RgbaBuf {
+  let buf = @codec.rgba_new(w, h)
+  @codec.fill_rect_rgba(buf, 0, 0, w, h, 0x00000000)
+  paint_layer(l, buf, env, 1.0)
+  buf
+}
+
+///|
+/// 把一张**带 alpha 的层缓冲**按混合模式叠到目标缓冲上。
+/// alpha 为 0 的像素直接跳过（与 `paint_layer` 的短路一致，也是确定性的一部分：
+/// 跳过的像素不会被写成"底与透明混合"的结果）。
+fn blend_buffer(
+  dst : @codec.RgbaBuf,
+  src : @codec.RgbaBuf,
+  mode : @core.BlendMode,
+) -> Unit {
+  let w = if dst.width < src.width { dst.width } else { src.width }
+  let h = if dst.height < src.height { dst.height } else { src.height }
+  let mut y = 0
+  while y < h {
+    let mut x = 0
+    while x < w {
+      let fg = @codec.rgba_get(src, x, y)
+      if (fg & 0xFF000000) != 0 {
+        let bg = @codec.rgba_get(dst, x, y)
+        @codec.rgba_set(dst, x, y, composite_pixel(bg, fg, mode))
+      }
+      x = x + 1
+    }
+    y = y + 1
+  }
+}
+
+///|
+/// 逐层栅格化再合成（「**层级混合**」语义）。
+///
+/// 与 `render_layers` 的唯一差别在"同一层内多个元素互相重叠"时：
+///   * `render_layers`：每个元素各自与**当时的底**混合（元素级）；
+///   * 本函数：先把整层叠到透明底上算出"这一层自己的颜色"，再与底混合（层级）。
+/// 两者**逐位相同**——`over` 是结合的，所以"先叠出整层再与底混合"与
+/// "每个元素各自与底混合"在 Normal 模式下数学等价（`render/layer_raster_test.mbt`
+/// 对不透明层、层内半透明重叠两种情形都断言了这个相等）。**这个相等是好事**：
+/// 它意味着把逐层栅格化接进渲染管线是零回归的——能单独拿出某一层、改完再放
+/// 回去，而输出一个像素不变。图层级编辑要的是"能对某一层单独施加编辑"，
+/// 不是改变混合语义。目前它只用于对照实验与测试，还没接进渲染管线。
+pub fn render_layers_rasterized(
+  doc : @core.Document,
+  env : RenderEnv,
+) -> @codec.RgbaBuf {
+  let w = if doc.width > RENDER_MAX_SIDE { RENDER_MAX_SIDE } else { doc.width }
+  let h = if doc.height > RENDER_MAX_SIDE {
+    RENDER_MAX_SIDE
+  } else {
+    doc.height
+  }
+  let out = @codec.rgba_new(w, h)
+  @codec.fill_rect_rgba(out, 0, 0, w, h, 0xFFFFFFFF)
+  for l in doc.layers {
+    if !l.visible || l.opacity <= 0.0 {
+      continue
+    }
+    let lb = rasterize_layer(l, w, h, env)
+    blend_buffer(out, lb, l.blend)
+  }
+  out
+}
+
+///|
 /// 取景渲染：viewport 为归一化 [x0,y0,x1,y1]，out_width 为目标宽（像素）。
 /// 先全画布渲染（≤4096），再裁剪 + 最近邻缩放（确定性优先）。
 pub fn render_view(
@@ -1430,6 +1515,9 @@ fn paint_text(
   let sc = if scale < 1 { 1 } else { scale }
   let advance = 6 * sc
   let color = fill_color_at(l.fill, 0.0, 0.0, l.w, l.h)
+  // 颜色自带的 alpha 并进覆盖度（与形状填充同理）。`NoFill` 的 alpha 是 0，
+  // 语义就是"不画"；默认层是 `Solid(0xFF808080)`，所以默认路径不变。
+  let color_a = ((color >> 24) & 0xFF).to_double() / 255.0
   let px0 = l.x.to_int()
   let py0 = l.y.to_int()
   let mut cx = 0
@@ -1450,7 +1538,7 @@ fn paint_text(
               let px = px0 + cx + col * sc + sx
               let py = py0 + row * sc + sy
               let mf = mask_cover_at(l, px.to_double(), py.to_double())
-              let a = eff_opacity * mf
+              let a = eff_opacity * mf * color_a
               let a255 = (a * 255.0 + 0.5).to_int()
               let src = (a255 << 24) + (color & 0x00FFFFFF)
               let dst = @codec.rgba_get(buf, px, py)

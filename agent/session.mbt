@@ -751,6 +751,14 @@ fn cmd_add_text(s : Session, tokens : Array[String]) -> String {
     Ok(l) => l
     Err(e) => return err(e)
   }
+  // 文本层默认黑字，但**显式给了 fill= 就该生效**：此前这里无条件写死
+  // `fill: Solid(0xFF000000)`，把 `build_shape_layer`（它内部走 `apply_style_kv`）
+  // 已经解析好的用户 fill 盖掉了，于是 `add-text ... fill=#0000FFFF` 静默渲染成
+  // 黑字——参数被接受、被落盘、被上报，只有渲染不看它。
+  let text_fill = match m.get("fill") {
+    Some(_) => layer.fill
+    None => @core.Fill::Solid(0xFF000000)
+  }
   let l2 = {
     ..layer,
     x: if x != 0.0 { x } else { layer.x },
@@ -759,7 +767,7 @@ fn cmd_add_text(s : Session, tokens : Array[String]) -> String {
     h: bh,
     text,
     font_size: fs,
-    fill: @core.Fill::Solid(0xFF000000),
+    fill: text_fill,
   }
   snapshot(s, doc, "add text \{id}")
   doc.layers.push(l2)

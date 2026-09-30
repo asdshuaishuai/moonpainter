@@ -178,7 +178,12 @@ test "椭圆 + 渐变 + 旋转 golden 渲染确定性" {
   }
   let hash = @base.sha256_hex(png1)
   // golden：固定样例场景的渲染指纹（同引擎版本内必须稳定）
-  assert_eq(hash, "9caa1c1d52d6297e5a802733850c1252a981abbd2fc4458e27e765578e9e5195")
+  //
+  // 这个值在「填充/描边的自带 alpha 真正生效」那次修复后变过一次：
+  // 场景里 `rot2` 的描边是 `0xFFFFFFAA`（alpha=0xAA 的半透明白），而修复前
+  // 那个 alpha 被 `color & 0x00FFFFFF` 丢掉了——即 goldne 记录的其实是
+  // "不透明白描边"的画面。是一次**有意为之**的变更，不是漂移。
+  assert_eq(hash, "c3c7b4e162438b7b6097c591f0c23c4cc3d1f101b4086be29a1ef3a479b9032d")
 }
 
 ///|
@@ -233,4 +238,52 @@ test "stats：直方图 JSON 形态与全覆盖计数" {
   let s = @render.stats(@render.render_doc(doc, env))
   assert_true(s.has_prefix("{\"total\":64,\"opaque_px\":64"))
   assert_true(s.has_suffix("]}"))
+}
+
+///|
+test "填充色自带的 alpha 生效：50% 红压白底 = 255/127/127" {
+  // `Fill::Solid(0xAARRGGBB)` 的类型注释与工具面的 `fill: #RRGGBB[AA]` 都
+  // 承诺了这个 alpha，但 `paint_layer` 曾经 `color & 0x00FFFFFF` 把它丢掉：
+  // `fill=#FF000080`（半透明红）渲染成**完全不透明红**，而且不报错。
+  // 当时仓库里没有任何测试用半透明填充（命令面文本形式一处都没有，数值常量
+  // 也只在一条 golden 里间接沾到一次），所以这个缺口一直没人踩到。
+  let doc = @core.new_document("u-alpha", 8, 8)
+  let base = @core.default_layer("l", "l", 0.0, 0.0, 8.0, 8.0)
+  doc.layers.push({ ..base, fill: @core.Fill::Solid(0x80FF0000) })
+  let env = @render.RenderEnv::new()
+  let buf = @render.render_doc(doc, env)
+  // 白底 + 50% 红 → G/B 通道 = 255 × 0.5 ≈ 127
+  assert_eq(@codec.rgba_get(buf, 4, 4), 0xFFFF7F7F)
+}
+
+///|
+test "描边色自带的 alpha 也生效：50% 蓝压白底 = 127/127/255" {
+  let doc = @core.new_document("u-alpha2", 8, 8)
+  let base = @core.default_layer("l", "l", 0.0, 0.0, 8.0, 8.0)
+  doc.layers.push({
+    ..base,
+    fill: @core.Fill::NoFill,
+    stroke: { color: 0x800000FF, width: 8.0 },
+  })
+  let env = @render.RenderEnv::new()
+  let buf = @render.render_doc(doc, env)
+  assert_eq(@codec.rgba_get(buf, 4, 4), 0xFF7F7FFF)
+}
+
+///|
+test "不透明填充的输出不变（alpha=FF 是绝大多数路径）" {
+  // 上一条修复不能把"本来就不透明"的常规路径也改掉。
+  let doc = @core.new_document("u-alpha3", 8, 8)
+  let base = @core.default_layer("l", "l", 0.0, 0.0, 8.0, 8.0)
+  doc.layers.push({ ..base, fill: @core.Fill::Solid(0xFFFF0000) })
+  let env = @render.RenderEnv::new()
+  let buf = @render.render_doc(doc, env)
+  assert_eq(@codec.rgba_get(buf, 4, 4), 0xFFFF0000)
+  // 25% / 75% 两个中间档也对得上（量化取整要一致）
+  let d2 = @core.new_document("u-alpha4", 8, 8)
+  let b2 = @core.default_layer("l", "l", 0.0, 0.0, 8.0, 8.0)
+  d2.layers.push({ ..b2, fill: @core.Fill::Solid(0x40FF0000) })
+  let buf2 = @render.render_doc(d2, env)
+  // 25% 红 + 75% 白 → R 仍是 255，G/B = 255 × 0.75 ≈ 191
+  assert_eq(@codec.rgba_get(buf2, 4, 4), 0xFFFFBFBF)
 }

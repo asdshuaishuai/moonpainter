@@ -495,3 +495,77 @@ test "蒙版羽化：feather 按内距线性过渡，0 时仍是硬边" {
   let e2 = run(s, "add-mask r kind=rect x=0 y=0 w=10 h=10 feather=-1")
   assert_true(e2.contains("不能为负"), msg=e2)
 }
+
+///|
+test "填充色自带的 alpha 从命令面一路生效" {
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 24 20")
+  let env = @render.RenderEnv::new()
+  // 50% 红压白底 → #FF7F7F
+  let _ = run(s, "add-rect x=0 y=0 w=24 h=20 fill=#FF000080 id=r")
+  assert_eq(
+    @codec.rgba_get(@render.render_doc(unwrap_doc(s), env), 10, 10),
+    0xFFFF7F7F,
+  )
+  // 同色 50% 再叠一层 → 1−0.5² = 0.75 → #FF3F3F
+  let _ = run(s, "add-rect x=0 y=0 w=24 h=20 fill=#FF000080 id=r2")
+  assert_eq(
+    @codec.rgba_get(@render.render_doc(unwrap_doc(s), env), 10, 10),
+    0xFFFF3F3F,
+  )
+}
+
+///|
+test "add-text 的显式 fill 不再被写死的黑色盖掉" {
+  // 此前 `cmd_add_text` 无条件 `fill: Solid(0xFF000000)`，把
+  // `build_shape_layer`（内部走 `apply_style_kv`）已经解析好的用户 fill
+  // 覆盖掉了：`add-text ... fill=#0000FFFF` 静默渲染成黑字——参数被接受、
+  // 被落盘、被上报，只有渲染不看它。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 24 20")
+  let _ = run(s, "add-text x=0 y=0 text=H fill=#0000FFFF id=t")
+  let env = @render.RenderEnv::new()
+  let buf = @render.render_doc(unwrap_doc(s), env)
+  let mut found = 0
+  let mut wrong = 0
+  let mut y = 0
+  while y < 20 {
+    let mut x = 0
+    while x < 24 {
+      let c = @codec.rgba_get(buf, x, y)
+      if c != 0xFFFFFFFF {
+        found = found + 1
+        if c != 0xFF0000FF {
+          wrong = wrong + 1
+        }
+      }
+      x = x + 1
+    }
+    y = y + 1
+  }
+  // 必须先有像素，否则下面那条"都是蓝色"是空断言
+  assert_true(found > 0, msg="文本必须真的画出像素，否则这条断言没有意义")
+  assert_eq(wrong, 0, msg="文本像素应全是用户给的蓝（\{wrong} 个不是）")
+  // 半透明文本色：50% 蓝压白 → #7F7FFF
+  let s2 = @agent.Session::new()
+  let _ = run(s2, "session-open full_image")
+  let _ = run(s2, "new 24 20")
+  let _ = run(s2, "add-text x=0 y=0 text=H fill=#0000FF80 id=t")
+  let buf2 = @render.render_doc(unwrap_doc(s2), env)
+  let mut any = false
+  let mut y2 = 0
+  while y2 < 20 {
+    let mut x2 = 0
+    while x2 < 24 {
+      if @codec.rgba_get(buf2, x2, y2) != 0xFFFFFFFF {
+        any = true
+        assert_eq(@codec.rgba_get(buf2, x2, y2), 0xFF7F7FFF)
+      }
+      x2 = x2 + 1
+    }
+    y2 = y2 + 1
+  }
+  assert_true(any, msg="半透明文本也必须真的画出像素")
+}
