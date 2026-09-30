@@ -90,7 +90,12 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
 
 - **Mock 端点**（默认）：离线脚本模型，逐轮真实吐工具调用，无需 API Key 即可完整演示；
 - **JS 宿主 SDK**：`npm/moonpainter-sdk/`（加载器 + index.d.ts，多会话句柄
-  `open/execOn/close`、`render`/`saveMpd` 门面）——宿主侧唯一 JS 胶水，引擎本体 100% MoonBit；
+  `open/execOn/close`、`render`/`saveMpd`/`openMpd` 门面）——宿主侧唯一 JS 胶水，
+  引擎本体 100% MoonBit；
+- **容器存取对称**：页面「📂 打开 .mpd」可把存过的容器装回来（按容器自己的
+  画布尺寸重渲染），SDK 侧是 `openMpd(b64)`。在此之前引擎有 `open-mpd`、verify.sh
+  也测着"open→save 字节一致"，但**SDK 只有 `saveMpd`、页面只有保存按钮**——
+  `.mpd` 号称唯一事实源，却能存不能开，等于存了个死文件；
 - **真实端点**：DeepSeek / StepFun / OpenAI / 自定义 OpenAI 兼容端点，Key 仅存本页、
   直连端点（接入形态对齐 deepOrca：OpenAI wire + function calling + models.dev 式模型目录）；
 - **视觉闭环**：`render` / `select_preview` / `mvsl_impact` 三个图像类工具把 PNG 以附件

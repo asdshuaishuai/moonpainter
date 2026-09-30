@@ -127,6 +127,52 @@ else
   exit 1
 fi
 
+# `open-mpd-b64`：SDK 门面（npm/moonpainter-sdk 的 openMpd）走的就是这条。
+# 第 8 步只用**裸命令**戳分发，证明不了它真的能载入；上面那条字节一致走的是
+# `open-mpd <文件>` 变体。这条把 b64 变体也钉住：喂真实载荷、比对指纹。
+# 存档指纹来自**另一个进程**：只比对"载入回包 vs 载入后的 fingerprint"是自洽的，
+# 万一载入什么都没做两边也会一致。再加一个独立判据：载入前故意 `new 16 16`，
+# 载入后画布宽度必须不再是 16（证明文档真的被换掉了，而不只是返回了 ok）。
+SAVED_JSON=$(printf '%s\n' 'session-open full_image' "open-mpd $OUT/verify.mpd" \
+  'save-mpd-b64' | moon run --target native cli \
+  | python3 -c "import json,sys; d=[json.loads(l) for l in sys.stdin if 'mpd_b64' in l][0]; print(d['mpd_b64'], d['fingerprint'])")
+SAVED_B64=${SAVED_JSON%% *}
+SAVED_FP=${SAVED_JSON##* }
+test -n "$SAVED_B64" && test -n "$SAVED_FP" || { echo "FAIL: 取不到 mpd_b64/fingerprint"; exit 1; }
+printf '%s\n' 'session-open full_image' 'new 16 16' \
+  "open-mpd-b64 $SAVED_B64" 'fingerprint' 'inspect' \
+  | moon run --target native cli > "$OUT/b64open.log"
+python3 - "$OUT/b64open.log" "$SAVED_FP" <<'PYX'
+import json, sys
+opened = fp = insp = None
+for line in open(sys.argv[1], encoding="utf-8"):
+    line = line.strip()
+    if not line.startswith("{"):
+        continue
+    d = json.loads(line)
+    if d.get("op") == "open-mpd-b64":
+        opened = d
+    if d.get("op") == "fingerprint":
+        fp = d
+    if d.get("op") == "inspect":
+        insp = d
+want = sys.argv[2]
+if not opened or not opened.get("ok"):
+    print("FAIL: open-mpd-b64 没成功：", opened)
+    sys.exit(1)
+if opened.get("fingerprint") != want:
+    print("FAIL: 载入回包指纹 != 存档进程的指纹：", opened.get("fingerprint"), want)
+    sys.exit(1)
+if not fp or fp.get("fingerprint") != want:
+    print("FAIL: 载入后 session 的指纹 != 存档指纹：", fp, want)
+    sys.exit(1)
+w = (insp or {}).get("manifest", {}).get("canvas", {}).get("w")
+if w == 16:
+    print("FAIL: 载入前是 16 宽，载入后还是 16 —— 文档没被换掉")
+    sys.exit(1)
+print("open-mpd-b64 载入 OK（指纹 %s…，画布 %s 宽）" % (want[:12], w))
+PYX
+
 echo "== 7/9 MVSL 编辑表命令面 + 渲染管线闭环（安装 → render/impact 同图 → 断言 → 软边界/空操作/违约 lint → 容器往返） =="
 # canonical 编辑表由引擎自己产出（不手写 JSON——少一个大括号就会得到
 # 指不到病根的解析错误）。这里用固定文本：字段序即 canonical 字段序。

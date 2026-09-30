@@ -79,6 +79,18 @@ const r = mp.render(300);
 if (!r.ok || !r.png_b64.startsWith('iVBOR')) throw new Error('render failed');
 const saved = mp.saveMpd();
 if (!saved.ok) throw new Error('save failed');
+// 存→开闭环。容器是唯一事实源，只有存没有开等于存了个死文件；而断言不能
+// 只看 ok —— 那证明不了内容真的回来了。先把文档改脏，再装回去，看两件事：
+// 指纹回到存档前，且临时加的那层真的不见了。
+mp.exec('add-rect x=200 y=150 w=50 h=30 fill=#FF0000FF name=__temp__');
+const restored = mp.openMpd(saved.mpd_b64);
+if (!restored.ok) throw new Error('openMpd failed: ' + restored.error);
+if (restored.fingerprint !== saved.fingerprint) {
+  throw new Error('openMpd 指纹不回原：' + restored.fingerprint + ' vs ' + saved.fingerprint);
+}
+if (mp.exec('list-layers').layers.some((l) => l.name === '__temp__')) {
+  throw new Error('openMpd 返回 ok 但临时层还在——文档没有被真的恢复');
+}
 const h = mp.open();
 mp.execOn(h, 'session-open full_image');
 mp.execOn(h, 'new 50 50 uuid=second');
@@ -87,7 +99,7 @@ if (!r2.ok) throw new Error('multi-session render failed');
 mp.close(h);
 const r3 = mp.execOn(h, 'new 1 1');
 if (!r3.error || !r3.error.includes('未知会话句柄')) throw new Error('closed handle should fail');
-console.log('NPM SDK SMOKE OK: multi-session + render + save all green');
+console.log('NPM SDK SMOKE OK: multi-session + render + save/open round-trip all green');
 "
 cd ../..
 

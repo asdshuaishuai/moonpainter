@@ -23,6 +23,11 @@ export interface SaveMpdEnvelope extends Envelope {
   mpd_b64: string;
 }
 
+export interface OpenMpdEnvelope extends Envelope {
+  /** 载入后文档的 fingerprint（design.json 指纹，可与 saveMpd 前对照） */
+  fingerprint: string;
+}
+
 export interface VersionInfo {
   ok: boolean;
   engine: 'moonpainter';
@@ -53,6 +58,11 @@ export interface MoonPainterEngine {
   render(width?: number, overlay?: boolean): RenderEnvelope;
   /** 打包当前文档为 .mpd 容器（base64） */
   saveMpd(): SaveMpdEnvelope;
+  /**
+   * 从 .mpd 容器（base64）载入当前会话——`saveMpd` 的对偶。
+   * 容器是整个系统的唯一事实源，只有存没有开等于存了个死文件。
+   */
+  openMpd(mpdB64: string): OpenMpdEnvelope;
 }
 
 /**

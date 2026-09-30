@@ -94,6 +94,23 @@ extern "js" fn js_read_file_input(input_id : String) -> @js_async.Promise[Json] 
   #|   })()
 
 ///|
+/// 读文件为 base64（**任意二进制**）。`.mpd` 容器走这条——上面那条
+/// `js_read_file_input` 是图片专用：它会经 `Image` 解码再重编码成 PNG，
+/// 容器是 ZIP 字节，走那边会被"not an image"挡掉或直接解码失败。
+extern "js" fn js_read_file_b64(input_id : String) -> @js_async.Promise[Json] =
+  #| (inputId) => (async () => {
+  #|     const input = document.getElementById(inputId);
+  #|     if (!input || !input.files || input.files.length === 0) return { ok: false, error: 'no file selected' };
+  #|     const file = input.files[0];
+  #|     input.value = '';
+  #|     const buf = new Uint8Array(await file.arrayBuffer());
+  #|     let bin = '';
+  #|     const CH = 0x8000;   // 分块，避免 fromCharCode.apply 的参数个数上限
+  #|     for (let i = 0; i < buf.length; i += CH) bin += String.fromCharCode.apply(null, buf.subarray(i, i + CH));
+  #|     return { ok: true, b64: btoa(bin), name: file.name, size: buf.length };
+  #|   })()
+
+///|
 extern "js" fn js_setup_drop(target_id : String, global_fn : String) -> Unit =
   #| (targetId, fnName) => {
   #|     const el = document.getElementById(targetId);

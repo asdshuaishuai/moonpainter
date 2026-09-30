@@ -530,6 +530,16 @@ fn json_num_str(j : Json, key : String) -> String {
   }
 }
 
+///|
+/// 取整数（取不到给 0）。画布尺寸走这里——`json_num_str` 取不到会返回占位符
+/// "—"，直接拿去当宽度会得到 0 或别的怪东西。
+fn json_as_int(j : Json, key : String) -> Int {
+  match json_get(j, key) {
+    Some(Json::Number(n, ..)) => n.to_int()
+    _ => 0
+  }
+}
+
 fn do_sel(id : String) -> Unit {
   g_sel.val = id
   refresh_ui()
@@ -587,6 +597,50 @@ fn do_new() -> Unit {
   g_paint.val = ""
   eng_render(800)
   refresh_ui()
+}
+
+async fn on_mpd_selected() -> Unit {
+  bootstrap()
+  let result = js_read_file_b64("mpd-in").wait()
+  let ok = match json_get(result, "ok") {
+    Some(Json::True) => true
+    _ => false
+  }
+  if !ok {
+    js_log_line("⚠ 没有选中文件", "#f66")
+    return
+  }
+  let b64 = match json_get(result, "b64") {
+    Some(Json::String(s)) => s
+    _ => ""
+  }
+  let name = match json_get(result, "name") {
+    Some(Json::String(s)) => s
+    _ => "?"
+  }
+  // 先声明 vision 能力再载入：闸是会话级的，载入后马上要 render 预览
+  let _ = engine_exec_line("session-open full_image")
+  let r = eng("open-mpd-b64 \{b64}")
+  if eng_ok(r) {
+    g_sel.val = ""
+    g_paint.val = ""
+    refresh_ui()
+    // 用**容器自己的**画布宽度渲染：硬编码 800 会让打开一张别的尺寸的图时
+    // 预览比例不对（引擎会按给定宽度缩放，看着"成功了"其实不是原尺寸）
+    let w = match json_get(eng("inspect"), "manifest") {
+      Some(m) =>
+        match json_get(m, "canvas") {
+          Some(c) => json_as_int(c, "w")
+          None => 0
+        }
+      None => 0
+    }
+    eng_render(if w > 0 { w } else { 800 })
+    let dims = if w > 0 { "\{w} 宽" } else { "尺寸未知" }
+    js_log_line("📂 已打开 \{name}（\{dims}；容器即事实源，内容与保存时一致）", "#4a4")
+  } else {
+    js_log_line("⚠ 打开失败：\{eng_s(r, "error")}", "#f66")
+  }
 }
 
 fn do_save() -> Unit {
@@ -768,6 +822,7 @@ fn inject_html() -> Unit {
       #|<button onclick='globalThis.__undo()'>↩ 撤销</button>
       #|<button onclick='globalThis.__redo()'>↪ 重做</button>
       #|<span class='sep'></span>
+      #|<button onclick="document.getElementById('mpd-in').click()">📂 打开 .mpd</button>
       #|<button onclick='globalThis.__save()'>💾 保存 .mpd</button>
       #|<button onclick='globalThis.__export()'>🖼 导出 PNG</button>
       #|<span class='sep'></span>
@@ -853,6 +908,7 @@ fn inject_html() -> Unit {
       #|</div>
       #|</div>
       #|<input type='file' id='file-in' accept='image/*' style='display:none' onchange='globalThis.__file_sel()'/>
+      #|<input type='file' id='mpd-in' accept='.mpd,application/zip' style='display:none' onchange='globalThis.__mpd_sel()'/>
     ),
   )
   for p in provider_presets() {
@@ -893,6 +949,7 @@ fn register_globals() -> Unit {
   js_reg0("__save", fn() -> @js_async.Promise[Unit] { @js_async.Promise::from_async(async fn() { do_save() }) })
   js_reg0("__export", fn() -> @js_async.Promise[Unit] { @js_async.Promise::from_async(async fn() { do_export() }) })
   js_reg0("__file_sel", fn() -> @js_async.Promise[Unit] { @js_async.Promise::from_async(async fn() { on_file_selected() }) })
+  js_reg0("__mpd_sel", fn() -> @js_async.Promise[Unit] { @js_async.Promise::from_async(async fn() { on_mpd_selected() }) })
   js_reg0("__crop_apply", fn() -> @js_async.Promise[Unit] { @js_async.Promise::from_async(async fn() { do_crop_apply() }) })
   js_reg1("__sel", fn(id : String) { do_sel(id) })
   js_reg1("__vis", fn(id : String) { do_vis(id) })

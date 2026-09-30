@@ -134,6 +134,12 @@ export async function loadEngine(url = 'moonpainter.wasm') {
       if (!r.ok) throw new Error(r.error);
       return r;
     },
+    /** 从 .mpd 容器字节（base64）载入当前会话（saveMpd 的对偶） */
+    openMpd(mpdB64) {
+      const r = this.exec(`open-mpd-b64 ${mpdB64}`);
+      if (!r.ok) throw new Error(r.error);
+      return r;
+    },
   };
   return engine;
 }
