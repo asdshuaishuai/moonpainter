@@ -174,13 +174,59 @@ fn cmd_census(s : Session, tokens : Array[String]) -> String {
 /// 算子在这一点上的 membership 与所属连通域 id —— 「我指的这个点，
 /// 你的选择子到底选中没有、属于哪一块」，比让模型看 mask 猜要可靠得多。
 fn cmd_probe(s : Session, tokens : Array[String]) -> String {
-  let m = match kv_args(tokens, 1).get("x") {
-    Some(v) => v
-    None => return err("用法：probe x=<像素坐标> y=<像素坐标> [r=2]")
+  let kv = kv_args(tokens, 1)
+  let mut r = 2
+  match kv.get("r") {
+    Some(v) =>
+      match to_i(v) {
+        Some(n) => r = n
+        None => return err("r=\{v} 不是整数")
+      }
+    None => ()
   }
-  let yv = match kv_args(tokens, 1).get("y") {
+  let base = match mvsl_base(s) {
+    Ok(b) => b
+    Err(e) => return err(e)
+  }
+  // ── 批量模式：points=x1,y1;x2,y2;... ──
+  // 单点模式一次往返只能问一个位置，模型探一圈（比如 9 宫格）要 9 次调用。
+  // 每个点的字段与单点模式**逐字段一致**（同一个 probe_one_json），所以调用方
+  // 的解析不用分叉。
+  match kv.get("points") {
+    Some(spec) => {
+      let pts = match parse_probe_points(spec) {
+        Ok(p) => p
+        Err(e) => return err(e)
+      }
+      let sb = StringBuilder()
+      sb.write_string("{\"ok\":true,\"op\":\"probe\",\"count\":\{pts.length()}")
+      sb.write_string(",\"r\":\{r},\"points\":[")
+      let mut first = true
+      for pt in pts {
+        let one = match probe_one_json(s, base, pt.0, pt.1, r, false) {
+          Ok(j) => j
+          Err(e) => return err(e)
+        }
+        if first {
+          first = false
+        } else {
+          sb.write_string(",")
+        }
+        sb.write_string(one)
+      }
+      sb.write_string("]}")
+      return sb.to_string()
+    }
+    None => ()
+  }
+  // ── 单点模式（输出与加入批量入口之前逐位相同）──
+  let m = match kv.get("x") {
     Some(v) => v
-    None => return err("用法：probe x=<像素坐标> y=<像素坐标> [r=2]")
+    None => return err("用法：probe x=<像素坐标> y=<像素坐标> [r=2]，或 points=x1,y1;x2,y2;...")
+  }
+  let yv = match kv.get("y") {
+    Some(v) => v
+    None => return err("用法：probe x=<像素坐标> y=<像素坐标> [r=2]，或 points=x1,y1;x2,y2;...")
   }
   let x = match to_i(m) {
     Some(v) => v
@@ -190,25 +236,78 @@ fn cmd_probe(s : Session, tokens : Array[String]) -> String {
     Some(v) => v
     None => return err("y=\{yv} 不是整数")
   }
-  let mut r = 2
-  match kv_args(tokens, 1).get("r") {
-    Some(v) => match to_i(v) {
-      Some(n) => r = n
-      None => return err("r=\{v} 不是整数")
-    }
-    None => ()
-  }
-  let base = match mvsl_base(s) {
-    Ok(b) => b
+  let one = match probe_one_json(s, base, x, y, r, true) {
+    Ok(j) => j
     Err(e) => return err(e)
   }
+  one
+}
+
+///|
+/// 解析 `points=x1,y1;x2,y2;...`：分号分组、逗号分坐标，坐标是**整数像素**。
+///
+/// 为什么不复用 `ops.mbt` 的 `parse_points`（同名同格式）：那个是**多边形顶点**
+/// 解析——返回 `Double`、要求 ≥2 个（一个顶点不成形）、错误文案说的是"顶点"。
+/// 探针这里要的是整数像素（`1.5` 该被拒绝，而不是悄悄取整）、单点也该合法、
+/// 错误要说清是探针坐标。把两种约束塞进一个函数，只能让两边互相妥协。
+/// 注：这里**不需要**检查 `spec` 为空——`kv_args` 只收「键=非空值」的 token
+/// （`points=` 这种空值会被整个丢弃，于是根本进不到批量分支，而是落到单点
+/// 模式的用法提示）。空段仍可能出现（`points=;`），由下面的 `out.length()==0`
+/// 兜住。
+fn parse_probe_points(spec : String) -> Result[Array[(Int, Int)], String] {
+  let out : Array[(Int, Int)] = []
+  for seg in spec.split(";") {
+    if seg.length() > 0 {
+      let parts : Array[String] = []
+      for p in seg.split(",") {
+        parts.push(p.to_owned())
+      }
+      if parts.length() != 2 {
+        return Err("points 每段应为 x,y：got \{seg}")
+      }
+      let px = match to_i(parts[0]) {
+        Some(v) => v
+        None => return Err("points 里的 x=\{parts[0]} 不是整数")
+      }
+      let py = match to_i(parts[1]) {
+        Some(v) => v
+        None => return Err("points 里的 y=\{parts[1]} 不是整数")
+      }
+      out.push((px, py))
+    }
+  }
+  if out.length() == 0 {
+    return Err("points= 没解析出任何点")
+  }
+  if out.length() > 64 {
+    return Err("points 一次最多 64 个点（got \{out.length()}）；全图统计请用 census")
+  }
+  Ok(out)
+}
+
+///|
+/// 单点探针的 JSON——单点与批量两种入口共用同一段字段拼装，保证两条路
+/// 报出的字段永远不会走样。`envelope=true` 时前面带 `"ok":true,"op":"probe",`
+/// （单点模式的输出因此与加入批量入口之前**逐位相同**）。
+fn probe_one_json(
+  s : Session,
+  base : @codec.RgbaBuf,
+  x : Int,
+  y : Int,
+  r : Int,
+  envelope : Bool,
+) -> Result[String, String] {
   let pr = match @pixel.probe(base, x, y, r) {
     Ok(p) => p
-    Err(e) => return err(e)
+    Err(e) => return Err(e)
   }
   let sb = StringBuilder()
-  sb.write_string("{\"ok\":true,\"op\":\"probe\"")
-  sb.write_string(",\"x\":\{pr.x},\"y\":\{pr.y},\"r\":\{pr.r}")
+  if envelope {
+    sb.write_string("{\"ok\":true,\"op\":\"probe\",")
+  } else {
+    sb.write_string("{")
+  }
+  sb.write_string("\"x\":\{pr.x},\"y\":\{pr.y},\"r\":\{pr.r}")
   sb.write_string(",\"color\":\"\{@codec.color_to_hex(pr.color)}\"")
   sb.write_string(",\"mean_l\":\{@core.fmt_num(pr.mean_l)}")
   sb.write_string(",\"var_l\":\{@core.fmt_num(pr.var_l)}")
@@ -224,7 +323,7 @@ fn cmd_probe(s : Session, tokens : Array[String]) -> String {
   for op in s.mvsl.ops {
     let wf = match @pixel.op_weight(op, ctx, @pixel.FieldCache::new()) {
       Ok(w) => w
-      Err(e) => return err(e)
+      Err(e) => return Err(e)
     }
     let labels = @pixel.label_components(base, wf)
     let cid = @pixel.component_id_at(labels, x, y)
@@ -244,7 +343,7 @@ fn cmd_probe(s : Session, tokens : Array[String]) -> String {
   for g in s.mvsl.guards {
     let wf = match @pixel.eval_sel(g.sel, ctx, @pixel.FieldCache::new()) {
       Ok(w) => w
-      Err(e) => return err(e)
+      Err(e) => return Err(e)
     }
     if gfirst {
       gfirst = false
@@ -255,5 +354,5 @@ fn cmd_probe(s : Session, tokens : Array[String]) -> String {
     sb.write_string(",\"membership\":\{@core.fmt_num(@pixel.field_get(wf, x, y))}}")
   }
   sb.write_string("]}")
-  sb.to_string()
+  Ok(sb.to_string())
 }

@@ -121,3 +121,183 @@ test "probe：参数/越界零容忍" {
   let e5 = run(s, "probe x=1 y=1 r=99")
   assert_true(e5.contains("探针半径 99 越界"), msg=e5)
 }
+
+///|
+/// 取字段的**规范字符串表示**，用于逐字段精确比对。这里不能退回子串匹配：
+/// `"mean_l":0.62` 与 `"mean_l":0.6` 互相"包含"，而批量入口的全部意义
+/// 恰恰是"和单点报一样的数字"（铁律 11）。
+fn field_repr(j : @core.JValue, key : String) -> String {
+  match j.get(key) {
+    Some(@core.JValue::JNum(n)) => @core.fmt_num(n)
+    Some(@core.JValue::JStr(s)) => s
+    Some(@core.JValue::JBool(b)) => if b { "true" } else { "false" }
+    Some(@core.JValue::JNull) => "null"
+    Some(_) => "<复合>"
+    None => "<无此字段>"
+  }
+}
+
+///|
+/// 取数组字段。用于 `ops` / `guards`——它们不能只比 `field_repr` 的 `<复合>`，
+/// 那等于没比。
+fn arr_of(j : @core.JValue, key : String) -> Array[@core.JValue] {
+  match j.get(key) {
+    Some(@core.JValue::JArr(a)) => a
+    _ => abort("字段 \{key} 不是数组")
+  }
+}
+
+///|
+/// 给会话装一条"左半换色、保护右半"的编辑表，让 `probe` 的 `ops` / `guards`
+/// 输出**非空**。空表上的"两条路报一样的值"是恒真的，测不出任何东西。
+fn with_mvsl(s : @agent.Session) -> Unit {
+  let op : @core.EditOp = {
+    id: "e1",
+    kind: @core.Recolor,
+    sel: rect_sel(0.0, 0.0, 160.0, 240.0),
+    amount: 1.0,
+    hue_deg: 120.0,
+    temp_kelvin: 0.0,
+    relight_gain: 1.0,
+    refine: [],
+    note: "",
+    evidence: None,
+  }
+  let prot : @core.Guard = {
+    id: "g1",
+    sel: rect_sel(160.0, 0.0, 160.0, 240.0),
+    max_de: 0.001,
+    max_changed_ratio: 0.0,
+  }
+  let prog : @core.EditProgram = { ops: [op], guards: [prot] }
+  let _ = run(s, "mvsl-set \{@base64.encode(@utf8.encode(@core.program_to_json(prog)))}")
+}
+
+///|
+fn jparse(text : String) -> @core.JValue {
+  match @core.parse_json(text) {
+    Ok(o) => o
+    Err(e) => abort("回包不是 JSON（\{e}）：\{text}")
+  }
+}
+
+///|
+test "probe 批量入口：同一个点在两条路上报出逐字段相同的值" {
+  // 批量入口的全部意义是**省往返**，不是给出另一套数字。两条路共用同一段
+  // 字段拼装（`probe_one_json`），这条把它钉住——将来有人"优化"其中一条
+  // 而忘了另一条，会在这里红。
+  //
+  // 范围：这里只比**标量字段**（会话没装编辑表，`ops`/`guards` 都是空数组，
+  // 比了也是恒真）。逐算子 membership 与连通域 id 的一致性由下面那条
+  // 装了表的测试负责——批量真正会走样的地方在那里。
+  let s = two_tone("probe-batch")
+  let one = run(s, "probe x=5 y=5 r=3")
+  let batch = run(s, "probe points=5,5 r=3")
+  let oj = jparse(one)
+  let bj = jparse(batch)
+  let pts = match bj.get("points") {
+    Some(@core.JValue::JArr(a)) => a
+    _ => abort("批量应带 points 数组：\{batch}")
+  }
+  assert_eq(pts.length(), 1)
+  let p0 = pts[0]
+  for k in [
+    "x", "y", "r", "color", "mean_l", "var_l", "mean_a", "mean_b", "edge",
+    "edge_conf",
+  ] {
+    assert_eq(field_repr(p0, k), field_repr(oj, k))
+  }
+  // 先确认上面那圈不是在"两边都缺失"上空转
+  assert_eq(field_repr(p0, "color"), "#C81E1EFF")
+  assert_eq(field_repr(oj, "color"), "#C81E1EFF")
+  // 信封字段各归各的：单点带 ok/op，批量带 count/r/points，且批量不带单点的 x
+  assert_true(oj.get("ok") is Some(_), msg=one)
+  assert_eq(field_repr(bj, "count"), "1")
+  assert_true(!(bj.get("x") is Some(_)), msg="批量信封里不该有单点的 x：\{batch}")
+}
+
+///|
+test "probe 批量入口：坏载荷零容忍（空/不成对/非整数/越界/超限）" {
+  let s = two_tone("probe-batch-err")
+  // `points=`（空值）走不到批量分支：`kv_args` 只收「键=非空值」的 token，
+  // 空值被丢弃后落到单点模式，于是报的是用法提示——**那个提示里也列了
+  // points= 的写法**，所以调用方照样知道该怎么写。这条锁住"空值不会静默
+  // 通过"，而不是锁某一句文案。
+  let e0 = run(s, "probe points=")
+  assert_true(e0.contains("用法：probe"), msg=e0)
+  assert_true(e0.contains("points="), msg="用法提示应带批量写法：\{e0}")
+  // 解析不出任何点（只给分隔符）
+  let e0b = run(s, "probe points=;")
+  assert_true(e0b.contains("没解析出任何点"), msg=e0b)
+  let e1 = run(s, "probe points=5")
+  assert_true(e1.contains("每段应为 x,y"), msg=e1)
+  let e2 = run(s, "probe points=a,1")
+  assert_true(e2.contains("不是整数"), msg=e2)
+  // 批量里只要有一个点越界就整体拒绝，不许"跳过坏点给好点"
+  let e3 = run(s, "probe points=5,5;999,1")
+  assert_true(e3.contains("超出画布"), msg=e3)
+  let mut spec = ""
+  for i in 0..<65 {
+    if i > 0 {
+      spec = spec + ";"
+    }
+    spec = spec + "\{i},1"
+  }
+  let e4 = run(s, "probe points=\{spec}")
+  assert_true(e4.contains("最多 64 个点"), msg=e4)
+  assert_true(e4.contains("census"), msg="超限提示应指路 census：\{e4}")
+  // x=/y= 与 points= 同时给时批量优先（字典里写明）
+  let both = run(s, "probe x=1 y=1 points=5,5")
+  assert_eq(field_repr(jparse(both), "count"), "1")
+}
+
+///|
+test "probe 批量入口：装表之后 ops/guards 也与单点逐元素一致" {
+  // **样本里必须有"这个约定存在的理由"**：批量入口会走样的地方不是 x/y/color
+  // （那些一眼能看出），而是逐算子的 membership 与连通域 id——而它们只有在
+  // 装了编辑表时才有内容。用空表测"两条路一致"，是又一次"用 HELLO 测空格
+  // 转义协议"。这条先装表，再逐元素逐字段比。
+  let s = two_tone("probe-batch-mvsl")
+  with_mvsl(s)
+  let one = run(s, "probe x=80 y=120 r=2")
+  let batch = run(s, "probe points=80,120;300,120 r=2")
+  let oj = jparse(one)
+  let pts = arr_of(jparse(batch), "points")
+  assert_eq(pts.length(), 2)
+  for k in [
+    "x", "y", "r", "color", "mean_l", "var_l", "mean_a", "mean_b", "edge",
+    "edge_conf",
+  ] {
+    assert_eq(field_repr(pts[0], k), field_repr(oj, k))
+  }
+  // ops：逐元素逐字段
+  let ops_one = arr_of(oj, "ops")
+  let ops_b = arr_of(pts[0], "ops")
+  assert_eq(ops_one.length(), 1)
+  assert_eq(ops_b.length(), 1)
+  for i in 0..<ops_one.length() {
+    for k in ["id", "membership", "component"] {
+      assert_eq(field_repr(ops_b[i], k), field_repr(ops_one[i], k))
+    }
+  }
+  // guards：同上
+  let g_one = arr_of(oj, "guards")
+  let g_b = arr_of(pts[0], "guards")
+  assert_eq(g_one.length(), 1)
+  assert_eq(g_b.length(), 1)
+  for i in 0..<g_one.length() {
+    for k in ["id", "membership"] {
+      assert_eq(field_repr(g_b[i], k), field_repr(g_one[i], k))
+    }
+  }
+  // 上面比的是"两项相同"，得先确认这些字段**不是处处相同**：批量里第二个点
+  // 在右半，membership 与连通域 id 都该和第一个点不一样。
+  assert_eq(field_repr(ops_one[0], "component"), "1")
+  assert_eq(field_repr(ops_one[0], "membership"), "1")
+  let ops_b2 = arr_of(pts[1], "ops")
+  assert_eq(field_repr(ops_b2[0], "component"), "0")
+  assert_eq(field_repr(ops_b2[0], "membership"), "0")
+  // guards 在右半是覆盖的（membership 1），左半不覆盖（0）
+  assert_eq(field_repr(arr_of(pts[1], "guards")[0], "membership"), "1")
+  assert_eq(field_repr(g_one[0], "membership"), "0")
+}

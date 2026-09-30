@@ -77,7 +77,7 @@ pub fn list_tools() -> Array[AgentTool] {
   add("pick", "pick <x> <y>：画布坐标 → 最上层层 id", "both")
   add("stats", "直方图 32 桶 + 覆盖统计（引擎给数值，模型给判断）", "vision")
   add("census", "census [within=<base64 sel>] [components=n]：hue×sat 桶普查（12×3）+ OKLab L 与 HSV V 均值对照；给 within 时附覆盖率/bbox/连通域事实", "both")
-  add("probe", "probe x= y= [r=2]：单点邻域统计（OKLab 均值/方差、环平均色相、边缘置信度）+ 当前编辑表每个算子的选择子在该点的 membership 与所属连通域 id", "both")
+  add("probe", "probe x= y= [r=2]：单点邻域统计（OKLab 均值/方差、环平均色相、边缘置信度）+ 当前编辑表每个算子的选择子在该点的 membership 与所属连通域 id。**要探多个位置用 `points=x1,y1;x2,y2;…`（上限 64 点，一次往返；返回 points 数组，每点的字段与单点模式完全一致）**，别重复调用——同给 x/y 与 points 时以 points 为准", "both")
   add("sel-schema", "选择子/算子语法自证清单：每种原子选择子与组合子的 canonical 示例（由写出器产出、由同一解析器验回）+ 量纲/取值范围 + 数值该从哪来。**写选择子前先看它**，别猜字段名与量纲", "both")
   // 历史 / 容器
   add("fingerprint", "当前 canonical design.json 指纹", "meta")

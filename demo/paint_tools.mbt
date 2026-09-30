@@ -368,11 +368,15 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
     ),
     make_tool(
       "probe",
-      "单点探针：邻域 OKLab 均值/方差、环平均色相、边缘置信度，外加当前编辑表每个算子/断言在该点的 membership 与所属连通域 id。用于确认「我指的这个点，选择子到底选中没有」。",
+      "探针：邻域 OKLab 均值/方差、环平均色相、边缘置信度，外加当前编辑表每个算子/断言在该点的 membership 与所属连通域 id。用于确认「我指的这个点，选择子到底选中没有」。**要探多个位置就用 points 一次拿全**（比如取景九宫格），不要重复调用单点。",
       [
-        ("x", "integer:req:画布 x"),
-        ("y", "integer:req:画布 y"),
-        ("r", "integer:邻域半径 px（默认 2 → 5×5）"),
+        ("x", "integer:画布 x（单点模式；与 points 二选一）"),
+        ("y", "integer:画布 y（单点模式；与 points 二选一）"),
+        ("r", "integer:邻域半径 px（默认 2 → 5×5），两种模式都吃"),
+        (
+          "points",
+          "string:批量：x1,y1;x2,y2;…（最多 64 点；返回 points 数组，每点字段与单点模式完全一致。与 x/y 同给时以 points 为准）",
+        ),
       ],
     ),
     make_tool(
@@ -613,7 +617,12 @@ pub impl @posoco.ToolProvider for PaintTools with fn execute(
       l
     }
     "probe" => {
-      let mut l = "probe x=" + arg(call, "x") + " y=" + arg(call, "y")
+      // 批量优先：给了 points 就不再看 x/y（引擎侧同此约定）
+      let mut l = if arg(call, "points") != "" {
+        "probe points=" + arg(call, "points")
+      } else {
+        "probe x=" + arg(call, "x") + " y=" + arg(call, "y")
+      }
       let r = arg(call, "r")
       if r != "" {
         l = l + " r=" + r
