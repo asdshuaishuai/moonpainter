@@ -259,6 +259,14 @@ MUTS = [
         "killed",
     ),
     (
+        "R11",
+        "rasterize_layer 用白底而不是透明底（层失去 alpha，去污染失效）",
+        "render/scene.mbt",
+        '  @codec.fill_rect_rgba(buf, 0, 0, w, h, 0x00000000)',
+        '  @codec.fill_rect_rgba(buf, 0, 0, w, h, 0xFFFFFFFF)',
+        "killed",
+    ),
+    (
         "R5",
         "圆角矩形 SDF 漏掉 min(max(q),0) 项（内部所有点的内距算成 0）",
         "render/scene.mbt",

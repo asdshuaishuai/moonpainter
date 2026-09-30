@@ -331,3 +331,64 @@ test "图层级编辑：layer= 与 STAGE 基准组合被拒绝（分段后序号
       )
   }
 }
+
+///|
+test "recolor 边界去污染：图层级作用在纯前景色上，文档级作用在混合色上" {
+  // 这是**图层级作用域解决的第一个真问题**：半透明像素的颜色是"前景与背景的
+  // 混合"，对它做色彩变换等于连背景的贡献一起偏移（边界污染）。有了
+  // `rasterize_layer`，变换可以先作用在**纯前景色**上、再合成回去。
+  //
+  // 判据不是"两条路径不同"（那太弱），而是可精确算出来的：
+  //   图层级结果 == composite(背景, shift(纯前景) 带原 alpha)
+  // 其中 `shift(纯前景)` 从一张"只有不透明前景、没有混合"的图上取——那种图上
+  // 文档级与图层级是一回事，所以可以放心用它当参照。
+  let env = @render.RenderEnv::new()
+  let whole8 = rsel(0.0, 0.0, 8.0, 8.0)
+  // 1) shift(纯红)：无混合的图上取，文档级即可
+  let pure = @core.new_document("u-depollute-1", 8, 8)
+  let pr = @core.default_layer("r", "r", 0.0, 0.0, 8.0, 8.0)
+  pure.layers.push({ ..pr, fill: @core.Fill::Solid(0xFFFF0000) })
+  let shifted = @codec.rgba_get(must_render(pure, env, rprog(whole8, 120.0)), 4, 4)
+  assert_true(shifted != 0xFFFF0000, msg="变换必须真的改变了纯红")
+  // 2) 蓝底 + 半透明红：每个像素都是混合色
+  let doc = @core.new_document("u-depollute-2", 8, 8)
+  let bg = @core.default_layer("bg", "bg", 0.0, 0.0, 8.0, 8.0)
+  doc.layers.push({ ..bg, fill: @core.Fill::Solid(0xFF0000FF) })
+  let ov = @core.default_layer("b", "b", 0.0, 0.0, 8.0, 8.0)
+  doc.layers.push({ ..ov, fill: @core.Fill::Solid(0xAAFF0000) })
+  // 3) 去污染的正确结果：变换后的**纯前景色**（保持原 alpha）与背景合成
+  let want = @render.composite_pixel(
+    0xFF0000FF,
+    (0xAA << 24) | (shifted & 0x00FFFFFF),
+    @core.BlendMode::Normal,
+  )
+  let layer_level = @codec.rgba_get(
+    must_render(doc, env, rprog_layer(whole8, 120.0, "b")),
+    4,
+    4,
+  )
+  assert_eq(layer_level, want, msg="图层级应当作用于纯前景色（即去污染）")
+  // 4) 文档级：变换吃的是混合色——同一个像素给出别的值，这就是边界污染
+  let doc_level = @codec.rgba_get(must_render(doc, env, rprog(whole8, 120.0)), 4, 4)
+  assert_true(
+    doc_level != want,
+    msg="文档级应当给出被污染的结果（两者相同则说明这条测试没有区分度）",
+  )
+  // 5) 而且背景本身**没有**被牵连：图层级路径下，不含该层像素的位置逐位不变。
+  //    这里层铺满全图，所以换个角度——把层缩到左半，看右半。
+  let doc2 = @core.new_document("u-depollute-3", 8, 8)
+  let bg2 = @core.default_layer("bg", "bg", 0.0, 0.0, 8.0, 8.0)
+  doc2.layers.push({ ..bg2, fill: @core.Fill::Solid(0xFFFFFFFF) })
+  let half = @core.default_layer("b", "b", 0.0, 0.0, 4.0, 8.0)
+  doc2.layers.push({ ..half, fill: @core.Fill::Solid(0xAAFF0000) })
+  let out2 = must_render(doc2, env, rprog_layer(whole8, 120.0, "b"))
+  assert_eq(
+    @codec.rgba_get(out2, 6, 4),
+    0xFFFFFFFF,
+    msg="图层级路径不该碰到这一层覆盖范围之外的背景",
+  )
+  assert_true(
+    @codec.rgba_get(out2, 2, 4) != 0xFFFFFFFF,
+    msg="层内像素必须真的被改了",
+  )
+}
