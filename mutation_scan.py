@@ -219,6 +219,17 @@ MUTS = [
     ),
     # ---- 命令行分词（自由文本的空格靠它，见 tokenize_line）----
     (
+        "Q3",
+        "set-mask 退回静默接受：认不出的参数当成 false（几何改不动却报 ok）",
+        "agent/session.mbt",
+        r"""    other =>
+      return err(
+        "set-mask 只改 invert（true|false）；几何修改请用 remove-mask + add-mask，got \{other}",
+      )""",
+        r"""    _ => false""",
+        "killed",
+    ),
+    (
         "Q1",
         "命令行分词丢掉引号语义（引号内的空格又会被切断）",
         "agent/session.mbt",
