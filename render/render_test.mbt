@@ -58,6 +58,37 @@ test "半透明层透明度并入：50% 蓝盖白 → 127/255 蓝" {
 }
 
 ///|
+test "层合成底图 = 不透明白底 + 图层（MVSL 编辑表的输入前提）" {
+  // 上一条验了"图层覆盖处"的白底混合；这条验**没被任何图层覆盖的角落**，
+  // 把管线语义整体钉住：底图 = 铺满的不透明白底 + 图层。
+  //
+  // 为什么值得单独一条：MVSL 编辑表的输入就是这个底图，所以
+  //   - 编辑表**处理不到半透明像素**（底图 alpha 恒 255）；
+  //   - "recolor 的边界去污染在合成底图上无解"的理由比"α 难以恢复"更强：
+  //     前景覆盖率 α 在铺白底这一刻就**从未存在过**。
+  // 如果哪天有人去掉 `render_layers` 里的白底，图层覆盖处可能仍"看起来
+  // 差不多"（合成数学还在），但未覆盖区会立刻露馅。
+  let env = @render.RenderEnv::new()
+  let doc = @core.new_document("u-opaque", 6, 6)
+  let l = @core.default_layer("l1", "half", 1.0, 1.0, 2.0, 2.0)
+  doc.layers.push({ ..l, fill: @core.Fill::Solid(0xFF0000FF), opacity: 0.5 })
+  let buf = @render.render_layers(doc, env)
+  // 未覆盖的角落是不透明白（不是透明、不是黑）
+  assert_eq(@codec.rgba_get(buf, 5, 5), 0xFFFFFFFF, msg="未覆盖区应是白底")
+  assert_eq(@codec.rgba_get(buf, 0, 0), 0xFFFFFFFF, msg="未覆盖区应是白底")
+  // 整幅图没有任何半透明像素
+  let mut translucent = 0
+  let mut i = 0
+  while i < buf.width * buf.height {
+    if ((buf.pixels[i] >> 24) & 0xFF) != 255 {
+      translucent = translucent + 1
+    }
+    i = i + 1
+  }
+  assert_eq(translucent, 0, msg="底图出现半透明像素——MVSL 的输入前提被破坏")
+}
+
+///|
 test "合成：半透明 src over 半透明 dst 必须去预乘" {
   // 已有的混合测试全用**不透明**层（alpha=255）：此时 ao=1、预乘即直通，
   // "去预乘"那一步对结果毫无影响——把它换成"直接返回预乘值"，全部测试通过。

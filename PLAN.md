@@ -235,9 +235,9 @@ native **67/67**、js **66/66**、wasm-gc **65/65**；`moon check` 0 错误
 
 ### 验收口径
 
-`moon check` 0 error / 0 warning；`moon test --target native` **161/161**、
-`--target wasm-gc` **159/159**；`./verify.sh` **八步全过**。
-（对比补遗 4：native 67 → 161。）
+`moon check` 0 error / 0 warning；`moon test --target native` **162/162**、
+`--target wasm-gc` **160/160**；`./verify.sh` **八步全过**。
+（对比补遗 4：native 67 → 162。）
 
 ### 补遗 5 追加：区域级 affordance（census / probe）
 
@@ -699,6 +699,29 @@ default 是 `return "未知工具"`；`line` 的 default 才回退到 `cmd`。�
 
 变异门补了两条守护 `tokenize_line` 的变异（Q1 引号语义、Q2 引号内转义）。
 
+**四、同一天里，我自己也犯了一次同样的错。** 上一节（补遗 6）我写边界时留了
+一句"当前对半透明像素的 recolor 是对的：**输出是直通色**"。这轮实测发现它是
+**错的**：
+
+    add-rect ... fill=#FF0000FF
+    set-style l1 opacity=0.5
+    sample 10 10        →  #FF7F7FFF     （不透明粉红）
+
+不是 `0x80FF0000`（半透明红）。因为 `render_layers` 在画图层**之前**先铺满一层
+不透明白底（`fill_rect_rgba(buf, 0, 0, w, h, 0xFFFFFFFF)`），所以**渲染底图永远
+不透明**，进入 MVSL 的像素 alpha 恒为 255。
+
+而这条语义**早就有测试守着了**——`render_test.mbt` 里那条
+"半透明层透明度并入：50% 蓝盖白 → 127/255 蓝" 明确断言 `a == 255` 并注释了
+"白底"。**我写文档时没去读它。** 这和 `do_text_add` 的错误是同一个形状：
+前端作者以为自己转义了、引擎会还原；我以为自己读懂了管线、其实没验证。
+
+已修：README/DESIGN/PLAN 的表述改成"底图永远不透明"（并说明这比"α 难以恢复"
+更根本——α 从未存在过）；补一条 `render_test` 断言**未覆盖角落是白底 + 整幅无
+半透明像素**（反证：去掉白底那行，3 条测试立刻红）；`pixel/mvsl_wbtest` 那条
+测试改名为"apply_recolor 对任意 alpha 保持 alpha、只转色相"，并说明它是
+**函数级契约**、不是渲染路径的必经之地。
+
 ### 仍未落地（诚实边界，详见 README 与 DESIGN §8）
 
 - **MVSL 编辑表是文档级的最终一遍**，不是图层：能改整张合成图，但还不能
@@ -706,7 +729,8 @@ default 是 `return "未知工具"`；`line` 的 default 才回退到 `cmd`。�
   要那种粒度得先有把图层单独栅格化的中间缓冲。
 - `probe` 的单命令多点批量入口未加（多次 probe 可覆盖同一需求）。
 - `recolor` 的边界带去污染（`I = αF + (1−α)B` 只改前景）**在合成底图上无解**，
-  不是"未做"：反演要同时知道前景覆盖率 α 与背景色 B，而 α 在层合成时就丢了
-  ——"白底 + 50% 红"与"纯粉红"逐位相同（`render_test` 判定性测试）。
+  不是"未做"：反演要同时知道前景覆盖率 α 与背景色 B，而**渲染底图永远不透明**
+  （`render_layers` 先铺满白底再画图层，`render_test` 有整幅"无半透明像素"断言）
+  ——α 在铺白底那一刻就**从未存在过**，"白底 + 50% 红"与"纯粉红"逐位相同。
   前置条件是图层级编辑，即上一条 `stage:n` 的同一件事。
 - PLAN-MVSL §P3 Phase 2 的真 VLM 消融实验未做（需要真实多模态模型）。

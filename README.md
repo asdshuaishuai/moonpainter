@@ -1,7 +1,7 @@
 # MoonPainter — Agent 驱动的图层绘制引擎
 
 > 状态：**0.1.0（.mpd 容器 v2 + 参数化绘制 + AI 修图 demo + MVSL 确定性编辑 IR 引擎已落地：
-> native 161 项 / wasm-gc 159 项测试全绿；`./verify.sh` 八步验证门全过）**。
+> native 162 项 / wasm-gc 160 项测试全绿；`./verify.sh` 八步验证门全过）**。
 > 设计书 [DESIGN.md](./DESIGN.md) · 方案与验收 [PLAN.md](./PLAN.md) ·
 > MVSL 规划与评审对照 [PLAN-MVSL.md](./PLAN-MVSL.md) · AI 修图 demo 见下节。
 
@@ -48,8 +48,9 @@ MVSL 侧的诚实边界：编辑表是**文档级的最终一遍**——`最终�
 混色分离（`I = αF + (1−α)B`，只改 F）**在合成底图上无解**（不是"未做"）：反演要
 同时知道前景覆盖率 α 与背景色 B，而 α 在层合成那一刻就被乘掉了——"白底 + 50% 红"
 与"纯粉红"在底图上逐位相同（`render_test` 有判定性测试）。前置条件是**图层级
-编辑**，与上面"`stage:` 只切到算子序号"是同一件事的两面。当前对半透明像素的
-recolor 是**对的**：输出是直通色，旋转的就是前景色本身（`mvsl_wbtest` 锁住）。外部 mask 资产只能引用、引擎不
+编辑**，与上面"`stage:` 只切到算子序号"是同一件事的两面。渲染底图**永远不透明**
+（`render_layers` 先铺满白底再画图层，`render_test` 有整幅"无半透明像素"断言），
+所以编辑表根本处理不到半透明像素。外部 mask 资产只能引用、引擎不
 内置任何分割模型（未登记即报精确错误，不降级）。`probe` 的单命令多点批量
 入口未加（多次 probe 可覆盖）。
 HSV 只做 selector/analysis affordance，算子一律走 OKLab/OKLCh（V 不是感知亮度）。
