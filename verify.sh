@@ -10,6 +10,12 @@
 # 任何一步失败即非零退出。
 set -e
 cd "$(dirname "$0")"
+
+# 步骤 slug 映射（**散文里引用步骤的唯一方式**：`verify.sh#anchors`）。
+# 为什么不写编号：插一步，散文里的「第 N 步」就全错，而没有任何东西会红——
+# 实测 README 的「`verify.sh` 第 9 步用 --check-anchors」早已错位（锚点自检
+# 是第 10 步，第 9 步是参数下界）。第 8 步的文档数字对账会核这张表。
+# step-slugs: 1=check 2=native-test 3=wasm-gc 4=cli-e2e 5=unzip 6=roundtrip 7=mvsl-e2e 8=catalog 9=arg-lower-bound 10=anchors 11=params 12=deps
 OUT=$(mktemp -d /tmp/moonpainter-verify.XXXXXX)
 trap 'rm -rf "$OUT"' EXIT
 
@@ -427,19 +433,118 @@ PYEOF
 # 路径走 argv：`<<'PYD'` 是引号 heredoc，块里的 $OUT **不会**被 shell 展开
 # （上一版就栽在这：FileNotFoundError: '$OUT/cmdlist.txt'）
 python3 - "$OUT/cmdlist.txt" <<'PYD'
-import re, sys
+import ast, re, sys
 n = len([l for l in open(sys.argv[1], encoding='utf-8') if l.strip()])
 bad = []
-for path in ('README.md', 'DESIGN.md', 'AGENTS.md'):
+DOCS = ('README.md', 'DESIGN.md', 'AGENTS.md')
+
+# ── 步骤 slug 表：每个脚本的步骤数、编号连续、slug 恰好覆盖每一步 ────────
+def steps_of(path):
+    src = open(path, encoding='utf-8').read()
+    heads = re.findall(r'^echo "== (\d+)/(\d+) ', src, re.M)
+    m = re.search(r'step-slugs:(.*)', src)
+    if not m:
+        return None, None, '%s 里找不到 step-slugs 映射' % path
+    slugs = {}
+    for part in m.group(1).split():
+        if '=' not in part:
+            return None, None, '%s 的 step-slugs 里「%s」不是 n=slug 形态' % (path, part)
+        k, v = part.split('=', 1)
+        if not k.isdigit():
+            return None, None, '%s 的 step-slugs 键「%s」不是数字' % (path, k)
+        slugs[int(k)] = v
+    nums = [int(a) for a, _ in heads]
+    totals = {int(b) for _, b in heads}
+    if totals != {len(heads)}:
+        return None, None, '%s 的步骤分母写着 %s，实际 %d 步' % (path, sorted(totals), len(heads))
+    if nums != list(range(1, len(heads) + 1)):
+        return None, None, '%s 的步骤编号不连续：%s' % (path, nums)
+    if sorted(slugs) != nums:
+        return None, None, '%s 的 step-slugs 覆盖 %s，而步骤是 %s（加步骤忘了配 slug？）' % (
+            path, sorted(slugs), nums)
+    if len(set(slugs.values())) != len(slugs):
+        return None, None, '%s 的 step-slugs 有重名' % path
+    return len(heads), slugs, None
+
+scripts = {}
+fatal = []
+for sp in ('verify.sh', 'build_demo.sh'):
+    cnt, slugs, err = steps_of(sp)
+    if err:
+        fatal.append(err)
+    scripts[sp] = (cnt, slugs or {})
+if fatal:
+    # **读不出步骤表就立刻停**，别带着 None 往下走：实测第一版把 None 渗进
+    # 后面的 `%d`，于是"映射漏了一步"变成一句 TypeError traceback ——
+    # 退出码是 1（看着像"抓住了"），而真正该说的话一个字没印。
+    # 门禁崩溃 ≠ 门禁判定：崩溃让人以为判据在咬，其实判据根本没跑完。
+    print('FAIL: ' + '；'.join(fatal))
+    sys.exit(1)
+
+# ── MUTS 条数：静态解析（不执行脚本，避免它的副作用） ────────────────────
+# `mutation_scan.py` 的锚点里全是 MoonBit 的 `\{kind}` 字面量，Python 3.12+
+# 会对这种"无效转义"发 SyntaxWarning（当前仍原样保留反斜杠，故锚点是对的）。
+# 日志是给人看的，别让判据自己刷警告；同时把 filename 传进去，真出错时报得准。
+import warnings
+with warnings.catch_warnings():
+    warnings.simplefilter('ignore', SyntaxWarning)
+    tree = ast.parse(open('mutation_scan.py', encoding='utf-8').read(), filename='mutation_scan.py')
+node = next((x for x in tree.body
+             if isinstance(x, ast.Assign) and getattr(x.targets[0], 'id', None) == 'MUTS'), None)
+if node is None:
+    bad.append('mutation_scan.py 里读不出 MUTS（判据失效，别静默跳过）')
+    muts_total, muts_killed = 0, 0
+else:
+    muts = ast.literal_eval(node.value)
+    muts_total = len(muts)
+    muts_killed = muts_total - sum(1 for e in muts if e[5] == 'equivalent')
+
+# ── README 声明的 verify.sh 步数 + 该节编号清单项数 ──────────────────────
+rm = open('README.md', encoding='utf-8').read()
+m = re.search(r'`\./verify\.sh`\s*(\d+)\s*步', rm)
+if not m:
+    bad.append('README 没有「`./verify.sh` N 步」的步数声明（数不出来 = 没在核对）')
+else:
+    if int(m.group(1)) != scripts['verify.sh'][0]:
+        bad.append('README 写 verify.sh %s 步，实际 %d 步' % (m.group(1), scripts['verify.sh'][0]))
+    sec = rm[m.end():]
+    sec = sec[:sec.find('\n## ')] if '\n## ' in sec else sec
+    items = re.findall(r'^\d+\. ', sec, re.M)
+    if len(items) != scripts['verify.sh'][0]:
+        bad.append('README 的验证门清单列了 %d 项，而 verify.sh 有 %d 步' % (len(items), scripts['verify.sh'][0]))
+
+for path in DOCS:
     for i, line in enumerate(open(path, encoding='utf-8'), 1):
+        # ① 命令条数
         # 负向后视 `(?<![/\d])`：步骤编号「8/12 命令字典…」里的 12 不是命令条数
         for m in re.finditer(r'(?<![/\d])(\d+)\s*(?:条)?\s*(?:个)?命令', line):
             if int(m.group(1)) != n:
                 bad.append('%s:%d 写「%s 条命令」，实际 %d' % (path, i, m.group(1), n))
+        # ② 步骤引用只许走 slug，而且 slug 必须真实存在
+        for m in re.finditer(r'(verify\.sh|build_demo\.sh)#([A-Za-z0-9_-]+)', line):
+            if m.group(2) not in scripts[m.group(1)][1].values():
+                bad.append('%s:%d 引用了不存在的步骤 slug「%s#%s」（%s 的 slug：%s）' % (
+                    path, i, m.group(1), m.group(2), m.group(1),
+                    ' '.join(sorted(scripts[m.group(1)][1].values()))))
+        # ③ 散文里禁止用编号引用步骤（插一步就全错，且没人会红）
+        for m in re.finditer(r'第\s*\d+\s*步', line):
+            bad.append('%s:%d 用编号引用步骤「%s」——请写 slug（如 `verify.sh#anchors`）'
+                       % (path, i, m.group(0)))
+        dens = sorted({str(scripts[sp][0]) for sp in scripts if scripts[sp][0]})
+        for m in re.finditer(r'(?<![\w#])(\d+)/(?:%s)(?![\d])' % '|'.join(dens), line):
+            bad.append('%s:%d 用编号引用步骤「%s」——请写 slug' % (path, i, m.group(0)))
+        # ④ 变异条数
+        for m in re.finditer(r'(\d+)\s*个变异中\s*(\d+)\s*个被抓住', line):
+            if (int(m.group(1)), int(m.group(2))) != (muts_total, muts_killed):
+                bad.append('%s:%d 写「%s 个变异中 %s 个被抓住」，实际 %d 中 %d' % (
+                    path, i, m.group(1), m.group(2), muts_total, muts_killed))
+
 if bad:
     print('FAIL: ' + '；'.join(bad))
     sys.exit(1)
-print('文档命令数 OK（README/DESIGN/AGENTS 里的命令数都是 %d）' % n)
+print('文档数字 OK（命令 %d；verify.sh %d 步 / build_demo.sh %d 步，步骤引用全是有效 slug；'
+      '变异 %d 中 %d 被抓住）' % (n, scripts['verify.sh'][0], scripts['build_demo.sh'][0],
+                                muts_total, muts_killed))
 PYD
 
 echo "== 9/12 命令参数下界自检（读 tokens[N] 之前必须先卡住 N） =="
@@ -524,7 +629,7 @@ echo "== 10/12 变异锚点自检（变异门不许静默失效） =="
 # 就**再也没跑过**，而汇总里的「N 个变异全部通过」照旧好看。实测踩过：
 # R3 的锚点被一次重构改掉、R4 的锚点变成匹配 2 处，两个变异静静失效了一轮，
 # 我却照着"33 个全通过"把数字写进了文档。这一步只校验"每个锚点唯一命中 1 处"
-# （秒级，不跑那 5 分钟的测试），把失效挡在常规门禁里。
+# （秒级，不跑几十分钟的全量扫描），把失效挡在常规门禁里。
 python3 mutation_scan.py --check-anchors
 
 echo "== 11/12 字典 ↔ 解析器 参数对账（承诺的参数必须真的认） =="

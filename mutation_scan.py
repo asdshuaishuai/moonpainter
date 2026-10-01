@@ -23,7 +23,7 @@
   * `--check-anchors` 只校验锚点唯一命中（秒级），已接进 `verify.sh` 第 9 步。
 
 用法（在仓库根）：
-    python3 mutation_scan.py                  # 全跑（约 5 分钟）
+    python3 mutation_scan.py                  # 全跑（本机约 42 分钟：110 条 × 每条一次全量 moon test）
     python3 mutation_scan.py M1 M7            # 只跑指定项
     python3 mutation_scan.py --check-anchors  # 只校验锚点（秒级）
 退出码：有「应当被抓住却存活」的变异 → 1；有锚点失效 → 1。

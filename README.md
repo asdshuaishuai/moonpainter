@@ -50,7 +50,7 @@
 
 MVSL 侧的诚实边界：编辑表是**文档级的最终一遍**——`最终图 = apply(编辑表,
 层合成底图)`，`render` / `previews/` / `mvsl-impact` 三条出口给出同一张图
-（`verify.sh` 第 7 步断言 render 与 impact 的 sha256 相同）。它还不能
+（`verify.sh#mvsl-e2e` 断言 render 与 impact 的 sha256 相同）。它还不能
 "只作用于某几个图层"或参与图层内部的混合序（那需要把图层单独栅格化的中间
 缓冲；`stage:` 基准目前只切到算子序号，不切图层）。`recolor` 的半透明边缘
 混色分离（`I = αF + (1−α)B`，只改 F）**在合成底图上无解**（不是"未做"）：反演要
@@ -113,7 +113,7 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   选择子与编辑表，base64 由 SDK 做——不该让 LLM 手搓 base64；
 - **引擎侧能力与 AI 可达范围的边界**（诚实边界；`undispatched_tools()` 锁的是
   「工具面 → 引擎」这个方向，反方向是**刻意的子集**——但这份名单不是散文，
-  `build_demo.sh` 第 7 步会机械核对下面这块，同时保证**工具面不许指向一条
+  `build_demo.sh#doc-tools` 会机械核对下面这块，同时保证**工具面不许指向一条
   引擎里不存在的命令**。要新增可达能力时改这里，而不是默默改数：
   <!-- unreachable:begin -->
   引擎 59 条命令里，demo 的 AI 够不着 7 条：`session-open` `open-mpd-b64`
@@ -150,7 +150,7 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   现在 `tag=` 可用（与 `tag` 命令共用 `@core.layer_with_tag`，追加去重）。
 - **字典承诺的参数必须真的认**：铁律 6 只覆盖**命令清单**，**参数**一直是两张
   互不校验的表——工具字典里写 `key=`（LLM 就是照这个发参数的），解析器里另有
-  `check_kv_args` 的允许键表。新增 `param_audit.py`（verify.sh 第 11 步）双向对账，
+  `check_kv_args` 的允许键表。新增 `param_audit.py`（`verify.sh#params`）双向对账，
   一上来就抓到四处：`add-rect` 的手写键清单漏了 `visible=`、`add-image` 收下整套
   形状键而字典只写了 `x/y/w/h/b64`、`add-text`/`add-adjust` 的 `id=`/`name=`、
   以及 **`erase` 静默收下 `color=`**（橡皮擦恒全强度，渲染器连笔色 alpha 都不读
@@ -229,7 +229,14 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   ToolProvider / Observer 三端口扩展；Observer 即"全程可见"的官方通道）。
   评估记录：moonllm（DC-Z-lab）锁 `+native` 不适用浏览器，弃用。
 
-## 一键验证门（`./verify.sh` 八步，任何一步失败即非零退出）
+## 一键验证门（`./verify.sh` 12 步，任何一步失败即非零退出）
+
+> 散文里引用步骤**一律写 slug**（`verify.sh#anchors`），**不写编号**：
+> 编号会随插入步骤错位——实测这里曾把锚点自检写成过一个当时的步号，插入
+> 一步之后就指向了**别的**步骤，而没有任何东西会红（具体经过见 PLAN.md
+> 六之三十五）。现在 `verify.sh` / `build_demo.sh` 各带一张机器可读的
+> `step-slugs:` 映射，文档里的 slug 引用由验证门逐条核对存在性；再冒出编号
+> 引用（`第 N 步` / `N/12` / `N/8`）也直接红。
 
 1. `moon check` 零错误零警告；
 2. `moon test --target native` 全绿（NIST/CRC 已知答案、deflate/ZIP/PNG 往返、golden 渲染、容器确定性、八类拒绝路径、会话 e2e）；
@@ -238,8 +245,13 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
 5. **独立外部验证**：系统 `unzip -t` 校验容器 + 条目齐全性 + manifest 格式标识 + 元参数层可直接文本阅读——不依赖引擎自证；
 6. **open→save 字节一致**：载入容器后原样重打包，与原文件逐字节相同（确定性 pack 的进程级闭环）；
 7. **MVSL 命令面 + 渲染管线闭环（子进程 e2e）**：安装编辑表 → `render` 与 `mvsl-impact` 的 sha256 必须**相同**（编辑表真的进了渲染管线，不只是被存下来）→ 校验改动像素数与选区外泄漏率 0 → `mvsl-assert`（合法程序放行、侵犯保护区的程序被拦下并给出条数）→ **`lint` 必须报出必然空选的编辑表与违约的保护断言**（这类失败其它命令全返回 ok）→ 编辑表随容器往返且开→存字节一致 → 带/不带编辑表的 `previews/flat.png` 必须不同（预览不撒谎）。
+8. **命令字典与分发一致**（铁律 6）：`list-tools` 吐出的每个命令都逐个真实调用，必须不报"未知命令"；同一步做**文档数字对账**——README/DESIGN/AGENTS 里的命令条数、变异条数、`verify.sh` 步数，以及步骤 slug 引用的存在性；
+9. **命令参数下界自检**：每个 `cmd_*` 读 `tokens[N]` 之前必须先卡住 `N`（下界写小了不报用法错、而是越界 panic——实测 `set-text l1` 把 CLI 干掉了，而 `verify.sh#catalog` 只用裸命令名逐个戳，照不到带参数才越界的那批）；
+10. **变异锚点自检**：每个变异锚点必须唯一命中 1 处（秒级）。锚点失效 = 那块覆盖被悄悄拿掉，而汇总里的「N 个变异全部通过」照旧好看；
+11. **字典 ↔ 解析器参数对账**：字典承诺的 `key=` 必须真的认（双向）；读不出键表/命令名不是字面量 → 判失败，别静默跳过；
+12. **依赖方向门禁**（铁律 5）：内部边全部朝前、`pixel` 不依赖 `render`、引擎包零第三方、FFI 只在 cli/demo、demo 不 import 引擎包；外加 DESIGN §3 ↔ `core/document.mbt` 逐字对账（层类型/层属性/填充/混合，双向）。
 
-## 变异测试门（`python3 mutation_scan.py`，约 5 分钟）
+## 变异测试门（`python3 mutation_scan.py`，本机约 42 分钟）
 
 **「测试全绿」不等于「行为被守护」。** 这个脚本往产品代码注入语义 bug，跑测试看能否抓住；
 有「应当被抓住却存活」的变异即非零退出。它存在的理由是本仓库两次真实教训：
@@ -257,10 +269,10 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
 - **P3 manifest 的 `counts` 无人校验**：把 `layers` 和 `assets` 计数互换全部测试通过——
   而 `counts` 正是工具/审阅者据以判断"容器里有什么"的对外事实。
 
-当前 37 个变异中 36 个被抓住，唯一存活的 M2 是**已确认的等价变异**。
+当前 110 个变异中 109 个被抓住，唯一存活的 M2 是**已确认的等价变异**。
 变异门自己也有一个静默失效模式：锚点文本被重构改掉或变得不唯一，那个变异就
 **再也没跑过**，而汇总里的「N 个变异全部通过」照旧好看（实测踩过：两个变异
-静静失效了一轮）。所以 `verify.sh` 第 9 步用 `--check-anchors` 秒级校验
+静静失效了一轮）。所以 `verify.sh#anchors` 用 `--check-anchors` 秒级校验
 "每个锚点唯一命中 1 处"，锚点失效直接让门禁红（去掉空表短路后行为逐位相同）。
 覆盖路径：编辑表数值语义 / 三个指纹 / 保护断言 / lint / W3C alpha 合成与 blend 模式 /
 几何选择子 / 覆盖预览与盒降采样 / SHA-256 / PNG / ZIP-CRC / 容器 manifest /

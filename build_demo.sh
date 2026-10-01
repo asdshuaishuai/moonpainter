@@ -24,6 +24,10 @@ run_quiet() {
   rm -f "$log"
 }
 
+# 步骤 slug 映射（散文里引用步骤用 `build_demo.sh#doc-tools` 这种形态；
+# 编号会随插入步骤错位）。verify.sh 第 8 步的文档数字对账会核这张表。
+# step-slugs: 1=wasm 2=demo-js 3=dist 4=node-headless 5=sdk-smoke 6=html-wiring 7=doc-tools 8=demo-test
+
 echo "== 1/8 引擎 wasm 构建 =="
 run_quiet moon build --target wasm
 

@@ -56,7 +56,7 @@ macOS 原生类 Photoshop 编辑器。对本工程最有价值的三块遗产：
 ```
 
 依赖严格单向无环：`base ← codec ← core ← pixel ← render ← mpd ← agent ← cli`。
-链外还有两个包，位置也由门禁（`dep_audit.py`，verify.sh 第 12 步）钉住：
+链外还有两个包，位置也由门禁（`dep_audit.py`，`verify.sh#deps`）钉住：
 `wasm`（驱动 agent 的 SDK 边界）在 cli 之后，`demo` 在最后并且**不 import 任何
 `moonpainter/` 包**——它只经 wasm ABI 驱动引擎（铁律 5）。同一步还断言引擎包
 **零第三方依赖**、`extern` FFI 只在 cli/demo。
@@ -71,7 +71,7 @@ macOS 原生类 Photoshop 编辑器。对本工程最有价值的三块遗产：
 
 ## 3. IR 文档模型（core/document.mbt）
 
-- 层类型（`ShapeKind`，与代码**逐字对账**，`dep_audit.py` 第 12 步）：
+- 层类型（`ShapeKind`，与代码**逐字对账**，`verify.sh#deps`）：
   <!-- layer-kinds:begin -->
   `Rect` `Ellipse` `Line` `Polygon` `Image` `Group` `Text` `Adjust` `Raster`
   <!-- layer-kinds:end -->
@@ -175,7 +175,7 @@ manifest 的 `mvsl` 版本块 pin 住四个独立版本号（`render_contract` /
   （`最终图 = apply(program, 层合成底图)`，`render_doc_with` / `render_view_with`
   / `render_view_overlay_with`）。三条约束见 §2；三条出口
   （`render` / `previews/` / `mvsl-impact`）必须给出**同一张图**，
-  `verify.sh` 第 7 步把 `render` 与 `mvsl-impact` 的 sha256 相等做成硬断言；
+  `verify.sh#mvsl-e2e` 把 `render` 与 `mvsl-impact` 的 sha256 相等做成硬断言；
 - **两套颜色坐标系必须分家**：`color` 选择子的 `h`/`s`/`l` 是 **OKLCh 色相 /
   OKLCh 彩度 / OKLab 亮度**；HSV 只做分析辅助（V 不是感知亮度）。凡向调用方
   报颜色数值，一律经 `pixel.ColorStats` 产出——`sel_h`/`sel_c`/`sel_l`

@@ -24,13 +24,29 @@
    （canonical design.json + 指纹），像素资产只增不改（内容寻址）。
 3. **诚实边界**：新能力做多少写多少（README 能力表 + DESIGN 边界节同步）；
    不支持就报明确错误，不降级、不糊弄。vision 闸永远不许放宽。
+   **数字也是承诺**：命令条数/变异条数/步骤数由 `verify.sh#catalog` 逐条对账。
+   实测两处当面撒谎：README 写「`./verify.sh` **八步**」并只列 7 项（脚本已
+   12 步）、写「当前 **37** 个变异中 36 个被抓住」（`MUTS` 已 110 条 = 109 抓住
+   + 1 等价）。**数字进了散文就没人管**——所以 README 的步数声明、该节的编号
+   清单项数、变异条数（`ast` 静态解析 `MUTS`，不执行脚本）都进机器对账。
+   ⚠️ 静态对账只能管"条数"（`MUTS` 有几条、几条声明为等价）；"到底抓住了
+   没有"由变异门自己强制（非等价变异存活即非零退出）——**两个数字合起来才是
+   那句话的完整含义**，别把静态对账当成"我跑过变异门了"。
+   散文里**引用步骤一律走 slug**（`verify.sh#anchors`、`build_demo.sh#doc-tools`），
+   **不许写编号**：实测 README 里锚点自检被写成过一个**当时的**步号，插入一步
+   之后就指向了别的步骤（具体经过见 PLAN.md 六之三十五）——插一步，散文里的
+   编号就全错，而没有任何东西会红。**这条禁令对"解释这条禁令的文字"同样生效**
+   （实测第一版引子就因为自己写了两个步号而被门禁抓住）：要讲编号错位的故事，
+   去 PLAN.md（实施历史，不在对账范围内）。两个脚本各带一张 `step-slugs:` 映射（加步骤必须同一次
+   提交里配 slug，否则门禁红），门禁核对"引用存在 + 表覆盖每一步 + 不许再出现
+   编号引用"。
 4. **复用规则**：只用本工作区自有 MIT 代码，复制时保留出处注释；
    任何带第三方内嵌标注的文件（如 moonviz 的 deflate.mbt）不得引入。
 5. **依赖方向**：base ← codec ← core ← pixel ← render ← mpd ← agent ← cli，禁止反向/环；
    FFI 只许出现在 cli（native-only），引擎包保持纯字节进出。
    `render` 依赖 `pixel`（编辑表是渲染的**最终一遍**：层合成底图 → 施加编辑表 →
    再裁剪缩放）；`pixel` 绝不反向依赖 `render`。改这里必须同步 DESIGN §2 依赖图。
-   **这条现在有门禁**（`dep_audit.py`，verify.sh 第 12 步）：内部边全部朝前、
+   **这条现在有门禁**（`dep_audit.py`，`verify.sh#deps`）：内部边全部朝前、
    引擎包零第三方、`extern` FFI 只在 cli/demo、demo 不 import 任何引擎包。
    为什么以前没人疼：moon 编译器**只管有没有环**——反向依赖不构成环，照样编得过。
    同一步还做 **DESIGN §3 ↔ `core/document.mbt` 逐字对账**：层类型 ==
@@ -41,7 +57,7 @@
    读文档的人**根本不知道层有蒙版、有翻转、有笔触**。散文里的清单没人对账就会烂，
    所以名单进标记块（`<!-- layer-kinds:begin/end -->` 等）。
    ⚠️ 改 `Layer`/`ShapeKind`/`Fill`/`BlendMode` 的声明后，**同一次提交里**
-   改 DESIGN §3 的标记块，否则第 12 步会红。
+   改 DESIGN §3 的标记块，否则 `verify.sh#deps` 会红。
    重采样路径不许分叉：空编辑表必须走与"没有编辑表"逐位相同的代码路径。
 6. **工具字典同步**：改 agent/session.mbt 的命令分发必须同步 agent/tools.mbt
    （反之亦然）——它是 help/list-tools/文档的单一事实源。
@@ -199,7 +215,7 @@
     `grep -E '"k":0[,}]'` 锚住字段值结尾。整数计数字段（`violations`/`count`）
     碰巧不受影响，但一视同仁更省心。
 
-   **参数面：字典承诺的 `key=` 必须真的认（verify.sh 第 11 步）。**
+   **参数面：字典承诺的 `key=` 必须真的认（`verify.sh#params`）。**
    铁律 6 只覆盖**命令清单**；参数是两张互不校验的表——字典里的 `key=`
    （LLM 照它发参数）与解析器的 `check_kv_args` 允许键表。四种漂移都实测到了：
    手写清单漏键（`add-rect` 漏 `visible=`）、解析器多认而字典没写
@@ -211,7 +227,7 @@
    从它出，别手写第二份。一条命令一个函数、一份字面量键表——`brush`/`erase`
    原先共用一个函数、键表按布尔分支算，`erase` 就是这么收下 `color=` 的。
    门禁要求"命令名是字面量、键表读得出来"，读不出来**判失败**：
-   静默跳过 = 这块覆盖没了而汇总照旧好看（同第 10 步锚点失效）。
+   静默跳过 = 这块覆盖没了而汇总照旧好看（同 `verify.sh#anchors` 那课）。
    改了参数面就顺手跑一次 `python3 param_audit.py`（秒级）。
 
    **值面还有第五件事：这个值合法吗？** 键认得出来不等于值收得下。
@@ -242,7 +258,7 @@
    （`stroke_w ≥ 0`、`font_size > 0`、`opacity 0..1`、`radius/feather ≥ 0`、
    `w/h > 0`），lint 兜住手改容器的负笔宽 / 非正字号。
    `param_audit.py` 加了机器判据：**`to_d` 的 `None` 分支不报错就是红**
-   （扫描时**剥注释**——第一版就被自己刚写的注释抓过一次，同第 9 步那课）。
+   （扫描时**剥注释**——第一版就被自己刚写的注释抓过一次，同 `verify.sh#arg-lower-bound` 那课）。
    ⚠️ 写数值解析时别用 `match to_d(...) { Some(v) => v, None => 默认 }`，
    也别写 `if v > 0 { 采用 }`（那是把 0/负值悄悄换成默认）——两种门禁都会红。
 
@@ -252,34 +268,35 @@
 ./verify.sh                     # 一键验证门：check / native 测试 / wasm-gc 测试 /
                                 # **两个 target 的 check 都断言无 Warning**（铁律 1
                                 # 的 0-warning 不分 target；warning 会让 moon check
-                                # 返回非零，set -e 直接停在第 1 步） /
+                                # 返回非零，set -e 直接停在第一步） /
                                 # CLI 子进程 e2e / 独立 unzip 验证 / open→save 字节一致 /
                                 # MVSL 编辑表命令面 + 渲染管线闭环（安装→
                                 # render≡impact 同一张图→断言→软过渡带不
                                 # 算泄漏→lint 空操作/违约→容器往返→预览
                                 # 走编辑表）；渐变端点单位等静默失败也在此拦
-                                # 8/12 命令字典与分发一致：list-tools 吐出的每个
+                                # verify.sh#catalog 命令字典与分发一致：list-tools 吐出的每个
                                 # 命令都逐个真实调用，必须不报"未知命令"（铁律 6）
-                                # 9/12 命令参数下界自检：每个 cmd_* 读 tokens[N]
+                                # verify.sh#arg-lower-bound 命令参数下界自检：每个 cmd_* 读 tokens[N]
                                 # 之前必须先卡住 N。下界写小了**不报用法错、
                                 # 而是越界 panic**（实测 `set-text l1` 把 CLI
-                                # 干掉了），而第 8 步只用裸命令名逐个戳、
+                                # 干掉了），而 verify.sh#catalog 只用裸命令名逐个戳、
                                 # 照不到带参数才越界的那批
                                 # **剥注释**：实测扫描器被自己写的注释骗过
                                 # （注释里一句 tokens[2] 被当成真读）。判据要能
                                 # 分清代码与散文；改完判据要注入反例证明它还咬得住
-                                # 10/12 变异锚点自检：每个变异锚点必须唯一命中 1 处
+                                # verify.sh#anchors 变异锚点自检：每个变异锚点必须唯一命中 1 处
                                 # （秒级）。锚点失效 = 那块覆盖被悄悄拿掉，
                                 # 而汇总里的「N 个变异全部通过」照旧好看——实测
                                 # 踩过，两个变异静静失效了一轮
-                                # 11/12 字典 ↔ 解析器 参数对账：字典承诺的
+                                # verify.sh#params 字典 ↔ 解析器 参数对账：字典承诺的
                                 # key= 必须真的认（双向）。读不出键表/命令名
                                 # 不是字面量 → 判失败，别静默跳过
-                                # 第 8 步还顺带核对**文档里的命令条数**
+                                # verify.sh#catalog 还顺带核对**文档里的数字**（命令条数/变异条数/步数，
+                                # 以及步骤引用是不是有效 slug）
                                 # （DESIGN §2 曾写 57，而字典是 59）；开头核
                                 # verify.sh 自己的步骤编号自洽（加步骤忘了改
                                 # 分母 → 日志里的"10/10"是真数、分母是假的）
-                                # 12/12 依赖方向门禁（铁律 5）：内部边全部朝前、
+                                # verify.sh#deps 依赖方向门禁（铁律 5）：内部边全部朝前、
                                 # pixel 不依赖 render、引擎包零第三方、FFI 只在
                                 # cli/demo、demo 不 import 引擎包（只走 wasm ABI）；
                                 # 外加 DESIGN §3 ↔ core/document.mbt 逐字对账
@@ -291,8 +308,8 @@
                                 # 含 undispatched_tools 工具面自检、HTML 接线自检）
                                 # **页面接线的两层**：demo_test 拿真的拼出来的
                                 # HTML 查 globalThis 处理器与 id；build_demo.sh
-                                # 第 6 步额外罩住动态拼出来的图层列表/属性面板。
-                                # 7/8 文档工具数 + 边界自洽：README 与 AGENTS 里
+                                # build_demo.sh#html-wiring 额外罩住动态拼出来的图层列表/属性面板。
+                                # build_demo.sh#doc-tools 文档工具数 + 边界自洽：README 与 AGENTS 里
                                 # 写的工具数必须与 paint_tool_defs 一致；README
                                 # 里 unreachable 标记之间那份"AI 够不着"的名单
                                 # 必须**恰好**等于 引擎命令 − 工具面覆盖，且工具面
@@ -306,7 +323,7 @@
 # **看门禁结果别接管道**：`./verify.sh | tail -1` 的退出码是 tail 的，
 # set -e 与 `&&` 都抓不到失败——实测 verify 在 9/10 失败而我以为它过了。
 # 两个脚本都用 run_quiet 包裹长输出命令。
-python3 mutation_scan.py        # 变异门：注入语义 bug 看测试能否抓住（约 5 分钟；
+python3 mutation_scan.py        # 变异门：注入语义 bug 看测试能否抓住（本机约 42 分钟；
                                 # 「测试全绿」不等于「行为被守护」）
 python3 mutation_scan.py --check-anchors   # 只校验锚点唯一命中（秒级，已进 verify.sh）
 python3 mutation_scan.py R3 R4  # 按 id 只跑指定的变异（改完测试想快速复验）
@@ -322,7 +339,7 @@ moon run --target native cli    # stdin 行协议；help 查看全部 59 个命�
 - demo 包允许 mooncakes 依赖（当前 colmugx/posoco + moonbitlang/async）；
   **引擎包（base/codec/core/pixel/render/mpd/agent/wasm/cli）仍零第三方依赖**；
 - 引擎交互必须经 wasm SDK 实例（wasm 包 ABI），不得在 demo 里旁路直调引擎包。
-  **这三条现在有门禁**（`dep_audit.py`，verify.sh 第 12 步）。实测它一上来就
+  **这三条现在有门禁**（`dep_audit.py`，`verify.sh#deps`）。实测它一上来就
   抓到 `demo/moon.pkg` 里的 `moonpainter/core`——那是**只为 `@core.ENGINE_VERSION`
   一个常量**而存在的旁路：同一个事实有两条路（demo 编译进去的常量 vs 已加载
   wasm 的 `mp_version`），wasm 产物过期时页面就会报错的版本。改成从引擎读之后
@@ -361,7 +378,7 @@ moon run --target native cli    # stdin 行协议；help 查看全部 59 个命�
   DESIGN 的「读元参数 → 拟命令」双通道在产品里是断的。新增引擎命令时
   **顺手看一眼这个方向**：要么接进工具面，要么在 README 里写明它只是引擎侧能力。
   **"刻意"不等于"没人看"**：这份名单现在是两句话 + 一块机器核对的区域
-  （`<!-- unreachable:begin/end -->`），`build_demo.sh` 第 7 步断言
+  （`<!-- unreachable:begin/end -->`），`build_demo.sh#doc-tools` 断言
   **引擎命令 − 工具面覆盖 == 名单**（多写少写、条数写错都红），并且
   **工具面不许指向一条引擎里不存在的命令**。后者此前无人守：把
   `tool_cmd("move")` 改成 `Some("move-layer")`，`undispatched_tools()` 照样绿
