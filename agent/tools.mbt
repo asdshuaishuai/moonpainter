@@ -27,15 +27,34 @@ pub fn list_tools() -> Array[AgentTool] {
   add("query-layer", "query-layer <id>：单层详情", "meta")
   add("lint", "P0–P2 谓词检查（引用/几何/限额）", "both")
   // 绘制
+  // 四条 add-* 的键清单都从 `add_shape_keys(kind)` 生成——它与解析器
+  // 用的是**同一个函数**，所以不会再出现"手写清单漏了 visible="这种漂移
+  // （实测漏过）。单位说明留在正文里，见铁律 8。
   add(
     "add-rect",
-    "add-rect x= y= w= h= [id= name= fill= radius= lgrad= stroke= stroke_w= opacity= blend= rot= tag=]。**x/y/w/h/stroke_w 是像素，但 lgrad 端点是归一化 0..1**（lgrad=c0,c1,x0,y0,x1,y1，(0,0)=本层左上，(1,1)=本层右下，与画布分辨率无关）——把像素写进端点会被拒绝",
+    "add-rect x= y= w= h= " + add_shape_keys(@core.ShapeKind::Rect).map(fn(k) { "[\{k}=]" }).join("") + "。**x/y/w/h/stroke_w 是像素，但 lgrad 端点是归一化 0..1**（lgrad=c0,c1,x0,y0,x1,y1，(0,0)=本层左上，(1,1)=本层右下，与画布分辨率无关）——把像素写进端点会被拒绝",
     "meta",
   )
-  add("add-ellipse", "同 add-rect（椭圆）", "meta")
-  add("add-polygon", "同 add-rect，另需 points=x,y;x,y;…（局部坐标）", "meta")
-  add("add-line", "同 add-rect，默认对角线，可 points= 自定义折线；fill 不生效", "meta")
-  add("add-image", "add-image x= y= w= h= b64=<png base64>：导入位图资产并置入", "both")
+  add(
+    "add-ellipse",
+    "add-ellipse x= y= w= h= " + add_shape_keys(@core.ShapeKind::Ellipse).map(fn(k) { "[\{k}=]" }).join("") + "：椭圆（键与 add-rect 同）",
+    "meta",
+  )
+  add(
+    "add-polygon",
+    "add-polygon x= y= w= h= points=x,y;x,y;…（局部坐标）" + add_shape_keys(@core.ShapeKind::Polygon).map(fn(k) { "[\{k}=]" }).join("") + "：多边形（键与 add-rect 同，另需 points）",
+    "meta",
+  )
+  add(
+    "add-line",
+    "add-line x= y= w= h= " + add_shape_keys(@core.ShapeKind::Line).map(fn(k) { "[\{k}=]" }).join("") + "：折线，默认对角线，可 points= 自定义；fill 不生效",
+    "meta",
+  )
+  add(
+    "add-image",
+    "add-image x= y= w= h= b64=<png base64>：导入位图资产并置入。可选：" + add_image_keys().map(fn(k) { "[\{k}=]" }).join(""),
+    "both",
+  )
   add(
     "set-style",
     "set-style <id> " + set_style_keys().map(fn(k) { "\{k}=/" }).join("") + "（lgrad 端点归一化 0..1，非像素；tag= 追加标签，与 tag 命令同一实现）",
@@ -53,9 +72,17 @@ pub fn list_tools() -> Array[AgentTool] {
   add("group", "group <gid> <id> [id...]：把一个或多个**根级**层编成组（直通合成；嵌套编组请先 ungroup）", "meta")
   add("ungroup", "ungroup <gid>", "meta")
   // 文本 / 调整 / 蒙版
-  add("add-text", "add-text x= y= text=<内容> [font_size=] [fill=<#RRGGBB[AA]，默认黑>]：文本层（ASCII 真字形）；**含空格用双引号包住** text=\"Hello World\"，name= 同理", "meta")
+  add(
+    "add-text",
+    "add-text x= y= text=<内容>：文本层（ASCII 真字形）；**含空格用双引号包住** text=\"Hello World\"，name= 同理。可选：" + add_text_keys().map(fn(k) { "[\{k}=]" }).join(""),
+    "meta",
+  )
   add("set-text", "set-text <id> <新内容>（含空格用双引号包住）", "meta")
-  add("add-adjust", "add-adjust op=<算子> value=<-1..1>：调整层（PSD 语义）。算子：brightness/contrast/saturation/invert/grayscale/blur/sharpen/smooth/whiten/warm/vignette", "meta")
+  add(
+    "add-adjust",
+    "add-adjust op=<算子> value=<-1..1>：调整层（PSD 语义）。算子：brightness/contrast/saturation/invert/grayscale/blur/sharpen/smooth/whiten/warm/vignette。可选：" + add_adjust_keys().map(fn(k) { "[\{k}=]" }).join(""),
+    "meta",
+  )
   add("set-adjust", "set-adjust <id> [op=<算子>] [value=<数>]：原地改调整层的算子/数值，**层序不变**（删了重加会把它推到栈顶，作用范围跟着变）", "meta")
   add("add-mask", "add-mask <id> kind=rect|ellipse x= y= w= h= [radius=<圆角 px，仅矩形，默认 0>] [feather=<边缘羽化 px，默认 0=硬边；过渡带在蒙版内侧>] [invert=true]：蒙版坐标是**画布坐标**（x/y/w/h 用像素，不随图层 move/rotate 走）", "meta")
   add(
@@ -65,9 +92,13 @@ pub fn list_tools() -> Array[AgentTool] {
   )
   add("remove-mask", "remove-mask <id>", "meta")
   // 修图操作
-  add("add-paint", "add-paint [name=]：新建画笔层（raster，全画布）", "meta")
+  add(
+    "add-paint",
+    "add-paint：新建画笔层（raster，全画布）。可选：" + add_paint_keys().map(fn(k) { "[\{k}=]" }).join(""),
+    "meta",
+  )
   add("brush", "brush layer=<raster层> pts=x1,y1;x2,y2[;…] r=<半径px> [color=#RRGGBB[AA]]：沿折线落笔触", "meta")
-  add("erase", "erase layer=<raster层> pts=… r=<半径px>：橡皮擦（destination-out）", "meta")
+  add("erase", "erase layer=<raster层> pts=… r=<半径px>：橡皮擦（destination-out）。橡皮擦**恒全强度**，不接受 color 参数（收了也没用，所以入口直接拒绝）", "meta")
   add("crop", "crop <x> <y> <w> <h>：裁剪画布，全部层同步平移", "meta")
   add("sample", "sample <x> <y>：吸管取色（合成像素 hex + 命中层）", "vision")
   // 元参数
@@ -90,7 +121,7 @@ pub fn list_tools() -> Array[AgentTool] {
   add("save-mpd-b64", "会话打包为 .mpd 容器字节（base64）", "meta")
   add("open-mpd-b64", "open-mpd-b64 <b64>：载入容器（拒绝式校验）", "meta")
   // MVSL 编辑表（确定性编辑 IR）：人机同一张表，AI 与 GUI 同一撤销栈
-  add("mvsl-set", "mvsl-set <base64(canonical program json)>：安装 MVSL 编辑表（校验+规范化，空 ops 表示逐位还原底图）。算子可带 layer=<层 id> 把作用域收窄到那一层——该层先单独栅格化、选择子在**这一层自己的像素**上求值，再合成回去；带 layer 的算子先按序执行、然后合成、最后才跑文档级算子（跨作用域的相对顺序不保留），且 layer 与 STAGE 基准的组合会被拒绝", "meta")
+  add("mvsl-set", "mvsl-set <base64(canonical program json)>：安装 MVSL 编辑表（校验+规范化，空 ops 表示逐位还原底图）。算子 JSON 里可带 layer 字段（值是层 id）把作用域收窄到那一层——该层先单独栅格化、选择子在**这一层自己的像素**上求值，再合成回去；带 layer 的算子先按序执行、然后合成、最后才跑文档级算子（跨作用域的相对顺序不保留），且 layer 与 STAGE 基准的组合会被拒绝", "meta")
   add("mvsl-show", "当前 MVSL 编辑表 canonical 全文 + program_sha256 + 三个算法版本 pin", "meta")
   add("mvsl-clear", "清空 MVSL 编辑表（渲染逐位还原底图）", "meta")
   add("select-preview", "select-preview <base64(sel json)> [max=1024]：选择子 → overlay PNG（洋红覆盖）+ 覆盖率/bbox/连通域事实（AI 选 ID 不报坐标）", "both")

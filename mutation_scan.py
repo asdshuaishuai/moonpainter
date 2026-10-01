@@ -479,7 +479,7 @@ MUTS = [
         "R41",
         "add-adjust 不校验参数（value 拼错静默按 0 建一个没效果的层）",
         "agent/session.mbt",
-        r"""  match check_kv_args(tokens, 1, ["op", "value", "id", "name"], "add-adjust") {
+        r"""  match check_kv_args(tokens, 1, add_adjust_keys(), "add-adjust") {
     Ok(_) => ()
     Err(e) => return err(e)
   }""",
@@ -500,13 +500,13 @@ MUTS = [
     ),
     (
         "R43",
-        "brush/erase 不校验参数（rr= 拼错静默用默认半径）",
+        "brush 不校验参数（rr= 拼错静默用默认半径）",
         "agent/session.mbt",
-        r"""  match check_kv_args(tokens, 1, ["layer", "pts", "r", "color"], ctx) {
+        r"""  match check_kv_args(tokens, 1, ["layer", "pts", "r", "color"], "brush") {
     Ok(_) => ()
     Err(e) => return err(e)
   }""",
-        r"""  let _ = ctx""",
+        r"""  let _ = tokens""",
         "killed",
     ),
     (
@@ -729,6 +729,14 @@ MUTS = [
         "render/scene.mbt",
         r"""      return !d.erase""",
         r"""      return true""",
+        "killed",
+    ),
+    (
+        "R60",
+        "erase 又收下 color=（收了不生效的静默 no-op 参数）",
+        "agent/session.mbt",
+        r"""  match check_kv_args(tokens, 1, ["layer", "pts", "r"], "erase") {""",
+        r"""  match check_kv_args(tokens, 1, ["layer", "pts", "r", "color"], "erase") {""",
         "killed",
     ),
     (

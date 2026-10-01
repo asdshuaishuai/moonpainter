@@ -29,7 +29,7 @@ run_quiet() {
   tail -1 "$log"
 }
 
-echo "== 1/10 moon check =="
+echo "== 1/11 moon check =="
 CHECK_OUT=$(moon check 2>&1)
 echo "$CHECK_OUT" | tail -1
 if echo "$CHECK_OUT" | grep -q "Warning"; then
@@ -38,10 +38,10 @@ if echo "$CHECK_OUT" | grep -q "Warning"; then
   exit 1
 fi
 
-echo "== 2/10 moon test --target native =="
+echo "== 2/11 moon test --target native =="
 run_quiet moon test --target native
 
-echo "== 3/10 wasm-gc 可检 + 测试（引擎纯字节进出的背书） =="
+echo "== 3/11 wasm-gc 可检 + 测试（引擎纯字节进出的背书） =="
 # wasm-gc 的 check 也要查 warning：铁律 1 的"0 error / 0 warning"不分 target。
 # （步骤 1 查的是默认 target；target 特有的 warning 只能在这里抓。）
 WASM_CHECK=$(moon check --target wasm-gc 2>&1)
@@ -53,7 +53,7 @@ if echo "$WASM_CHECK" | grep -q "Warning"; then
 fi
 run_quiet moon test --target wasm-gc
 
-echo "== 4/10 CLI 子进程端到端 =="
+echo "== 4/11 CLI 子进程端到端 =="
 # 生成最小 2×2 RGBA PNG（python3 标准库，zlib+struct 手工构造）作为位图资产
 PNG_B64=$(python3 -c "
 import zlib, struct, base64
@@ -102,7 +102,7 @@ printf '%s\n' \
 grep -q '渐变端点必须落在 0..1' "$OUT/grad.log" || { echo "FAIL: 像素坐标写进渐变端点未被拒绝（静默变成纯色）"; exit 1; }
 grep -q '0.375' "$OUT/grad.log" || { echo "FAIL: 拒绝信息未给出换算建议"; exit 1; }
 
-echo "== 5/10 独立外部验证（系统 unzip，非引擎自证） =="
+echo "== 5/11 独立外部验证（系统 unzip，非引擎自证） =="
 unzip -t "$OUT/verify.mpd" > /dev/null && echo "unzip -t: 容器完整性 OK"
 unzip -l "$OUT/verify.mpd" | grep -q "meta/design.json"  || { echo "FAIL: 缺 meta/design.json"; exit 1; }
 unzip -l "$OUT/verify.mpd" | grep -q "previews/flat.png" || { echo "FAIL: 缺 flat 预览"; exit 1; }
@@ -112,7 +112,7 @@ echo "manifest/预览/资产三件套齐全"
 # 元参数层可直接文本阅读（双层容器的核心承诺）
 unzip -p "$OUT/verify.mpd" meta/design.json | head -c 200; echo " …"
 
-echo "== 6/10 open → save 字节一致（进程级确定性闭环） =="
+echo "== 6/11 open → save 字节一致（进程级确定性闭环） =="
 printf '%s\n' \
   'session-open full_image' \
   "open-mpd $OUT/verify.mpd" \
@@ -173,7 +173,7 @@ if w == 16:
 print("open-mpd-b64 载入 OK（指纹 %s…，画布 %s 宽）" % (want[:12], w))
 PYX
 
-echo "== 7/10 MVSL 编辑表命令面 + 渲染管线闭环（安装 → render/impact 同图 → 断言 → 软边界/空操作/违约 lint → 容器往返） =="
+echo "== 7/11 MVSL 编辑表命令面 + 渲染管线闭环（安装 → render/impact 同图 → 断言 → 软边界/空操作/违约 lint → 容器往返） =="
 # canonical 编辑表由引擎自己产出（不手写 JSON——少一个大括号就会得到
 # 指不到病根的解析错误）。这里用固定文本：字段序即 canonical 字段序。
 MVSL_PROG='{"version":1,"ops":[{"id":"e1","kind":"recolor","sel":{"basis":"base","expr":{"t":"geo","shape":"rect","w":{"x":0,"y":0,"w":160,"h":240,"feather":0}}},"amount":1,"hue_deg":120,"temp_kelvin":0,"relight_gain":1,"refine":[],"note":"","evidence":null}],"guards":[{"id":"g1","sel":{"basis":"base","expr":{"t":"geo","shape":"rect","w":{"x":160,"y":0,"w":160,"h":240,"feather":0}}},"max_de":0.001,"max_changed_ratio":0}]}'
@@ -355,7 +355,7 @@ printf '%s\n' \
 grep -q '保护断言被违反' "$OUT/mvsl_lintbad.log" || { echo "FAIL: lint 未报出被违反的保护断言"; exit 1; }
 echo "MVSL：安装/render≡impact/断言/软过渡带不算泄漏/容器往返/预览走编辑表/lint 空操作与违约 全部 OK"
 
-echo "== 8/10 命令字典与分发一致（铁律 6） =="
+echo "== 8/11 命令字典与分发一致（铁律 6） =="
 # 字典（agent/tools.mbt，经 list-tools 输出）与分发（session.mbt 的命令 match）
 # 是两张**手写表**，铁律 6 要求同步，但此前没有任何自动化守着。
 # demo 侧就栽在这上面：10 个工具"注册了却接不上"，而人类走前端按钮、测试
@@ -396,7 +396,7 @@ if bad:
 print(f"命令字典一致性 OK（{n} 个命令逐个可达）")
 PYEOF
 
-echo "== 9/10 命令参数下界自检（读 tokens[N] 之前必须先卡住 N） =="
+echo "== 9/11 命令参数下界自检（读 tokens[N] 之前必须先卡住 N） =="
 # 每个命令开头的 `if tokens.length() < K` 是唯一的越界防线。K 写小了，
 # 命令**不报用法错、而是越界 panic**：进程从 cmd_* 里直接崩掉，用户看到调用栈
 # 而不是提示。实测栽过一次——`set-text l1` 的下界写成 2（应为 3），
@@ -472,7 +472,7 @@ if checked == 0:
 print(f"命令参数下界 OK（{checked} 个命令，读 tokens[N] 的都在下界之内）")
 PYBOUND
 
-echo "== 10/10 变异锚点自检（变异门不许静默失效） =="
+echo "== 10/11 变异锚点自检（变异门不许静默失效） =="
 # 变异门（mutation_scan.py）往实现里注入语义 bug、看测试能否抓住——但它自己
 # 也有一个静默失效模式：锚点文本一旦被重构改掉、或变得不再唯一，那个变异
 # 就**再也没跑过**，而汇总里的「N 个变异全部通过」照旧好看。实测踩过：
@@ -480,6 +480,18 @@ echo "== 10/10 变异锚点自检（变异门不许静默失效） =="
 # 我却照着"33 个全通过"把数字写进了文档。这一步只校验"每个锚点唯一命中 1 处"
 # （秒级，不跑那 5 分钟的测试），把失效挡在常规门禁里。
 python3 mutation_scan.py --check-anchors
+
+echo "== 11/11 字典 ↔ 解析器 参数对账（承诺的参数必须真的认） =="
+# 铁律 6 只覆盖**命令清单**；**参数**一直是两张互不校验的表：工具字典里
+# 写 `key=`（LLM 就是照这个发参数的），解析器里另有 check_kv_args 的允许键表。
+# 对不上的两种表现都实测过：
+#   - 字典写了、解析器不认 → 照描述发参数被拒（mvsl-set 曾用手写记法写了 layer=）
+#   - 解析器认了、字典没写 → 只有读源码才知道有它（add-image 收下整套形状键，
+#     而字典只写了 x/y/w/h/b64；add-rect 的手写清单漏了 visible=）
+# 判据是"解析器认哪些键"必须**读得出来**：命令名不是字面量、键表读不出来
+# 一律判失败——静默跳过就等于这块覆盖没了（同第 10 步的道理）。
+# 判别力已注入验证：字典多写一个键 / 解析器多认一个键，两向都会红。
+python3 param_audit.py
 
 echo ""
 echo "ALL VERIFY PASS ✓"

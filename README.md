@@ -144,6 +144,16 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   但实现里没有那条分支 —— `add-rect … tag=background` 一直**被静默忽略**
   （不报错、`tags` 为空），而两条既有测试都用着它、谁也没断言它真的落上。
   现在 `tag=` 可用（与 `tag` 命令共用 `@core.layer_with_tag`，追加去重）。
+- **字典承诺的参数必须真的认**：铁律 6 只覆盖**命令清单**，**参数**一直是两张
+  互不校验的表——工具字典里写 `key=`（LLM 就是照这个发参数的），解析器里另有
+  `check_kv_args` 的允许键表。新增 `param_audit.py`（verify.sh 第 11 步）双向对账，
+  一上来就抓到四处：`add-rect` 的手写键清单漏了 `visible=`、`add-image` 收下整套
+  形状键而字典只写了 `x/y/w/h/b64`、`add-text`/`add-adjust` 的 `id=`/`name=`、
+  以及 **`erase` 静默收下 `color=`**（橡皮擦恒全强度，渲染器连笔色 alpha 都不读
+  —— 那是个收了也不生效的参数）。现在四条 `add-*` 与 `add-text`/`add-adjust`/
+  `add-paint`/`add-image` 的键清单都从**与解析器同一个函数**生成；`erase` 拆成
+  独立函数并拒收 `color=`。门禁本身还要求"命令名是字面量、键表读得出来"，
+  否则判失败——静默跳过就等于这块覆盖没了。
 - **`pick`/`sample` 的层 id 必须真的是「在那里画了东西」的层**：`pick` 此前走
   压平的层列表且只查 `visible`，于是三类层被报成"在那里"而实际一个像素都没画
   ——**隐藏组的子层**、**opacity=0 的层**（含祖先组透明度乘下来为 0）、

@@ -1057,3 +1057,24 @@ test "sample 的颜色与层 id 必须指同一件事（同一信封里两字段
   assert_true(j3.contains("\"layer\":\"l2\""), msg="隐藏组的子层被跳过，应报下面的 l2：\{j3}")
   assert_true(!j3.contains("l3"), msg="隐藏组的子层不该被报出来：\{j3}")
 }
+
+///|
+test "字典承诺的参数必须真的认：erase 不收 color=（恒全强度，收了也不生效）" {
+  // `erase` 此前与 `brush` 共用一个函数、键表按布尔分支算，于是静默收下了
+  // `color=` —— 而渲染器里橡皮擦**恒全强度**（`paint_dabs` 的 `dalpha` 对
+  // erase 直接取 1.0，连笔色 alpha 都不读）。收下一个不生效的参数就是
+  // 静默 no-op：调用方以为"我调了浓度"，画面一点没变。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 32 32 uuid=erase-color")
+  let _ = run(s, "add-paint name=P")
+  let e = run(s, "erase layer=l1 pts=10,10;20,20 r=4 color=#FF000080")
+  assert_true(e.contains("不认识的参数") || e.contains("color"), msg="erase 应拒收 color=：\{e}")
+  assert_true(e.contains("layer") && e.contains("pts") && e.contains("r"), msg="拒绝时要列出真正认的键：\{e}")
+  // 正控：不带 color 的 erase 照常可用（别把好路径一起拦掉）
+  let ok = run(s, "erase layer=l1 pts=10,10;20,20 r=4")
+  assert_true(ok.contains("\"ok\":true"), msg="合法 erase 必须成功：\{ok}")
+  // brush 仍然收 color=（两边同名参数不许一刀切）
+  let b = run(s, "brush layer=l1 pts=10,10;20,20 r=4 color=#FF000080")
+  assert_true(b.contains("\"ok\":true"), msg="brush 应接受 color=：\{b}")
+}

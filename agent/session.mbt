@@ -159,10 +159,10 @@ pub fn exec(s : Session, line : String) -> String {
     "set-canvas" => cmd_set_canvas(s, tokens)
     "list-layers" => cmd_list_layers(s)
     "query-layer" => cmd_query_layer(s, tokens)
-    "add-rect" => cmd_add_shape(s, tokens, @core.ShapeKind::Rect)
-    "add-ellipse" => cmd_add_shape(s, tokens, @core.ShapeKind::Ellipse)
-    "add-polygon" => cmd_add_shape(s, tokens, @core.ShapeKind::Polygon)
-    "add-line" => cmd_add_shape(s, tokens, @core.ShapeKind::Line)
+    "add-rect" => cmd_add_shape(s, tokens, @core.ShapeKind::Rect, "add-rect")
+    "add-ellipse" => cmd_add_shape(s, tokens, @core.ShapeKind::Ellipse, "add-ellipse")
+    "add-polygon" => cmd_add_shape(s, tokens, @core.ShapeKind::Polygon, "add-polygon")
+    "add-line" => cmd_add_shape(s, tokens, @core.ShapeKind::Line, "add-line")
     "add-image" => cmd_add_image(s, tokens)
     "set-style" => cmd_set_style(s, tokens)
     "move" => cmd_move(s, tokens)
@@ -179,8 +179,8 @@ pub fn exec(s : Session, line : String) -> String {
     "add-text" => cmd_add_text(s, tokens)
     "set-text" => cmd_set_text(s, tokens)
     "add-paint" => cmd_add_paint(s, tokens)
-    "brush" => cmd_brush(s, tokens, false)
-    "erase" => cmd_brush(s, tokens, true)
+    "brush" => cmd_brush(s, tokens)
+    "erase" => cmd_erase(s, tokens)
     "crop" => cmd_crop(s, tokens)
     "sample" => cmd_sample(s, tokens)
     "add-adjust" => cmd_add_adjust(s, tokens)
@@ -503,13 +503,17 @@ fn cmd_add_shape(
   s : Session,
   tokens : Array[String],
   kind : @core.ShapeKind,
+  name : String,
 ) -> String {
   let doc = match require_doc(s) {
     Ok(d) => d
     Err(e) => return err(e)
   }
   // 参数校验（同 set-style：拼错的键、裸词、空值一律拒绝，不留静默 no-op）
-  match check_kv_args(tokens, 1, add_shape_keys(kind), "add-\{kind_str(kind)}") {
+  // 命令名由分发表显式传入：它本来就知道名字，而 `"add-\{kind_str(kind)}"`
+  // 这种拼出来的名字会让**参数对账门禁**看不见这四个命令（实测就是被
+  // 静默跳过的）。判据读得到，才谈得上被守护。
+  match check_kv_args(tokens, 1, add_shape_keys(kind), name) {
     Ok(_) => ()
     Err(e) => return err(e)
   }
@@ -536,9 +540,7 @@ fn cmd_add_image(s : Session, tokens : Array[String]) -> String {
     Ok(d) => d
     Err(e) => return err(e)
   }
-  let img_keys = add_shape_keys(@core.ShapeKind::Image)
-  img_keys.push("b64")
-  match check_kv_args(tokens, 1, img_keys, "add-image") {
+  match check_kv_args(tokens, 1, add_image_keys(), "add-image") {
     Ok(_) => ()
     Err(e) => return err(e)
   }
@@ -591,6 +593,27 @@ fn cmd_add_image(s : Session, tokens : Array[String]) -> String {
 ///|
 fn add_text_keys() -> Array[String] {
   ["id", "name", "x", "y", "w", "h", "text", "font_size", "fill"]
+}
+
+///|
+/// `add-adjust` 认的全部键（与 `cmd_add_adjust` 的校验一一对应）。
+/// 工具字典的描述从它生成——**别再手写第二份**。
+fn add_adjust_keys() -> Array[String] {
+  ["op", "value", "id", "name"]
+}
+
+///|
+/// `add-paint` 认的全部键。
+fn add_paint_keys() -> Array[String] {
+  ["id", "name"]
+}
+
+///|
+/// `add-image` 认的全部键（形状键 + 图像载荷）。
+fn add_image_keys() -> Array[String] {
+  let ks = add_shape_keys(@core.ShapeKind::Image)
+  ks.push("b64")
+  ks
 }
 
 ///|
@@ -925,7 +948,7 @@ fn cmd_add_adjust(s : Session, tokens : Array[String]) -> String {
   }
   // 此前 `value` 拼错（`vlaue=1.5`）会静默按 0 处理 —— 建出一个"没效果"的
   // 调整层，回包 ok。
-  match check_kv_args(tokens, 1, ["op", "value", "id", "name"], "add-adjust") {
+  match check_kv_args(tokens, 1, add_adjust_keys(), "add-adjust") {
     Ok(_) => ()
     Err(e) => return err(e)
   }
@@ -1952,27 +1975,53 @@ fn cmd_add_paint(s : Session, tokens : Array[String]) -> String {
 /// 沿折线落笔触（画笔/橡皮擦共用）。pts 为**画布坐标**——落点存入层时
 /// 平移到层局部坐标（层被 move/crop 后语义不变）。笔触沿段均匀分布，
 /// 间距 = max(1, r·0.45)。
-fn cmd_brush(s : Session, tokens : Array[String], erase : Bool) -> String {
+///|
+/// `brush`：沿折线落笔触（画笔）。
+///
+/// `check_kv_args` 的键表**写字面量**、且与本函数一一对应：门禁要读得出来
+/// 才谈得上守护。此前 `brush`/`erase` 共用一个函数、键表按布尔分支算，
+/// 于是 `erase` 静默收下了 `color=` —— 而橡皮擦恒全强度（`paint_dabs` 里
+/// `dalpha` 对 erase 直接取 1.0，连笔色 alpha 都不读），那是个**收了也不
+/// 生效**的参数。拆成两条命令后，各自的键表一眼可读。
+fn cmd_brush(s : Session, tokens : Array[String]) -> String {
+  let name = "brush"
+  match check_kv_args(tokens, 1, ["layer", "pts", "r", "color"], "brush") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }
+  cmd_dabs(s, tokens, name, false)
+}
+
+///|
+/// `erase`：橡皮擦（destination-out）。**不收 color=**（恒全强度）。
+fn cmd_erase(s : Session, tokens : Array[String]) -> String {
+  let name = "erase"
+  match check_kv_args(tokens, 1, ["layer", "pts", "r"], "erase") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }
+  cmd_dabs(s, tokens, name, true)
+}
+
+///|
+/// 两条落笔命令的公共部分（校验已由调用方做完）。
+fn cmd_dabs(
+  s : Session,
+  tokens : Array[String],
+  name : String,
+  erase : Bool,
+) -> String {
   let doc = match require_doc(s) {
     Ok(d) => d
     Err(e) => return err(e)
   }
   if tokens.length() < 2 {
-    return err("用法：brush layer=<id> pts=x1,y1;x2,y2[;…] r=<半径px> [color=#RRGGBB[AA]]")
-  }
-  let ctx = if erase {
-    "erase"
-  } else {
-    "brush"
-  }
-  match check_kv_args(tokens, 1, ["layer", "pts", "r", "color"], ctx) {
-    Ok(_) => ()
-    Err(e) => return err(e)
+    return err("用法：\{name} layer=<id> pts=x1,y1;x2,y2[;…] r=<半径px>")
   }
   let m = kv_args(tokens, 1)
   let lid = match m.get("layer") {
     Some(v) => v
-    None => return err("brush 需要 layer=<id>")
+    None => return err("\{name} 需要 layer=<id>")
   }
   let layer = match @core.find_layer(doc.layers, lid) {
     Some(l) => l
@@ -1987,7 +2036,7 @@ fn cmd_brush(s : Session, tokens : Array[String], erase : Bool) -> String {
         Ok(p) => p
         Err(e) => return err(e)
       }
-    None => return err("brush 需要 pts=x1,y1;x2,y2[;…]")
+    None => return err("\{name} 需要 pts=x1,y1;x2,y2[;…]")
   }
   let r = match arg_d(m, "r", 4.0) {
     Ok(v) => v
