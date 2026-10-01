@@ -96,6 +96,11 @@
                                 # **页面接线的两层**：demo_test 拿真的拼出来的
                                 # HTML 查 globalThis 处理器与 id；build_demo.sh
                                 # 第 6 步额外罩住动态拼出来的图层列表/属性面板。
+                                # 7/8 文档工具数自洽：README 与 AGENTS 里写的
+                                # 工具数必须与 paint_tool_defs 实际一致。实测
+                                # 栽过：`grep -c "make_tool("` 数出 52，里面含
+                                # `fn make_tool(` 定义本身，真实 51 —— 文档里的
+                                # 数字是"做到了多少"的承诺（铁律 3），不能手数
                                 # 别把"在浏览器里点一下"当整块——静态那半可机器验
 
 # 门禁脚本别写 `cmd | tail -1`：管道的退出码是 tail 的，set -e 抓不到失败。
@@ -124,7 +129,7 @@ moon run --target native cli    # stdin 行协议；help 查看全部 58 个命�
   **但引擎从未实现还原**，于是用户输入 "Hello World"，存进去和渲染出来的
   都是 `Hello_World`。现在 `_` 保持**字面下划线**（历史行为完全不变），
   含空格靠引号。新增自由文本参数时，走 `quote_arg`（demo/main.mbt）拼串。
-- demo 工具面是 agent 命令面的**手写子集**（当前 52 个）：引擎新增命令后，
+- demo 工具面是 agent 命令面的**手写子集**（当前 51 个）：引擎新增命令后，
   要用到就该同步加进 `paint_tools.mbt` 的 `paint_tool_defs` + `tool_cmd` +
   `catalog.mbt` 的 system prompt，否则"引擎有能力"不等于"产品里的 AI 用得上"。
   模型侧只写 JSON，base64 由 SDK 的 `b64_text` 转。

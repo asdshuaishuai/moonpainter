@@ -24,13 +24,13 @@ run_quiet() {
   rm -f "$log"
 }
 
-echo "== 1/7 引擎 wasm 构建 =="
+echo "== 1/8 引擎 wasm 构建 =="
 run_quiet moon build --target wasm
 
-echo "== 2/7 demo（MoonBit js 后端）构建 =="
+echo "== 2/8 demo（MoonBit js 后端）构建 =="
 run_quiet moon build --target js
 
-echo "== 3/7 组装 dist/ =="
+echo "== 3/8 组装 dist/ =="
 rm -rf dist
 mkdir -p dist
 cp _build/wasm/release/build/wasm/wasm.wasm dist/moonpainter.wasm 2>/dev/null ||
@@ -51,7 +51,7 @@ cat > dist/index.html << 'HTML'
 HTML
 ls -la dist | awk 'NR>1 {print $5, $9}'
 
-echo "== 4/7 Node headless 自检（mock 模型 × wasm 引擎） =="
+echo "== 4/8 Node headless 自检（mock 模型 × wasm 引擎） =="
 cd dist
 NODE_OUT=$(node demo.js)
 echo "$NODE_OUT" | python3 -c "
@@ -64,7 +64,7 @@ print('headless selftest OK:', d)
 "
 cd ..
 
-echo "== 5/7 npm SDK 冒烟（多会话 + 渲染 + 容器） =="
+echo "== 5/8 npm SDK 冒烟（多会话 + 渲染 + 容器） =="
 cp _build/wasm/debug/build/wasm/wasm.wasm npm/moonpainter-sdk/moonpainter.wasm
 cd npm/moonpainter-sdk
 node --input-type=module -e "
@@ -103,7 +103,7 @@ console.log('NPM SDK SMOKE OK: multi-session + render + save/open round-trip all
 "
 cd ../..
 
-echo "== 6/7 页面接线：HTML 引用的每个处理器的名字都出现过在注册表里 =="
+echo "== 6/8 页面接线：HTML 引用的每个处理器的名字都出现过在注册表里 =="
 # 运行时那条测试（demo_test「页面接线」）比这条强——它拿的是**真的拼出来的
 # HTML**。但它只覆盖静态骨架 `app_html()`；图层列表与属性面板是
 # `sb.write_string(...)` **动态拼**出来的，那段 HTML 只有在浏览器里点开某个
@@ -129,7 +129,32 @@ if missing:
 print('页面接线 OK（%d 个处理器引用全部有注册）' % len(refs))
 PYW
 
-echo "== 7/7 demo 测试（工具面 + MVSL 闭环可达；需 Node） =="
+echo "== 7/8 文档里的工具数与实际一致（数字漂了就红） =="
+# 实测踩过：给工具面加了 3 个工具，`grep -c "make_tool("` 数出 52 ——
+# 那个数里含 `fn make_tool(` **函数定义本身**，真实是 51，于是 README/AGENTS
+# 被写错。文档里的数字是"我们做到了多少"的承诺（铁律 3），不能靠手数。
+python3 - <<'PYD'
+import re, sys
+src = open('demo/paint_tools.mbt', encoding='utf-8').read()
+n = len(set(re.findall(r'make_tool\(\s*"([a-z0-9_]+)"', src)))
+bad = []
+for path, pat, label in (
+    ('README.md', r'\*\*(\d+) 个工具，MVSL', 'README 工具数'),
+    ('AGENTS.md', r'手写子集\*\*（当前 (\d+) 个）', 'AGENTS 工具数'),
+):
+    text = open(path, encoding='utf-8').read()
+    m = re.search(pat, text)
+    if not m:
+        bad.append('%s：找不到那句数字（是不是改写成了别的说法？）' % label)
+    elif int(m.group(1)) != n:
+        bad.append('%s：文档写 %s，实际 %d' % (label, m.group(1), n))
+if bad:
+    print('FAIL: ' + '；'.join(bad))
+    sys.exit(1)
+print('文档工具数 OK（README 与 AGENTS 都是 %d，与 paint_tool_defs 一致）' % n)
+PYD
+
+echo "== 8/8 demo 测试（工具面 + MVSL 闭环可达；需 Node） =="
 # 这条守住"引擎有能力"与"产品里的 AI 用得上"之间的缝：mock 模型经真实
 # tool provider 驱动真实 wasm 引擎，跑完整 MVSL 闭环（普查→试选→装表→
 # 影响/断言→渲染），并断言图像类回包走附件。
