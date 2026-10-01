@@ -994,3 +994,35 @@ test "session-open 的拒绝要说清收到了什么（拼错参数名时别误�
   let s3 = @agent.Session::new()
   assert_true(!run(s3, "session-open vision=full_image").contains("error"), msg="vision= 要能用")
 }
+
+///|
+test "参数零容忍（第三批）：视觉/分析类命令 + 「值越界就静默用默认」" {
+  // 前两批修的是 add-*/set-* 系列。这一批是 `render`/`census`/`probe`/
+  // `select-preview`/`mvsl-impact`/`mvsl-set`——它们用手写 `has_prefix` 扫 kv
+  // 而不是 `kv_args`，所以同样的"认不出来也不报错"在这里另有一份。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 32 32 uuid=kv3")
+  let _ = run(s, "add-rect x=0 y=0 w=32 h=32 fill=#FF0000FF name=A")
+  for bad in ["probe bogus=1 x=0 y=0", "census bogus=1", "mvsl-impact bogus=1", "render 16 bogus=1", "render bogus=1"] {
+    assert_true(run(s, bad).contains("不认识的参数"), msg="\{bad} 要拒：\{run(s, bad)}")
+  }
+  // 位置参数写成 kv 时，报错要指路而不是自己咬自己
+  let rw = run(s, "render width=16")
+  assert_true(rw.contains("不认识的参数"), msg=rw)
+  assert_true(rw.contains("位置参数"), msg="要把人指回位置参数：\{rw}")
+  // mvsl-set 的载荷之后不该再收东西
+  assert_true(run(s, "mvsl-set YWJj layr=l1").contains("不接受"), msg="mvsl-set 载荷后不许再给参数")
+  assert_true(run(s, "mvsl-set YWJj extra").contains("多给了"), msg="mvsl-set 载荷后不许再给裸词")
+  // 「值越界就静默退回默认」是同一类静默：要 0 个连通域 / 0 像素预览是说不通的
+  assert_true(run(s, "census components=0").contains("必须为正"), msg="components=0 不许静默退回 16")
+  assert_true(run(s, "census components=-3").contains("必须为正"), msg="components=-3 同上")
+  assert_true(run(s, "mvsl-impact max=0").contains("必须为正"), msg="max=0 不许静默退回 1024")
+  assert_true(run(s, "render 16 overlay=yes").contains("应为 1/0/true/false"), msg="overlay=yes 不许静默无效")
+  // 正常路径不许误伤（含位置参数）
+  assert_true(!run(s, "probe x=0 y=0 r=2").contains("error"), msg="probe 正常")
+  assert_true(!run(s, "census components=3").contains("error"), msg="census 正常")
+  assert_true(!run(s, "mvsl-impact max=7").contains("error"), msg="impact 正常")
+  assert_true(!run(s, "render 16 0 0 1 1 overlay=true").contains("error"), msg="render 位置参数+overlay 正常")
+  assert_true(!run(s, "render 16 overlay=0").contains("error"), msg="overlay=0 正常")
+}

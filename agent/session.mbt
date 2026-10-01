@@ -1547,6 +1547,13 @@ fn cmd_render(s : Session, tokens : Array[String]) -> String {
     Ok(d) => d
     Err(e) => return err(e)
   }
+  // 键校验必须在**位置参数解析之前**：否则 `render width=16`（把位置参数
+  // 写成了 kv）会先掉进 `to_i(tokens[1])`，报出 "width=width=16 不是整数"
+  // 这种自己咬自己的话，而不是"不认识的参数 `width`"。
+  match check_kv_names(tokens, 1, ["overlay"], "render") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }
   // render [width] [vx0 vy0 vx1 vy1]
   let mut width = 1024
   let mut vx0 = 0.0
@@ -1585,8 +1592,15 @@ fn cmd_render(s : Session, tokens : Array[String]) -> String {
   // overlay=1：叠加层 bbox 序号线框（视觉通道的像素↔结构对位辅助）
   let mut overlay = false
   for t in tokens {
-    if t == "overlay=1" || t == "overlay=true" {
-      overlay = true
+    if t.has_prefix("overlay=") {
+      // 此前只认 `overlay=1`/`overlay=true`，`overlay=yes` 之类**静默无效**
+      // ——调用方以为开了叠加层，拿到的却是干净图。
+      let v = t[8:].to_owned()
+      match v {
+        "1" | "true" => overlay = true
+        "0" | "false" => overlay = false
+        _ => return err("overlay=\{v} 应为 1/0/true/false")
+      }
     }
   }
   // 视觉通道必须看到**最终图**（底图 + 编辑表）：模型据此判断效果、

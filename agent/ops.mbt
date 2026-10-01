@@ -108,7 +108,7 @@ pub fn check_kv_args(
         }
         if eq >= t.length() - 1 {
           let k0 = t[0:eq].to_owned()
-          return Err("\{ctx}：`\{k0}=` 的值是空的（要清空请用专门的命令，别用空值）")
+          return Err("\{ctx}：`\{k0}=` 的值是空的（空值参数一律拒绝，请给一个具体的值）")
         }
         let k = t[0:eq].to_owned()
         if !allowed.contains(k) {
@@ -120,10 +120,65 @@ pub fn check_kv_args(
             "font_size" => "（字号在 add-text 建层时给）"
             _ => ""
           }
+          if allowed.length() == 0 {
+            return Err("\{ctx}：不接受 `\{k}=` 这类参数（该命令只认位置参数）")
+          }
           return Err("\{ctx}：不认识的参数 `\{k}`\{hint}；认得的是 \{allowed.join("/")}")
         }
       }
-      None => return Err("\{ctx}：`\{t}` 不是 key=value 形式（是不是漏了 `=`？）")
+      None => {
+        if allowed.length() == 0 {
+          return Err("\{ctx}：多给了 `\{t}`（该命令只认前面的位置参数）")
+        }
+        return Err("\{ctx}：`\{t}` 不是 key=value 形式（是不是漏了 `=`？）")
+      }
+    }
+    i = i + 1
+  }
+  Ok(())
+}
+
+///|
+/// 同 `check_kv_args`，但**放行位置参数**（裸词）。
+///
+/// `render [width] [vx0 vy0 vx1 vy1] [overlay=1]` 与
+/// `select-preview <base64> [max=…]` 这类命令合法地收裸词，严格的
+/// `check_kv_args` 会把它们全拒掉（实测给 `session-open` 无脑推平时
+/// 误伤过位置参数 `full_image`）。这里只审**带 `=` 的 token**：
+/// 键名不认识 / 值是空 —— 拒绝；不带 `=` 的整词交给命令自己解析。
+pub fn check_kv_names(
+  tokens : Array[String],
+  from : Int,
+  allowed : Array[String],
+  ctx : String,
+) -> Result[Unit, String] {
+  let mut i = from
+  while i < tokens.length() {
+    let t = tokens[i]
+    match find_eq(t) {
+      Some(eq) => {
+        if eq == 0 {
+          return Err("\{ctx}：`\{t}` 缺键名（应为 key=value）")
+        }
+        if eq >= t.length() - 1 {
+          let k0 = t[0:eq].to_owned()
+          return Err("\{ctx}：`\{k0}=` 的值是空的")
+        }
+        let k = t[0:eq].to_owned()
+        if !allowed.contains(k) {
+          // 空键表要说人话：`认得的是 ` 后面空着等于没说。
+          if allowed.length() == 0 {
+            return Err("\{ctx}：不接受 `\{k}=` 这类参数（它只认位置参数）")
+          }
+          let hint = match k {
+            "width" | "w" => "（宽度是位置参数：写在命令名后面，不是 width=）"
+            "max" => "（预览最长边用 max=<像素>）"
+            _ => ""
+          }
+          return Err("\{ctx}：不认识的参数 `\{k}`\{hint}；认得的是 \{allowed.join("/")}")
+        }
+      }
+      None => ()
     }
     i = i + 1
   }

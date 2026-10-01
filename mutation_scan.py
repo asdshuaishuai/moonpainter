@@ -386,17 +386,28 @@ MUTS = [
     ),
     (
         "R34",
-        "check_kv_args 放行未知键（等于不校验）",
+        "check_kv_args 放行未知键（拼错的键回到静默 no-op）",
         "agent/ops.mbt",
-        r"""        if !allowed.contains(k) {""",
-        r"""        if false {""",
+        r"""          return Err("\{ctx}：`\{k0}=` 的值是空的（空值参数一律拒绝，请给一个具体的值）")
+        }
+        let k = t[0:eq].to_owned()
+        if !allowed.contains(k) {""",
+        r"""          return Err("\{ctx}：`\{k0}=` 的值是空的（空值参数一律拒绝，请给一个具体的值）")
+        }
+        let k = t[0:eq].to_owned()
+        if false {""",
         "killed",
     ),
     (
         "R35",
-        "check_kv_args 放行裸词（漏了 = 的参数静默丢弃）",
+        "check_kv_args 放行裸词（漏了 = 也当合法）",
         "agent/ops.mbt",
-        r"""      None => return Err("\{ctx}：`\{t}` 不是 key=value 形式（是不是漏了 `=`？）")""",
+        r"""      None => {
+        if allowed.length() == 0 {
+          return Err("\{ctx}：多给了 `\{t}`（该命令只认前面的位置参数）")
+        }
+        return Err("\{ctx}：`\{t}` 不是 key=value 形式（是不是漏了 `=`？）")
+      }""",
         r"""      None => ()""",
         "killed",
     ),
@@ -499,6 +510,82 @@ MUTS = [
     Err(e) => return err(e)
   }""",
         r"""  let _ = tokens""",
+        "killed",
+    ),
+    (
+        "R45",
+        "census/probe 不校验参数（bogus= 静默忽略）",
+        "agent/affordance_cmds.mbt",
+        r"""  match check_kv_args(tokens, 1, ["within", "components"], "census") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }""",
+        r"""  let _ = tokens""",
+        "killed",
+    ),
+    (
+        "R46",
+        "census components=0 静默退回默认 16（要 0 个连通域却给了 16 个）",
+        "agent/affordance_cmds.mbt",
+        r"""      if v <= 0 {
+        return err("components=\{v} 必须为正（连通域个数的上限）")
+      }
+      max_comp = v""",
+        r"""      if v > 0 {
+        max_comp = v
+      }""",
+        "killed",
+    ),
+    (
+        "R47",
+        "mvsl-impact max=0 静默退回默认 1024",
+        "agent/mvsl_cmds.mbt",
+        r"""      if v <= 0 {
+        return err("max=\{v} 必须为正（预览最长边像素）")
+      }
+      max_side = v
+    }
+  }
+  let base = match mvsl_base(s) {
+    Ok(b) => b
+    Err(e) => return err(e)
+  }
+  let (out, stages) = match @pixel.run_program(base, s.mvsl) {""",
+        r"""      if v > 0 {
+        max_side = v
+      }
+    }
+  }
+  let base = match mvsl_base(s) {
+    Ok(b) => b
+    Err(e) => return err(e)
+  }
+  let (out, stages) = match @pixel.run_program(base, s.mvsl) {""",
+        "killed",
+    ),
+    (
+        "R48",
+        "render overlay=yes 静默无效（以为开了叠加层，拿到的是干净图）",
+        "agent/session.mbt",
+        r"""      let v = t[8:].to_owned()
+      match v {
+        "1" | "true" => overlay = true
+        "0" | "false" => overlay = false
+        _ => return err("overlay=\{v} 应为 1/0/true/false")
+      }""",
+        r"""      overlay = true""",
+        "killed",
+    ),
+    (
+        "R49",
+        "render 的键校验放行未知键（width=16 报成「width=width=16 不是整数」）",
+        "agent/session.mbt",
+        r"""  match check_kv_names(tokens, 1, ["overlay"], "render") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }
+  // render [width] [vx0 vy0 vx1 vy1]""",
+        r"""  // render [width] [vx0 vy0 vx1 vy1]""",
         "killed",
     ),
     (

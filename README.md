@@ -134,7 +134,8 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   会在装表前被**拒绝**（而不是静默返回空选）；
 - **参数零容忍（拼错的键不再静默通过）**：**所有** kv 参数命令
   （`set-style`、`add-{rect,ellipse,polygon,line,text,paint,image,adjust,mask}`、
-  `set-adjust`、`brush`/`erase`、`new`）都会逐个检查参数——**不认识的键、
+  `set-adjust`、`brush`/`erase`、`new`、`census`、`probe`、`render`、
+  `select-preview`、`mvsl-impact`、`mvsl-set`）都会逐个检查参数——**不认识的键、
   漏了 `=` 的裸词、空值一律拒绝**，并给出合法键清单；键归别的命令管时直接指路
   （`points` → add-polygon、`x/y` → move、`w/h` → resize、`text` → set-text）。
   此前 `kv_args` 是**静默**的：`set-style l1 fil=#FF0000`（拼错）、
@@ -146,8 +147,16 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   第二批挂上时又抓到：`add-mask radus=5` 静默给出硬边直角蒙版、
   `add-adjust value` 拼成 `vlaue` 静默按 0 建一个"没效果"的调整层、
   `brush rr=4` 静默用默认半径。`session-open` 不接受 kv 校验（它认位置参数
-  `full_image`），但把**收到的参数回显**进拒绝文案——拼错 `vison=` 时原来的
+  `full_image`；`render`/`select-preview` 同理有位置参数，走放行裸词的
+  `check_kv_names`），但把**收到的参数回显**进拒绝文案——拼错 `vison=` 时原来的
   文案会把人误导成"模型不是多模态"。
+  第三批是视觉/分析类命令，它们**手写 `has_prefix` 扫 kv**（不走 `kv_args`），
+  所以"认不出来也不报错"在这里另有一份：`census bogus=1`、`probe bogus=1`、
+  `render 16 bogus=1`、`mvsl-impact bogus=1` **全都返回 ok**。同一批还抓到
+  **"值越界就静默退回默认"**：`census components=0` 静默给 16 个连通域、
+  `mvsl-impact max=0` 静默按 1024 渲染、`render overlay=yes` 静默不叠加——
+  调用方要的和拿到的不是一回事。`render width=16`（把位置参数写成 kv）此前
+  报的是一句自己咬自己的 `width=width=16 不是整数`，现在会指路回位置参数。
 - **调整层读得回来、改得动**：`query-layer`/`list-layers` 报
   `adjust:{op,value}`（此前调整层整个层就由 op+value 定义，两者却都不报，
   两个不同的调整层长得一模一样）；`set-adjust <id> [op=] [value=]` 原地改，

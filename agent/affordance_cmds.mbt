@@ -70,6 +70,10 @@ fn parse_within(tokens : Array[String]) -> Result[Option[@core.SelSpec], String]
 /// 无 within：全图 hue×sat 普查 + OKLab L / HSV 均值对照。
 /// 有 within：额外给出该区域的覆盖率 / bbox / 连通域事实（前 n 个）。
 fn cmd_census(s : Session, tokens : Array[String]) -> String {
+  match check_kv_args(tokens, 1, ["within", "components"], "census") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }
   let within = match parse_within(tokens) {
     Ok(x) => x
     Err(e) => return err(e)
@@ -77,12 +81,16 @@ fn cmd_census(s : Session, tokens : Array[String]) -> String {
   let mut max_comp = 16
   for t in tokens {
     if t.has_prefix("components=") {
-      match to_i(t[11:].to_owned()) {
-        Some(v) => if v > 0 {
-          max_comp = v
-        }
+      // `components=0` 此前被**静默忽略**（保留默认 16）——"我要 0 个
+      // 连通域"不是个能办到的请求，静默换成 16 就是另一种意思了。
+      let v = match to_i(t[11:].to_owned()) {
+        Some(v) => v
         None => return err("components=\{t[11:].to_owned()} 不是整数")
       }
+      if v <= 0 {
+        return err("components=\{v} 必须为正（连通域个数的上限）")
+      }
+      max_comp = v
     }
   }
   let base = match mvsl_base(s) {
@@ -174,6 +182,10 @@ fn cmd_census(s : Session, tokens : Array[String]) -> String {
 /// 算子在这一点上的 membership 与所属连通域 id —— 「我指的这个点，
 /// 你的选择子到底选中没有、属于哪一块」，比让模型看 mask 猜要可靠得多。
 fn cmd_probe(s : Session, tokens : Array[String]) -> String {
+  match check_kv_args(tokens, 1, ["x", "y", "r", "points"], "probe") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }
   let kv = kv_args(tokens, 1)
   let mut r = 2
   match kv.get("r") {

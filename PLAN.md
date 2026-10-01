@@ -1198,6 +1198,35 @@ verify.sh 第 9 步（命令参数下界自检）是纯静态核对：扫每个 
 管道退出码是 `tail` 的，于是 verify **失败**时 `&&` 照旧往下走——AGENTS
 里写过这条，还是踩了。**看门禁结果别接管道。**
 
+**六之二十一、"静默"有三副面孔：认不出、够不着、越界退回默认。**
+
+前两轮修的是 kv 命令的"认不出就丢"。这轮把范围扩到视觉/分析类
+（`render`/`census`/`probe`/`select-preview`/`mvsl-impact`/`mvsl-set`），
+发现它们**自己手写 `has_prefix("max=")` 扫参数**（不走 `kv_args`），于是同一
+类 bug 另有一份：`census bogus=1`、`probe bogus=1`、`render 16 bogus=1`、
+`mvsl-impact bogus=1` **全都返回 ok**。
+
+而它们还多一副面孔——**"值越界就静默退回默认"**：
+
+    census components=0   → ok，给 16 个连通域（代码写的是 `if v > 0`）
+    mvsl-impact max=0     → ok，按 1024 渲染
+    render overlay=yes    → ok，不叠加（代码只认 `overlay=1`/`overlay=true`）
+
+这三条都是"调用方要的和拿到的不是一回事"，而且**全都没有报错**。
+"0 个连通域"不是能办到的请求，`if v > 0` 那种写法看着像防守，实际是把
+非法值**悄悄换成另一个意思**。
+
+**位置参数不是问题，检查要放对位置**：`render` 收位置参数（宽 + 取景框四数），
+不能套严格的 `check_kv_args`（给 `session-open` 无脑推平时误伤过 `full_image`），
+所以加了放行裸词的兄弟 `check_kv_names`。而且它必须挂**在位置参数解析之前**：
+否则 `render width=16`（把位置参数写成 kv）会先掉进 `to_i(tokens[1])`，
+报出 `width=width=16 不是整数` 这种**自己咬自己**的话，而不是
+"不认识的参数 `width`（宽度是位置参数…）"。
+
+**判据的空集也要说话**：`mvsl-set <b64> layr=l1` 第一版报的是
+「不认识的参数 `layr`；认得的是 」——空键表让后半句成了空话。现在空键表有
+专门措辞（"不接受 `layr=` 这类参数（该命令只认位置参数）"）。
+
 **七、一个字段可以同时"存下来、报出来、被文档承诺"，而没有人读过它。**
 准备给蒙版加羽化、去读 `render/scene.mbt` 的 `mask_cover_at` 时，发现它**只读
 `kind/x/y/w/h/invert`——`radius` 一个字都没提**。而：

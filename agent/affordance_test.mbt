@@ -221,13 +221,12 @@ test "probe 批量入口：同一个点在两条路上报出逐字段相同的�
 ///|
 test "probe 批量入口：坏载荷零容忍（空/不成对/非整数/越界/超限）" {
   let s = two_tone("probe-batch-err")
-  // `points=`（空值）走不到批量分支：`kv_args` 只收「键=非空值」的 token，
-  // 空值被丢弃后落到单点模式，于是报的是用法提示——**那个提示里也列了
-  // points= 的写法**，所以调用方照样知道该怎么写。这条锁住"空值不会静默
-  // 通过"，而不是锁某一句文案。
+  // `points=`（空值）现在被**参数校验**拒掉（此前它走不到批量分支：
+  // `kv_args` 只收「键=非空值」的 token，空值被丢弃后落到单点模式，
+  // 报的是用法提示）。这条锁的是"空值不会静默通过"，不是某一句文案。
   let e0 = run(s, "probe points=")
-  assert_true(e0.contains("用法：probe"), msg=e0)
-  assert_true(e0.contains("points="), msg="用法提示应带批量写法：\{e0}")
+  assert_true(e0.contains("值是空的"), msg=e0)
+  assert_true(e0.contains("points="), msg="报错要点名是哪个键：\{e0}")
   // 解析不出任何点（只给分隔符）
   let e0b = run(s, "probe points=;")
   assert_true(e0b.contains("没解析出任何点"), msg=e0b)

@@ -112,6 +112,12 @@ fn cmd_mvsl_set(s : Session, tokens : Array[String]) -> String {
   if tokens.length() < 2 {
     return err("用法：mvsl-set <base64(canonical program json)>")
   }
+  // 载荷之后不该再有任何 token（作用域 `layer=` 是写在载荷 JSON 里的，
+  // 不是命令行参数）。此前 `mvsl-set <b64> layr=l1` 静默忽略后半句。
+  match check_kv_args(tokens, 2, [], "mvsl-set") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }
   let prog = match mvsl_decode(tokens[1]) {
     Ok(p) => p
     Err(e) => return err(e)
@@ -170,6 +176,10 @@ fn cmd_select_preview(s : Session, tokens : Array[String]) -> String {
   if tokens.length() < 2 {
     return err("用法：select-preview <base64(sel json)> [max=<预览最长边>]")
   }
+  match check_kv_args(tokens, 2, ["max"], "select-preview") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }
   let raw : Bytes = @base64.decode(tokens[1]) catch {
     _ => return err("选择子载荷 base64 解码失败")
   }
@@ -184,12 +194,14 @@ fn cmd_select_preview(s : Session, tokens : Array[String]) -> String {
   let mut max_side = 1024
   for t in tokens {
     if t.has_prefix("max=") {
-      match to_i(t[4:].to_owned()) {
-        Some(v) => if v > 0 {
-          max_side = v
-        }
+      let v = match to_i(t[4:].to_owned()) {
+        Some(v) => v
         None => return err("max=\{t[4:].to_owned()} 不是整数")
       }
+      if v <= 0 {
+        return err("max=\{v} 必须为正（预览最长边像素）")
+      }
+      max_side = v
     }
   }
   let base = match mvsl_base(s) {
@@ -236,15 +248,21 @@ fn cmd_mvsl_impact(s : Session, tokens : Array[String]) -> String {
     Ok(d) => d
     Err(e) => return err(e)
   }
+  match check_kv_args(tokens, 1, ["max"], "mvsl-impact") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }
   let mut max_side = 1024
   for t in tokens {
     if t.has_prefix("max=") {
-      match to_i(t[4:].to_owned()) {
-        Some(v) => if v > 0 {
-          max_side = v
-        }
+      let v = match to_i(t[4:].to_owned()) {
+        Some(v) => v
         None => return err("max=\{t[4:].to_owned()} 不是整数")
       }
+      if v <= 0 {
+        return err("max=\{v} 必须为正（预览最长边像素）")
+      }
+      max_side = v
     }
   }
   let base = match mvsl_base(s) {
