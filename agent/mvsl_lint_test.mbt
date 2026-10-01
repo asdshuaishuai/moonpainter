@@ -226,3 +226,47 @@ test "lint：空编辑表是合法状态，不报任何条目（不制造噪音�
   let r2 = run(s2, "lint")
   assert_true(r2.contains("完全在画布外"), msg=r2)
 }
+
+///|
+test "lint：空组与空文本层是「装了却什么都不干」，必须报" {
+  // 这两类状态**每个命令都返回 ok**、渲染也"成功"（只是没有像素），
+  // 所以只有 lint 会报。MVSL 侧早就有这条纪律（空算子/空断言），
+  // 几何/文本侧此前没有——实测两者都是 `violations=0`。
+  let s = scene("lint-noop")
+  // 空组：建组后删掉唯一成员（`group` 本身要求 ≥1 成员，但状态可到达）
+  let _ = run(s, "add-rect x=0 y=0 w=10 h=10 fill=#00FF00FF name=A")
+  let _ = run(s, "group g1 l1")
+  let r0 = run(s, "lint")
+  assert_true(!r0.contains("没有任何成员"), msg="有成员的组不该被报：\{r0}")
+  let _ = run(s, "delete l1")
+  let r = run(s, "lint")
+  assert_true(r.contains("没有任何成员"), msg="空组必须被报：\{r}")
+  // 空文本层：`add-text` 拒绝空内容，但 `set-text ""` 能到达
+  let _ = run(s, "add-text text=X x=0 y=0 w=40 h=10")
+  let r1 = run(s, "lint")
+  assert_true(!r1.contains("内容为空"), msg="有内容的文本层不该被报：\{r1}")
+  // 注意 id：`scene()` 已经用掉了 l1，所以新 rect 是 l2、新文本层是 **l3**
+  // （我第一版写成 l2，于是 set-text 作用在 rect 上、测试假通过——
+  // 正是下面那条「非文本层不许 set-text」要找的东西）。
+  let _ = run(s, "set-text l3 \"\"")
+  let r2 = run(s, "lint")
+  assert_true(r2.contains("内容为空"), msg="空文本层必须被报：\{r2}")
+}
+
+///|
+test "lint：非文本层带 text 字段是死数据（渲染器不读，却改变指纹）" {
+  // 这个字段的一整条通路：`set-text` 写 → canonical JSON 存 → 指纹变 →
+  // query-layer 报 → **渲染器只对 Text 层读它** → 画面一个像素没变。
+  // 于是"改成功了吗"的三种信号自相矛盾。入口已拒绝，lint 兜住手改容器。
+  let s = scene("lint-deadtext")
+  let bad = run(s, "set-text l1 hello")
+  assert_true(bad.contains("不是文本层"), msg="非文本层必须拒绝：\{bad}")
+  assert_true(bad.contains("rect"), msg="报错要说清它是什么层：\{bad}")
+  // 直接构造「手改容器」的那种状态，看 lint 兜不兜得住
+  let doc = @core.new_document("lint-deadtext-2", 64, 64)
+  let l = @core.default_layer("d1", "hand-edited", 0.0, 0.0, 20.0, 20.0)
+  doc.layers.push({ ..l, text: "幽灵文字" })
+  let items = @agent.lint_doc(doc)
+  let joined = items.join(" | ")
+  assert_true(joined.contains("却带着 text 字段"), msg="lint 必须报死数据：\{joined}")
+}

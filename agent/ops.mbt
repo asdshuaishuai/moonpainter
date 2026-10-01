@@ -429,6 +429,25 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
       }
       _ => ()
     }
+    // P2 「装了却什么都不干」——几何/文本侧的空操作。
+    // 这类状态**每个命令都返回 ok**、渲染也"成功"（只是没有像素），
+    // 所以只有 lint 会报；MVSL 侧早就有这条纪律（空算子/空断言），
+    // 几何侧此前没有。实测：空组与空文本层都是 `violations=0`。
+    if l.kind is @core.ShapeKind::Group {
+      if l.children.length() == 0 {
+        v.push("P2 noop 组 \{l.id} 没有任何成员（直通合成里什么都不做）")
+      }
+    }
+    if l.kind is @core.ShapeKind::Text {
+      if l.text == "" {
+        v.push("P2 noop 文本层 \{l.id} 内容为空（渲染不出任何字形）")
+      }
+    } else if l.text != "" {
+      // `set-text` 已在入口拒绝非文本层，这里兜住**手改 design.json /
+      // 外部构造的容器**（与渐变端点同一条纪律：入口拒绝 + lint 兜底）。
+      // 这个字段会被写进 canonical JSON、**改变指纹**，渲染器却根本不读它。
+      v.push("P2 noop 层 \{l.id} 是 \{kind_str(l.kind)} 却带着 text 字段（渲染器不读，纯粹改变指纹）")
+    }
     // P1 引用
     if l.kind is @core.ShapeKind::Image {
       if l.asset_hash == "" {

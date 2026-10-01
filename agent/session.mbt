@@ -792,8 +792,18 @@ fn cmd_set_text(s : Session, tokens : Array[String]) -> String {
     Err(e) => return err(e)
   }
   let id = tokens[1]
-  if @core.find_layer(doc.layers, id) is None {
-    return err("层不存在：\{id}")
+  let target = match @core.find_layer(doc.layers, id) {
+    Some(l) => l
+    None => return err("层不存在：\{id}")
+  }
+  // 非文本层的 `text` 字段是**死数据**：渲染器只对 Text 层读它，但它会被
+  // 写进 canonical JSON、**改变指纹**、并在 query-layer 里报出来。于是
+  // "改成功了吗"的三种信号自相矛盾——指纹说变了、画面一个像素没变。
+  // 入口直接拒绝（不降级、不糊弄），手改容器的情形由 lint 兜底。
+  if !(target.kind is @core.ShapeKind::Text) {
+    return err(
+      "层 \{id} 是 \{kind_str(target.kind)} 不是文本层，设不了文字内容（要给图形加标题请先 add-text 建一个文本层）",
+    )
   }
   snapshot(s, doc, "set-text \{id}")
   let _ = update_layer(doc.layers, id, fn(l) { { ..l, text: tokens[2] } })
