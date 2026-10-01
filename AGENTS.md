@@ -190,9 +190,12 @@
                                 # **页面接线的两层**：demo_test 拿真的拼出来的
                                 # HTML 查 globalThis 处理器与 id；build_demo.sh
                                 # 第 6 步额外罩住动态拼出来的图层列表/属性面板。
-                                # 7/8 文档工具数自洽：README 与 AGENTS 里写的
-                                # 工具数必须与 paint_tool_defs 实际一致。实测
-                                # 栽过：`grep -c "make_tool("` 数出 52，里面含
+                                # 7/8 文档工具数 + 边界自洽：README 与 AGENTS 里
+                                # 写的工具数必须与 paint_tool_defs 一致；README
+                                # 里 unreachable 标记之间那份"AI 够不着"的名单
+                                # 必须**恰好**等于 引擎命令 − 工具面覆盖，且工具面
+                                # 不许指向引擎里不存在的命令。实测栽过：
+                                # `grep -c "make_tool("` 数出 52，里面含
                                 # `fn make_tool(` 定义本身，真实 51 —— 文档里的
                                 # 数字是"做到了多少"的承诺（铁律 3），不能手数
                                 # 别把"在浏览器里点一下"当整块——静态那半可机器验
@@ -241,13 +244,23 @@ moon run --target native cli    # stdin 行协议；help 查看全部 59 个命�
   绕过它，两条测试路径都照不到它。提取成接受 `Json` 的纯函数后，
   `demo_test.mbt` 可以直接喂参数断言拼出的命令行（含自由文本的引号）。
 
-- **"引擎有" ≠ "产品里的 AI 用得上"，而且这条断链不会有任何东西报警**：
-  `undispatched_tools()` 查的是"demo 工具面 → 引擎"这个方向；"引擎命令面 →
-  产品里到底缺哪些"是**反方向**，没有任何断言罩着（也不该有——子集是刻意的）。
-  实测 `remove-param` 在引擎里加了一轮，而 `paint_tools.mbt` 里连既有的
-  `set-param`/`list-params` 都没有（`grep param` 为空），于是 DESIGN 的
-  「读元参数 → 拟命令」双通道在产品里是断的。新增引擎命令时**顺手看一眼
-  这个方向**：要么接进工具面，要么在 README 里写明它只是引擎侧能力。
+- **"引擎有" ≠ "产品里的 AI 用得上"**：`undispatched_tools()` 查的是
+  "demo 工具面 → 引擎"这个方向；"引擎命令面 → 产品里到底缺哪些"是**反方向**，
+  子集是刻意的。实测 `remove-param` 在引擎里加了一轮，而 `paint_tools.mbt`
+  里连既有的 `set-param`/`list-params` 都没有（`grep param` 为空），于是
+  DESIGN 的「读元参数 → 拟命令」双通道在产品里是断的。新增引擎命令时
+  **顺手看一眼这个方向**：要么接进工具面，要么在 README 里写明它只是引擎侧能力。
+  **"刻意"不等于"没人看"**：这份名单现在是两句话 + 一块机器核对的区域
+  （`<!-- unreachable:begin/end -->`），`build_demo.sh` 第 7 步断言
+  **引擎命令 − 工具面覆盖 == 名单**（多写少写、条数写错都红），并且
+  **工具面不许指向一条引擎里不存在的命令**。后者此前无人守：把
+  `tool_cmd("move")` 改成 `Some("move-layer")`，`undispatched_tools()` 照样绿
+  （它只查"臂在不在"），工具到**运行时**才炸。
+- **工具面的两张表必须说同一条命令**：`tool_cmd`（工具名 → 命令名）与
+  `tool_line` 的每个 match 臂（工具名 → 整行）。默认臂用 `"\{cmd} …"` 绑在一起，
+  但 **46 条显式臂各自又抄了一遍命令名**——抄错就是"参数按 A 拼、名字发给 B"，
+  画面改的是别的东西。`demo/paint_tools_wbtest.mbt` 断言
+  `tool_line` 打出来的**首词** == `tool_cmd` 给的名字（白盒，才能调私有表）。
 
 改动 canonical JSON 字段序、渲染管线或 pack 条目顺序时，golden sha256 与
 open→save 字节一致断言会变化——这必须是有意为之，并同步更新对应测试与文档。

@@ -129,7 +129,7 @@ if missing:
 print('页面接线 OK（%d 个处理器引用全部有注册）' % len(refs))
 PYW
 
-echo "== 7/8 文档里的工具数与实际一致（数字漂了就红） =="
+echo "== 7/8 文档里的工具数与边界与实际一致（数字漂了就红） =="
 # 实测踩过：给工具面加了 3 个工具，`grep -c "make_tool("` 数出 52 ——
 # 那个数里含 `fn make_tool(` **函数定义本身**，真实是 51，于是 README/AGENTS
 # 被写错。文档里的数字是"我们做到了多少"的承诺（铁律 3），不能靠手数。
@@ -152,6 +152,39 @@ if bad:
     print('FAIL: ' + '；'.join(bad))
     sys.exit(1)
 print('文档工具数 OK（README 与 AGENTS 都是 %d，与 paint_tool_defs 一致）' % n)
+
+# ---- 引擎命令面 ↔ 工具面：两个方向都要对 ----
+# 方向一（工具面指着谁）：`tool_cmd` 的每条 `Some("…")` 都必须是引擎真有的
+# 命令。实测没人守这条：把 `tool_cmd("move")` 改成 `Some("move-layer")`，
+# 工具在**运行时**才炸，而 `undispatched_tools()` 只查"臂在不在"。
+# 方向二（谁够不着）：README 里那块名单必须**恰好**是
+# 引擎命令 − 工具面覆盖，多写少写都红——它是诚实边界（铁律 3），
+# 不能靠人眼对着两张表数。
+eng = set(re.findall(r'add\(\s*\n?\s*"([a-z0-9\-]+)"', open('agent/tools.mbt', encoding='utf-8').read()))
+tc = src[src.index('fn tool_cmd'):src.index('pub fn tool_line')]
+covered = set(re.findall(r'Some\("([a-z0-9\-]+)"\)', tc))
+r = open('README.md', encoding='utf-8').read()
+try:
+    seg = r[r.index('<!-- unreachable:begin -->'):r.index('<!-- unreachable:end -->')]
+except ValueError:
+    print('FAIL: README 里找不到 unreachable 标记（名单没被核对）')
+    sys.exit(1)
+named = set(re.findall(r'`([a-z][a-z0-9\-]+)`', seg))
+unreach = eng - covered
+if covered - eng:
+    bad.append('工具面指着引擎里没有的命令：%s' % sorted(covered - eng))
+if named != unreach:
+    bad.append('README 的边界名单与实际差集不一致：名单多写 %s / 漏写 %s'
+               % (sorted(named - unreach), sorted(unreach - named)))
+m = re.search(r'够不着 (\d+) 条', seg)
+if not m or int(m.group(1)) != len(unreach):
+    bad.append('README 写的条数与实际差集不符（写 %s，实际 %d）'
+               % (m.group(1) if m else '?', len(unreach)))
+if bad:
+    print('FAIL: ' + '；'.join(bad))
+    sys.exit(1)
+print('引擎/工具边界 OK（引擎 %d 条 − 工具面 %d 条 = 够不着 %d 条，与 README 一致）'
+      % (len(eng), len(covered), len(unreach)))
 PYD
 
 echo "== 8/8 demo 测试（工具面 + MVSL 闭环可达；需 Node） =="

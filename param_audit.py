@@ -298,7 +298,25 @@ for f, t in srcs.items():
             sites.add(cmd)
             parsed.setdefault(cmd, set()).update(keys)
 
-fails = list(unreadable) + list(dynamic)
+# 完整性：凡是**自己解析 kv 参数**的命令，都必须有键表校验。
+# 手写 `has_prefix("max=")` / `kv_args` 的命令会静默收下认不出的键
+# （"拼错的参数名返回 ok 而一个像素没改"），这正是历轮在堵的"静默接受"。
+disp = {}
+for f, t in srcs.items():
+    for name, fn in re.findall(r'"([a-z0-9\-]+)"\s*=>\s*(cmd_[a-z_0-9]+)', t):
+        disp.setdefault(name, fn)
+hand = []
+for cmd in sorted(descs):
+    fn = disp.get(cmd)
+    body = body_of(srcs, fn) if fn else None
+    if body is None:
+        continue
+    parses = ('kv_args(' in body or re.search(r'has_prefix\("[a-z_]+="\)', body)
+              or re.search(r'\.get\("[a-z_]+"\)', body))
+    if parses and cmd not in sites:
+        hand.append('%s：解析 kv 参数却没有键表校验（认不出的键会被静默收下）' % cmd)
+
+fails = list(unreadable) + list(dynamic) + hand
 # 每个真实的 kv 调用点都必须被审到（否则这门外禁有洞）
 for cmd in sorted(sites - set(parsed)):
     fails.append('%s：有 check_kv_* 调用点却没能被审（键表读不出来？）' % cmd)

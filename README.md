@@ -112,15 +112,19 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   （影响证书）/`mvsl_assert`（保护断言）/`mvsl_show`/`mvsl_clear`。模型只写 **JSON**
   选择子与编辑表，base64 由 SDK 做——不该让 LLM 手搓 base64；
 - **引擎侧能力与 AI 可达范围的边界**（诚实边界；`undispatched_tools()` 锁的是
-  「工具面 → 引擎」这个方向，反方向不会有任何东西报警，所以写在这里）：
-  引擎 59 条命令里，demo 的 AI 够不着 7 条，各自原因——
-  `session-open`/`open-mpd-b64`（会话与开门由前端管，不该让模型自己开门）/
-  `help`/`list-tools`（工具清单本来就在 system prompt 里）/
-  `fingerprint`（完整性自检，前端与门禁用）/
-  **`add-image`（要吃图片字节 `b64=`，模型无法产出、也无处接收图片字节——
-  插图是人类的动作：前端上传后成为图片层，AI 可以在它之上移动/缩放/改样式，
-  但不能凭空造出新图片）**/ `inspect`（文档概览，AI 用 `list_layers`+`edits`+
-  `stats` 已能拼出）。要新增可达能力时改这里的说明，而不是默默改数。
+  「工具面 → 引擎」这个方向，反方向是**刻意的子集**——但这份名单不是散文，
+  `build_demo.sh` 第 7 步会机械核对下面这块，同时保证**工具面不许指向一条
+  引擎里不存在的命令**。要新增可达能力时改这里，而不是默默改数：
+  <!-- unreachable:begin -->
+  引擎 59 条命令里，demo 的 AI 够不着 7 条：`session-open` `open-mpd-b64`
+  `help` `list-tools` `fingerprint` `add-image` `inspect`
+  <!-- unreachable:end -->
+  各自原因——`session-open`/`open-mpd-b64`：会话与开门由前端管，不该让模型
+  自己开门；`help`/`list-tools`：工具清单本来就在 system prompt 里；
+  `fingerprint`：完整性自检，前端与门禁用；**`add-image`：要吃图片字节，
+  模型无法产出、也无处接收图片字节——插图是人类的动作：前端上传后成为图片层，
+  AI 可以在它之上移动/缩放/改样式，但不能凭空造出新图片**；`inspect`：
+  文档概览，AI 用 list_layers + edits + stats 已能拼出。
 - **元参数通道**：`list_params` / `set_param` / `remove_param` 读写命名元参数
   （品牌主色、网点密度这类设计系统元数据）。**纯元数据、不影响渲染**——改画面
   仍要走 MVSL 或图形命令；它的用途是让 AI 在开场先读既有规范（而不是凭空配色）、
