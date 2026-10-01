@@ -681,6 +681,57 @@ MUTS = [
         "killed",
     ),
     (
+        "R56",
+        "pick 不查继承下来的透明度（组 opacity=0 / 祖先全透明的子层照样被报出来）",
+        "render/scene.mbt",
+        r"""    let eff = clamp01(l.opacity * inherited_opacity)
+    if eff <= 0.0 {
+      continue
+    }
+    if l.kind is @core.ShapeKind::Group {""",
+        r"""    let eff = clamp01(l.opacity * inherited_opacity)
+    if false {
+      continue
+    }
+    if l.kind is @core.ShapeKind::Group {""",
+        "killed",
+    ),
+    (
+        "R57",
+        "pick 忽略蒙版（蒙版外的点也报成「层在那里」）",
+        "render/scene.mbt",
+        r"""    if mask_cover_at(l, lx, ly) <= 0.0 {
+      continue
+    }""",
+        r"""    if false {
+      continue
+    }""",
+        "killed",
+    ),
+    (
+        "R58",
+        "pick 不看 raster 笔触（画了东西的笔触层拾不到）",
+        "render/scene.mbt",
+        r"""    if l.kind is @core.ShapeKind::Raster {
+      if raster_covers(l, lx, ly) {
+        return Some(l.id)
+      }
+      continue
+    }""",
+        r"""    if l.kind is @core.ShapeKind::Raster {
+      continue
+    }""",
+        "killed",
+    ),
+    (
+        "R59",
+        "raster_covers 把 erase 笔触当成有东西（擦掉的地方还报「在那里」）",
+        "render/scene.mbt",
+        r"""      return !d.erase""",
+        r"""      return true""",
+        "killed",
+    ),
+    (
         "R18",
         "蒙版羽化解析恒 0（软边蒙版重开后变硬边）",
         "core/json.mbt",

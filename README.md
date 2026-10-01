@@ -144,6 +144,14 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   但实现里没有那条分支 —— `add-rect … tag=background` 一直**被静默忽略**
   （不报错、`tags` 为空），而两条既有测试都用着它、谁也没断言它真的落上。
   现在 `tag=` 可用（与 `tag` 命令共用 `@core.layer_with_tag`，追加去重）。
+- **`pick`/`sample` 的层 id 必须真的是「在那里画了东西」的层**：`pick` 此前走
+  压平的层列表且只查 `visible`，于是三类层被报成"在那里"而实际一个像素都没画
+  ——**隐藏组的子层**、**opacity=0 的层**（含祖先组透明度乘下来为 0）、
+  **被自己蒙版盖掉的点**；反过来，**画笔层根本拾不到**（它的 `inside_fill`
+  恒假）。现在 `pick` 是递归遍历、按 `paint_layer` 的守卫逐条对齐
+  （可见性/继承透明度/蒙版/组无面/raster 笔触含 erase），并因此修好了
+  `sample` 的自相矛盾：实测它曾同时回 `color=#FFFFFFFF`（白纸，什么都没画）
+  与 `layer=l1`（全透明层）。
 - **信封里的 sha 必须是回吐那张 PNG 的 sha**：`mvsl-impact` 的 `result_png_b64`
   是 `max=` 降采样**之后**编码的，而 `result_sha256` 曾哈希**全分辨率**结果
   ——画布 64×64、`max=16` 时宿主拿到 16×16 的图，却配着一个算不到它头上的

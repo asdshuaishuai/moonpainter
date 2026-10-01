@@ -1328,26 +1328,91 @@ fn draw_number(
 }
 
 ///|
-/// 画布坐标拾取：返回最上层包含该点的层 id（旋转层用同样的内点测试）。
+/// raster 层的笔触是否盖住这个**层局部**点。
+///
+/// 按先后取**最后一个**覆盖该点的笔触：`erase` 笔触表示那里被擦掉
+/// （`paint_dabs` 就是按这个顺序把 alpha 乘减下去的）。这是对
+/// "alpha 乘减"的一个保守近似——**不是**逐点重算覆盖度，够回答
+/// "这层在这里有没有落过笔"。
+fn raster_covers(l : @core.Layer, lx : Double, ly : Double) -> Bool {
+  let mut i = l.dabs.length() - 1
+  while i >= 0 {
+    let d = l.dabs[i]
+    let dx = lx - d.x
+    let dy = ly - d.y
+    if d.r > 0.0 && dx * dx + dy * dy <= d.r * d.r {
+      return !d.erase
+    }
+    i = i - 1
+  }
+  false
+}
+
+///|
+/// 自顶向下找最上层**真的在那里画了东西**的层（`paint_layer` 是唯一权威）。
+///
+/// 与 `paint_layer` 逐条对齐，因为"报出来的层"和"画出来的像素"必须是同一件事：
+/// - `visible=false` 的层不画 → 不算（含**祖先组**不可见，故这里递归而不是走
+///   压平的 `all_layers`：压平会丢掉组的可见性与透明度）；
+/// - 有效透明度为 0 的层不画 → 不算（同样是继承乘下来的）；
+/// - 蒙版盖不到的点不画 → 不算；
+/// - 组自身无面 → 不算（只在子层里找）；**组上的 mask 渲染器也不读**，
+///   所以这里同样不读——判据不能比渲染器更严；
+/// - raster 层只在笔触覆盖处算"有东西"（它的 `inside_fill` 恒假）。
+fn pick_from(
+  layers : Array[@core.Layer],
+  x : Double,
+  y : Double,
+  inherited_opacity : Double,
+) -> String? {
+  let mut i = layers.length() - 1
+  while i >= 0 {
+    let l = layers[i]
+    i = i - 1
+    if !l.visible {
+      continue
+    }
+    let eff = clamp01(l.opacity * inherited_opacity)
+    if eff <= 0.0 {
+      continue
+    }
+    if l.kind is @core.ShapeKind::Group {
+      match pick_from(l.children, x, y, eff) {
+        Some(id) => return Some(id)
+        None => ()
+      }
+      continue
+    }
+    let (lx, ly) = to_local(l, x, y)
+    if mask_cover_at(l, lx, ly) <= 0.0 {
+      continue
+    }
+    if l.kind is @core.ShapeKind::Raster {
+      if raster_covers(l, lx, ly) {
+        return Some(l.id)
+      }
+      continue
+    }
+    if inside_fill(l, lx, ly) || inside_stroke(l, lx, ly) {
+      return Some(l.id)
+    }
+  }
+  None
+}
+
+///|
+/// 画布坐标拾取：返回最上层**在那里画了东西**的层 id（旋转层用同样的内点测试）。
+///
+/// 此前这个函数走的是压平的 `all_layers`、且只查 `visible`，于是三类层会被
+/// 报成"在那里"而实际一个像素都没画：**隐藏组的子层**、**opacity=0 的层**、
+/// **被自己蒙版盖掉的点**。`sample` 同时回颜色与层 id，两个字段会当场互相
+/// 矛盾（实测 `sample` 报 `color=#FFFFFFFF`（白纸）+ `layer='l1'`（全透明层））。
 pub fn pick(
   doc : @core.Document,
   x : Double,
   y : Double,
 ) -> String? {
-  let all = @core.all_layers(doc.layers)
-  // 自顶向下找第一个命中的可拾取层
-  let mut i = all.length() - 1
-  while i >= 0 {
-    let l = all[i]
-    if l.visible && !(l.kind is @core.ShapeKind::Group) {
-      let (lx, ly) = to_local(l, x, y)
-      if inside_fill(l, lx, ly) || inside_stroke(l, lx, ly) {
-        return Some(l.id)
-      }
-    }
-    i = i - 1
-  }
-  None
+  pick_from(doc.layers, x, y, 1.0)
 }
 
 ///|

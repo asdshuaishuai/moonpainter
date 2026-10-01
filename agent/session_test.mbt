@@ -1026,3 +1026,34 @@ test "参数零容忍（第三批）：视觉/分析类命令 + 「值越界就�
   assert_true(!run(s, "render 16 0 0 1 1 overlay=true").contains("error"), msg="render 位置参数+overlay 正常")
   assert_true(!run(s, "render 16 overlay=0").contains("error"), msg="overlay=0 正常")
 }
+
+///|
+test "sample 的颜色与层 id 必须指同一件事（同一信封里两字段不许互相矛盾）" {
+  // `sample` 回颜色（来自真实渲染）与 layer（来自 pick）。老 `pick` 走压平的
+  // `all_layers` 且只查 `visible`，于是实测出现过
+  // `color=#FFFFFFFF`（白纸，什么都没画）+ `layer=l1`（opacity=0 的幽灵层）
+  // ——**同一个信封里两个字段描述的不是同一件事**（与上一轮
+  // `result_sha256` 配错 PNG 是同一类病：判据/字段要指同一个东西）。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 32 32 uuid=sample-consistency")
+  // 1) 全透明的层：颜色是白纸，layer 就必须是空的
+  let _ = run(s, "add-rect x=0 y=0 w=32 h=32 fill=#00FF00FF opacity=0 name=Ghost")
+  let j1 = run(s, "sample 16 16")
+  assert_true(j1.contains("#FFFFFFFF"), msg="白纸应当是白色：\{j1}")
+  assert_true(j1.contains("\"layer\":\"\""), msg="白纸处不该报出一个层 id：\{j1}")
+  // 2) 真的有一个不透明层在那里：颜色变了，layer 必须报它
+  let _ = run(s, "add-rect x=0 y=0 w=32 h=32 fill=#FF0000FF name=Top")
+  let j2 = run(s, "sample 16 16")
+  assert_true(j2.contains("#FF0000FF"), msg="顶层红：\{j2}")
+  assert_true(j2.contains("\"layer\":\"l2\""), msg="红层处应报 l2：\{j2}")
+  // 3) 隐藏组的子层：画不出来，就不该被报出来
+  let _ = run(s, "add-rect x=0 y=0 w=8 h=8 fill=#0000FFFF name=InG")
+  let _ = run(s, "group g1 l3")
+  let _ = run(s, "visible g1 false")
+  let j3 = run(s, "sample 4 4")
+  // 隐藏 g1 后，(4,4) 露出的是它**下面**那个全画布红层 l2 ——
+  // 报 l2 才是对的（别断言成空：那会漏掉"该报下面那层"这一半）。
+  assert_true(j3.contains("\"layer\":\"l2\""), msg="隐藏组的子层被跳过，应报下面的 l2：\{j3}")
+  assert_true(!j3.contains("l3"), msg="隐藏组的子层不该被报出来：\{j3}")
+}

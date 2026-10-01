@@ -287,3 +287,57 @@ test "不透明填充的输出不变（alpha=FF 是绝大多数路径）" {
   // 25% 红 + 75% 白 → R 仍是 255，G/B = 255 × 0.75 ≈ 191
   assert_eq(@codec.rgba_get(buf2, 4, 4), 0xFFFFBFBF)
 }
+
+///|
+test "pick：只报「真的在那里画了东西」的层（与 paint_layer 同一套语义）" {
+  // 老实现走压平的 `all_layers` 且只查 `visible`，于是三类层会被报成
+  // "在那里"而实际一个像素都没画。`sample` 同时回颜色与层 id，
+  // 两个字段会当场互相矛盾（实测 `color=#FFFFFFFF`（白纸）+ `layer=l1`）。
+  // 这一组用例把每一类各钉一条。
+  // 1) 自身 opacity=0
+  let d1 = @core.new_document("u-pick-ghost", 100, 100)
+  d1.layers.push({ ..@core.default_layer("g", "g", 0.0, 0.0, 100.0, 100.0), opacity: 0.0 })
+  assert_true(@render.pick(d1, 50.0, 50.0) is None)
+  // 2) 隐藏组的子层（子层自身 visible=true，但组不可见 → 画不出来）
+  let d2 = @core.new_document("u-pick-hide", 100, 100)
+  let kid = @core.default_layer("kid", "k", 0.0, 0.0, 40.0, 40.0)
+  d2.layers.push(
+    { ..@core.default_layer("grp", "G", 0.0, 0.0, 40.0, 40.0), kind: @core.ShapeKind::Group, children: [kid], visible: false },
+  )
+  assert_true(@render.pick(d2, 10.0, 10.0) is None)
+  // 3) 组 opacity=0（子层自身不透明，但继承下来是 0）
+  let d3 = @core.new_document("u-pick-gop", 100, 100)
+  d3.layers.push(
+    { ..@core.default_layer("grp", "G", 0.0, 0.0, 40.0, 40.0), kind: @core.ShapeKind::Group, children: [kid], opacity: 0.0 },
+  )
+  assert_true(@render.pick(d3, 10.0, 10.0) is None)
+  // 4) 蒙版盖不到的点（层在那里不画；蒙版内的点照常命中）
+  let d4 = @core.new_document("u-pick-mask", 100, 100)
+  d4.layers.push(
+    {
+      ..@core.default_layer("m", "m", 0.0, 0.0, 60.0, 60.0),
+      mask: Some(@core.LayerMask::{ kind: @core.ShapeKind::Rect, x: 0.0, y: 0.0, w: 10.0, h: 10.0, radius: 0.0, feather: 0.0, invert: false }),
+    },
+  )
+  assert_true(@render.pick(d4, 40.0, 40.0) is None, msg="蒙版外的点不算「在那里」")
+  assert_eq(@render.pick(d4, 5.0, 5.0), Some("m"), msg="蒙版内仍应命中")
+  // 5) raster 层：只在笔触覆盖处算「有东西」，erase 过的地方不算
+  let d5 = @core.new_document("u-pick-dab", 100, 100)
+  let dab = @core.Dab::{ x: 20.0, y: 20.0, r: 6.0, color: 0xFF0000FF, erase: false }
+  let era = @core.Dab::{ x: 60.0, y: 20.0, r: 6.0, color: 0x00000000, erase: true }
+  let painted = @core.Dab::{ x: 60.0, y: 20.0, r: 6.0, color: 0xFF00FF00, erase: false }
+  d5.layers.push(
+    { ..@core.default_layer("r", "r", 0.0, 0.0, 100.0, 100.0), kind: @core.ShapeKind::Raster, dabs: [dab, painted, era] },
+  )
+  assert_eq(@render.pick(d5, 20.0, 20.0), Some("r"), msg="笔触处应命中 raster 层")
+  assert_true(@render.pick(d5, 60.0, 20.0) is None, msg="最后落的是 erase，那里没有东西")
+  assert_true(@render.pick(d5, 90.0, 90.0) is None, msg="没落过笔的地方不算")
+  // 6) 非回归：上层命中上层、空白 None（且调整层无面不挡下层）
+  let d6 = @core.new_document("u-pick-reg", 100, 100)
+  d6.layers.push(@core.default_layer("l1", "a", 0.0, 0.0, 40.0, 40.0))
+  d6.layers.push(
+    { ..@core.default_layer("adj", "A", 0.0, 0.0, 100.0, 100.0), kind: @core.ShapeKind::Adjust, adjust: Some(@core.Adjust::{ op: @core.AdjustOp::Brightness, value: 0.2 }) },
+  )
+  assert_eq(@render.pick(d6, 10.0, 10.0), Some("l1"), msg="调整层无面，不该挡住下面的层")
+  assert_true(@render.pick(d6, 90.0, 90.0) is None)
+}
