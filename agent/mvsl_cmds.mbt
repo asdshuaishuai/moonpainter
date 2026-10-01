@@ -217,7 +217,7 @@ fn cmd_select_preview(s : Session, tokens : Array[String]) -> String {
   let png = @codec.png_encode(@pixel.overlay_buf(base, f, max_side))
   let sb = StringBuilder()
   sb.write_string("{\"ok\":true,\"op\":\"select-preview\"")
-  sb.write_string(",\"base_sha256\":\"\{@base.sha256_hex(@codec.png_encode(base))}\"")
+  sb.write_string(",\"source_sha256\":\"\{@base.sha256_hex(@codec.png_encode(base))}\"")
   sb.write_string(",\"base\":[\{base.width},\{base.height}]")
   sb.write_string(",\"coverage\":\{@core.fmt_num(cert.coverage)}")
   sb.write_string(",\"components\":\{cert.components.length()}")
@@ -276,10 +276,19 @@ fn cmd_mvsl_impact(s : Session, tokens : Array[String]) -> String {
   // 逐算子的泄漏率：第一个越界的算子才是要修的那个
   let base_ctx = @pixel.SelCtx::new(base)
   let cache = @pixel.FieldCache::new()
+  // 信封里的 `result_sha256` 必须是**回吐那张 PNG** 的 sha——与 `render` 的
+  // `render_sha256` 同一份契约（"渲染产物缓存的唯一真值"）。此前它哈希的是
+  // **全分辨率** `out`，而 `result_png_b64` 是 `downsample_box(out, max_side)`
+  // 之后才编码的：画布 64×64、max=16 时，宿主拿到 16×16 的图，却配着一个
+  // 算不到它头上的 sha。**同一个信封里两个字段描述的不是同一张图**，
+  // 而拿 sha 当缓存键/对账凭据的宿主会静默错配（比报错难查得多）。
+  let preview = @pixel.downsample_box(out, max_side)
+  let preview_png = @codec.png_encode(preview)
   let sb = StringBuilder()
   sb.write_string("{\"ok\":true,\"op\":\"mvsl-impact\"")
   sb.write_string(",\"base_sha256\":\"\{@base.sha256_hex(@codec.png_encode(base))}\"")
-  sb.write_string(",\"result_sha256\":\"\{@base.sha256_hex(@codec.png_encode(out))}\"")
+  sb.write_string(",\"result_sha256\":\"\{@base.sha256_hex(preview_png)}\"")
+  sb.write_string(",\"full_sha256\":\"\{@base.sha256_hex(@codec.png_encode(out))}\"")
   sb.write_string(",\"canvas\":[\{base.width},\{base.height}]")
   sb.write_string(",\"stages\":\{stages.length()}")
   sb.write_string(",\"per_op\":[")
@@ -313,9 +322,7 @@ fn cmd_mvsl_impact(s : Session, tokens : Array[String]) -> String {
   let total_rep = @pixel.diff_report(base, out, total_field)
   sb.write_string(",\"changed_total\":\{total_rep.changed}")
   sb.write_string(",\"mean_de_total\":\{@core.fmt_num(total_rep.mean_de)}")
-  sb.write_string(
-    ",\"result_png_b64\":\"\{@base64.encode(@codec.png_encode(@pixel.downsample_box(out, max_side)))}\"",
-  )
+  sb.write_string(",\"result_png_b64\":\"\{@base64.encode(preview_png)}\"")
   sb.write_string(",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}")
   sb.to_string()
 }
@@ -355,7 +362,10 @@ fn cmd_mvsl_assert(s : Session) -> String {
   sb.write_string("{\"ok\":true,\"op\":\"mvsl-assert\"")
   sb.write_string(",\"guards\":\{s.mvsl.guards.length()}")
   sb.write_string(",\"violations\":0")
+  // 这条命令**不回吐 PNG**（只有断言结论），所以两个 sha 描述的是全分辨率
+  // 缓冲，名字里写明 `full`，免得宿主以为能拿去对某张图。回吐 PNG 的
+  // `mvsl-impact` 才用 `result_sha256`（= 那张 PNG 的 sha）。
   sb.write_string(",\"base_sha256\":\"\{@base.sha256_hex(@codec.png_encode(base))}\"")
-  sb.write_string(",\"result_sha256\":\"\{@base.sha256_hex(@codec.png_encode(out))}\"}")
+  sb.write_string(",\"result_full_sha256\":\"\{@base.sha256_hex(@codec.png_encode(out))}\"}")
   sb.to_string()
 }

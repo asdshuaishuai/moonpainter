@@ -199,12 +199,35 @@ grep -Eq '"leak_ratio":0[,}]' "$OUT/mvsl.log" || { echo "FAIL: 选区外有泄�
 # **编辑表真的进了渲染管线**：render 与 mvsl-impact 必须给出同一张最终图。
 # 这是本轮最要紧的一条断言——它把"编辑表只是一份被存下来的数据"和
 # "编辑表真的改变了渲染结果"区分开。
+#
+# 口径要挑对：这里 canvas 320x240、`mvsl-impact max=160` 会**降采样**，
+# 而 `render 320` 是全分辨率——所以要比的是 impact 的 **`full_sha256`**
+# （全分辨率结果），不是 `result_sha256`（回吐那张 160 宽预览的 sha）。
+# 这条判据此前**靠错误才成立**：老代码的 `result_sha256` 哈希的就是全分辨率
+# `out`（与回吐的 PNG 对不上，但恰好与 render 相等），于是
+# "impact 的 result == render"看起来一直是绿的。**一个判据要问清它比的是
+# 哪两张图**，否则修好实现反而会把它弄红。
 RSHA=$(sed -n 's/.*"render_sha256":"\([0-9a-f]*\)".*/\1/p' "$OUT/mvsl.log" | head -1)
+FSHA=$(sed -n 's/.*"full_sha256":"\([0-9a-f]*\)".*/\1/p' "$OUT/mvsl.log" | head -1)
 ISHA=$(sed -n 's/.*"result_sha256":"\([0-9a-f]*\)".*/\1/p' "$OUT/mvsl.log" | head -1)
 if [ -z "$RSHA" ]; then echo "FAIL: render 回包缺 render_sha256"; exit 1; fi
+if [ -z "$FSHA" ]; then echo "FAIL: mvsl-impact 回包缺 full_sha256"; exit 1; fi
 if [ -z "$ISHA" ]; then echo "FAIL: mvsl-impact 回包缺 result_sha256"; exit 1; fi
-if [ "$RSHA" != "$ISHA" ]; then
-  echo "FAIL: render($RSHA) 与 impact($ISHA) 不是同一张图——编辑表没进渲染管线"
+if [ "$RSHA" != "$FSHA" ]; then
+  echo "FAIL: render($RSHA) 与 impact 全分辨率结果($FSHA) 不是同一张图——编辑表没进渲染管线"
+  exit 1
+fi
+# **sha 必须真的是回吐那张 PNG 的 sha**：拿 b64 解出来自己算一遍，
+# 而不是信信封里的另一个字段。预览被降采样过，所以它**应当**与全分辨率不同。
+IPNG=$(sed -n 's/.*"result_png_b64":"\([A-Za-z0-9+/=]*\)".*/\1/p' "$OUT/mvsl.log" | head -1)
+if [ -z "$IPNG" ]; then echo "FAIL: mvsl-impact 回包缺 result_png_b64"; exit 1; fi
+IPNG_SHA=$(printf '%s' "$IPNG" | base64 -d | shasum -a 256 | cut -d' ' -f1)
+if [ "$IPNG_SHA" != "$ISHA" ]; then
+  echo "FAIL: result_sha256($ISHA) 不是回吐 PNG 的 sha($IPNG_SHA)——信封里两个字段不是同一张图"
+  exit 1
+fi
+if [ "$ISHA" = "$FSHA" ]; then
+  echo "FAIL: 预览($ISHA) 与全分辨率结果相同——max=160 应当降采样了，判据大概没在测该测的东西"
   exit 1
 fi
 # 保护断言命中右半边（未改动）→ 通过；再验一条必然违反的断言

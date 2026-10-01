@@ -655,6 +655,32 @@ MUTS = [
         "killed",
     ),
     (
+        "R53",
+        "mvsl-impact 拿全分辨率 sha 冒充回吐 PNG 的 sha（信封里两个字段不同图）",
+        "agent/mvsl_cmds.mbt",
+        r"""  sb.write_string(",\"result_sha256\":\"\{@base.sha256_hex(preview_png)}\"")
+  sb.write_string(",\"full_sha256\":\"\{@base.sha256_hex(@codec.png_encode(out))}\"")""",
+        r"""  sb.write_string(",\"result_sha256\":\"\{@base.sha256_hex(@codec.png_encode(out))}\"")
+  sb.write_string(",\"full_sha256\":\"\{@base.sha256_hex(@codec.png_encode(out))}\"")""",
+        "killed",
+    ),
+    (
+        "R54",
+        "mvsl-impact 回吐未降采样的 PNG（max= 失效，sha 也就跟着对不上）",
+        "agent/mvsl_cmds.mbt",
+        r"""  let preview = @pixel.downsample_box(out, max_side)""",
+        r"""  let preview = out""",
+        "killed",
+    ),
+    (
+        "R55",
+        "mvsl-assert 把全分辨率 sha 又叫回 result_sha256（与有 PNG 的命令撞名）",
+        "agent/mvsl_cmds.mbt",
+        r"""  sb.write_string(",\"result_full_sha256\":\"\{@base.sha256_hex(@codec.png_encode(out))}\"}")""",
+        r"""  sb.write_string(",\"result_sha256\":\"\{@base.sha256_hex(@codec.png_encode(out))}\"}")""",
+        "killed",
+    ),
+    (
         "R18",
         "蒙版羽化解析恒 0（软边蒙版重开后变硬边）",
         "core/json.mbt",

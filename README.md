@@ -144,6 +144,16 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   但实现里没有那条分支 —— `add-rect … tag=background` 一直**被静默忽略**
   （不报错、`tags` 为空），而两条既有测试都用着它、谁也没断言它真的落上。
   现在 `tag=` 可用（与 `tag` 命令共用 `@core.layer_with_tag`，追加去重）。
+- **信封里的 sha 必须是回吐那张 PNG 的 sha**：`mvsl-impact` 的 `result_png_b64`
+  是 `max=` 降采样**之后**编码的，而 `result_sha256` 曾哈希**全分辨率**结果
+  ——画布 64×64、`max=16` 时宿主拿到 16×16 的图，却配着一个算不到它头上的
+  sha（**同一个信封里两个字段描述的不是同一张图**）。现在
+  `result_sha256` = 回吐那张 PNG 的 sha（与 `render` 的 `render_sha256`
+  同一份契约），全分辨率结果另给 `full_sha256`。
+  顺带把两处**名字与内容不符**的字段说准：`select-preview` 的
+  `base_sha256` → `source_sha256`（它哈希的是底图，回吐的却是 overlay 图），
+  `mvsl-assert` 的 `result_sha256` → `result_full_sha256`（这条命令**不回吐
+  任何 PNG**，却和"回吐 PNG 的 sha"撞了名）。
 - **「某 kind 才有意义」的字段有了完整矩阵**：`text`/`font_size`（只 text 层读）、
   `radius`（只 rect）、`points`（只 polygon/line）、`adjust`（只 adjust 层）、
   `asset`（只 image）、`dabs`（只 raster）、`children`（只 group）——**8 个**。

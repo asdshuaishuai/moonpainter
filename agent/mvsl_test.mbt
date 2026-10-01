@@ -257,8 +257,11 @@ test "渲染管线闭环：render / previews / impact 三者必须给出同一�
     run(s, "render 0").contains("out_width 越界"),
     msg="越界 out_width 应报错",
   )
-  // 2) impact：result_sha256 是"全画布最终图"的指纹
-  let impact_sha = jfield(run(s, "mvsl-impact max=64"), "result_sha256")
+  // 2) impact：**full_sha256** 才是"全画布最终图"的指纹；`result_sha256`
+  //    是回吐那张（可能被 max= 降采样的）预览 PNG 的 sha。此前两者被混为
+  //    一谈，而当时的老代码恰好把全分辨率 sha 写进 result_sha256——
+  //    "render == impact"看着一直绿，其实是因为那个字段名不副实。
+  let impact_sha = jfield(run(s, "mvsl-impact max=64"), "full_sha256")
   // 3) previews：容器里的 flat.png 必须与上面两者逐字节一致
   let mpd_b64 = jfield(run(s, "save-mpd-b64"), "mpd_b64")
   let bytes = @base64.decode(mpd_b64) catch {
@@ -511,4 +514,55 @@ test "图层级算子：layer= 与 STAGE 基准的组合在入口被拒绝" {
   let e = run(s, "mvsl-set \{b64_of(@core.program_to_json(prog))}")
   assert_true(e.has_prefix("{\"error\":\""), msg=e)
   assert_true(e.contains("STAGE"), msg=e)
+}
+
+///|
+test "信封里的 sha 必须是回吐那张 PNG 的 sha（不许拿全分辨率冒充）" {
+  // 实测过的 bug：`mvsl-impact` 的 `result_png_b64` 是
+  // `downsample_box(out, max_side)` **之后**编码的，而 `result_sha256`
+  // 哈希的是**全分辨率** `out`。画布 64x64、max=16 时宿主拿到 16x16 的图，
+  // 却配着一个算不到它头上的 sha——**同一个信封里两个字段描述的不是同一张图**。
+  // 拿 sha 当缓存键/对账凭据的宿主会静默错配，比报错难查得多。
+  //
+  // 这条与 `render` 是同一份契约：`render_sha256` 的注释写着
+  // "这张 PNG 的 sha256（渲染产物缓存的唯一真值）"。
+  let s = scene("impact-sha")
+  let j = run(s, "mvsl-impact max=16")
+  let png = @base64.decode(jfield(j, "result_png_b64")) catch {
+    _ => abort("结果 PNG base64 解码失败")
+  }
+  assert_eq(
+    @base.sha256_hex(png),
+    jfield(j, "result_sha256"),
+    msg="result_sha256 必须是回吐 PNG 的 sha（信封里两字段要指同一张图）",
+  )
+  // 画布 64x64 被 max=16 降采样：预览与全分辨率结果**必须**不同，
+  // 否则这条测试没在测降采样那条路（判据要问清自己比的是哪两张图）。
+  assert_true(
+    jfield(j, "full_sha256") != jfield(j, "result_sha256"),
+    msg="降采样后预览 sha 应与全分辨率不同",
+  )
+  // 全分辨率结果 == **同一分辨率**的 render（画布 320x240 → render 320）。
+  // 别在这里写 `render 64`：那是 64 宽的缩放视图，与全分辨率结果本就不同，
+  // 断言会红——**比 sha 之前先问清两张图的分辨率是否可比**。
+  let ren = run(s, "render 320")
+  assert_eq(
+    jfield(ren, "render_sha256"),
+    jfield(j, "full_sha256"),
+    msg="impact 的 full_sha256 应与同分辨率的 render 同图",
+  )
+}
+
+///|
+test "不回吐 PNG 的命令别用「某张图的 sha」这种名字" {
+  // `mvsl-assert` 只给断言结论、**不回吐任何 PNG**，它的两个 sha 描述的都是
+  // 全分辨率缓冲。此前字段名 `result_sha256` 与 `mvsl-impact` 里那个
+  // "回吐 PNG 的 sha"撞名，宿主很容易拿去对一张根本不存在的图。名字说准。
+  let s = scene("assert-sha-name")
+  let j = run(s, "mvsl-assert")
+  assert_true(jfield(j, "result_full_sha256") != "", msg="assert 要给全分辨率结果 sha：\{j}")
+  assert_true(
+    !j.contains("\"result_sha256\""),
+    msg="没有 PNG 就别用 result_sha256 这个名字：\{j}",
+  )
 }
