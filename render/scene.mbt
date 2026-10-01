@@ -251,6 +251,27 @@ fn fill_color_at(
 }
 
 ///|
+/// 层的**保守渲染窗**（左闭右开）：以层盒中心为心、对角线长为边，再放宽 2px
+/// （旋转 45° 的层也不会漏；`inside_fill` 再在窗内做精确判定）。
+///
+/// **`paint_layer` 与 `pick` 共用这一处**。此前两处各写一遍：`paint_layer`
+/// 只在这个窗内落像素，`pick` 却直接用 `inside_fill`/`inside_stroke` —— 于是
+/// 顶点伸出盒子的多边形（`add-polygon w=10 h=10 points=0,0;50,0;50,50`，
+/// 窗只到 x≤25）在 (30,10) 被 `pick` 报成"有这层"，而 `probe` 是白纸。
+/// 同一件事两个实现，就会一边说有一边说没有。
+fn paint_window(l : @core.Layer) -> (Int, Int, Int, Int) {
+  let reach = Double::sqrt(l.w * l.w + l.h * l.h)
+  let cx = l.x + l.w / 2.0
+  let cy = l.y + l.h / 2.0
+  (
+    (cx - reach / 2.0).to_int() - 2,
+    (cy - reach / 2.0).to_int() - 2,
+    (cx + reach / 2.0).to_int() + 2,
+    (cy + reach / 2.0).to_int() + 2,
+  )
+}
+
+///|
 /// 渲染单个层到画布（含 2×2 子采样 AA 与混合）。
 fn paint_layer(
   l : @core.Layer,
@@ -288,14 +309,8 @@ fn paint_layer(
     }
     _ => ()
   }
-  // 保守包围盒（旋转 45° 时取对角线长）
-  let reach = Double::sqrt(l.w * l.w + l.h * l.h)
-  let cx = l.x + l.w / 2.0
-  let cy = l.y + l.h / 2.0
-  let x0 = (cx - reach / 2.0).to_int() - 2
-  let y0 = (cy - reach / 2.0).to_int() - 2
-  let x1 = (cx + reach / 2.0).to_int() + 2
-  let y1 = (cy + reach / 2.0).to_int() + 2
+  // 保守渲染窗（与 `pick` 共用 `paint_window`：一处实现，两处判断不许分叉）
+  let (x0, y0, x1, y1) = paint_window(l)
   let px0 = if x0 < 0 { 0 } else { x0 }
   let py0 = if y0 < 0 { 0 } else { y0 }
   let px1 = if x1 > buf.width { buf.width } else { x1 }
@@ -1393,6 +1408,24 @@ fn pick_from(
       }
       continue
     }
+    // 渲染窗外的点 `paint_layer` 一个像素都不落 —— 判据要与它同一把尺子。
+    // 只对**走窗内遍历**的那几种形状管：Text/Raster 在 `paint_layer` 里提前
+    // return（Text 的字形可以画到盒子外），Group/Adjust 无面（前面已处理）。
+    let windowed = match l.kind {
+      @core.ShapeKind::Text => false
+      @core.ShapeKind::Raster => false
+      @core.ShapeKind::Group => false
+      @core.ShapeKind::Adjust => false
+      _ => true
+    }
+    if windowed {
+      let (x0, y0, x1, y1) = paint_window(l)
+      let px = x.to_int()
+      let py = y.to_int()
+      if px < x0 || px >= x1 || py < y0 || py >= y1 {
+        continue
+      }
+    }
     if inside_fill(l, lx, ly) || inside_stroke(l, lx, ly) {
       return Some(l.id)
     }
@@ -1412,6 +1445,11 @@ pub fn pick(
   x : Double,
   y : Double,
 ) -> String? {
+  // 画布外的点没有像素可画：`sample` 早就这么判了（"采样点超出画布"），
+  // 而 `pick` 曾照 `inside_fill` 报出一个层 —— 同一个点，两个命令两种答案。
+  if x < 0.0 || y < 0.0 || x >= doc.width.to_double() || y >= doc.height.to_double() {
+    return None
+  }
   pick_from(doc.layers, x, y, 1.0)
 }
 

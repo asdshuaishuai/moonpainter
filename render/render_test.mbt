@@ -341,3 +341,45 @@ test "pick：只报「真的在那里画了东西」的层（与 paint_layer 同
   assert_eq(@render.pick(d6, 10.0, 10.0), Some("l1"), msg="调整层无面，不该挡住下面的层")
   assert_true(@render.pick(d6, 90.0, 90.0) is None)
 }
+
+///|
+test "pick 与 paint_layer 同窗：渲染窗外、画布外的点都不报（判据不许比渲染器松）" {
+  // 实测的两个矛盾（都是"报出来的 id 不对应真实产物"）：
+  //  ① 画布 20×20 上放 100×100 的矩形 → `pick 30 10` 报 r1，而 `sample 30 10`
+  //     直接报"超出画布" —— 同一个点两个命令两种答案；
+  //  ② `add-polygon w=10 h=10 points=0,0;50,0;50,50`（渲染窗只到 x≤14）
+  //     → `pick 30 10` 报 p1，而那里 probe 出来是白纸。
+  // 修法是把窗提成 `paint_window` 一处实现，`paint_layer` 与 `pick` 共用。
+  let env = @render.RenderEnv::new()
+  // ① 画布边界
+  let d1 = @core.new_document("big-rect", 20, 20)
+  let r = @core.default_layer("r1", "r1", 0.0, 0.0, 100.0, 100.0)
+  d1.layers.push({ ..r, fill: @core.Fill::Solid(0xFFFF0000) })
+  assert_eq(@render.pick(d1, 19.0, 19.0), Some("r1"))
+  assert_eq(@render.pick(d1, 30.0, 10.0), None)
+  assert_eq(@render.pick(d1, -1.0, 5.0), None)
+  // ② 渲染窗：10×10 盒 + 顶点伸到 50 的三角（窗 = [-4,14)²）
+  let d2 = @core.new_document("wide-tri", 60, 60)
+  let p = @core.default_layer("p1", "p1", 0.0, 0.0, 10.0, 10.0)
+  d2.layers.push({
+    ..p,
+    kind: @core.ShapeKind::Polygon,
+    fill: @core.Fill::Solid(0xFF00FF00),
+    points: [(0.0, 0.0), (50.0, 0.0), (50.0, 50.0)],
+  })
+  let buf = @render.render_doc(d2, env)
+  // 窗内：有墨的地方必须拾得到（判据也不许比渲染器**严**）
+  // (5,1) 是严格内部点（斜边是 y=x，(5,5) 恰好压在边上 → 抗锯齿淡绿）
+  assert_eq(@codec.rgba_get(buf, 5, 1), 0xFF00FF00)
+  assert_eq(@render.pick(d2, 5.0, 1.0), Some("p1"))
+  // 边缘像素是抗锯齿后的淡绿（非纯色），只断言"有墨"
+  assert_true(@codec.rgba_get(buf, 12, 2) != 0xFFFFFFFF, msg="(12,2) 该有墨")
+  assert_eq(@render.pick(d2, 12.0, 2.0), Some("p1"))
+  // 窗外：没有墨的地方一个都不许报（13,2 有墨、15,2 没有，逐点对照）
+  assert_true(@codec.rgba_get(buf, 13, 2) != 0xFFFFFFFF, msg="(13,2) 该有墨")
+  assert_eq(@render.pick(d2, 13.0, 2.0), Some("p1"))
+  assert_eq(@codec.rgba_get(buf, 15, 2), 0xFFFFFFFF)
+  assert_eq(@render.pick(d2, 15.0, 2.0), None)
+  assert_eq(@codec.rgba_get(buf, 30, 10), 0xFFFFFFFF)
+  assert_eq(@render.pick(d2, 30.0, 10.0), None)
+}

@@ -958,6 +958,47 @@ MUTS = [
         "killed",
     ),
     (
+        "Q15",
+        "pick 丢掉渲染窗守卫（窗外的顶点被报成「有这层」，而那里没有像素）",
+        "render/scene.mbt",
+        """      let px = x.to_int()
+      let py = y.to_int()
+      if px < x0 || px >= x1 || py < y0 || py >= y1 {
+        continue
+      }""",
+        """      let px = x.to_int()
+      let py = y.to_int()
+      if px < x0 - 1000000 || px >= x1 + 1000000 || py < y0 - 1000000 || py >= y1 + 1000000 {
+        continue
+      }""",
+        "killed",
+    ),
+    (
+        "Q16",
+        "pick 丢掉画布边界守卫（画布外的点报出层，而 sample 同一个点报「超出画布」）",
+        "render/scene.mbt",
+        """  if x < 0.0 || y < 0.0 || x >= doc.width.to_double() || y >= doc.height.to_double() {
+    return None
+  }""",
+        """  if x < -1000000.0 || y < -1000000.0 || x >= doc.width.to_double() + 1000000.0 || y >= doc.height.to_double() + 1000000.0 {
+    return None
+  }""",
+        "killed",
+    ),
+    (
+        "Q17",
+        "pick 用渲染窗的「盒」而不是真窗（判据比渲染器严：窗内盒外的墨拾不到）",
+        "render/scene.mbt",
+        """      let (x0, y0, x1, y1) = paint_window(l)""",
+        """      let (x0, y0, x1, y1) = (
+        l.x.to_int(),
+        l.y.to_int(),
+        (l.x + l.w).to_int(),
+        (l.y + l.h).to_int(),
+      )""",
+        "killed",
+    ),
+    (
         "Q12",
         "set-text 不重算盒子（层报出来的范围装不下自己的像素）",
         "agent/session.mbt",
