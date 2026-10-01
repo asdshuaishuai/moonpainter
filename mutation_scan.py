@@ -441,6 +441,67 @@ MUTS = [
         "killed",
     ),
     (
+        "R40",
+        "add-mask 不校验参数（radus= 拼错静默给硬边直角蒙版）",
+        "agent/session.mbt",
+        r"""  match check_kv_args(
+    tokens,
+    2,
+    ["kind", "x", "y", "w", "h", "radius", "feather", "invert"],
+    "add-mask",
+  ) {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }""",
+        r"""  let _ = tokens""",
+        "killed",
+    ),
+    (
+        "R41",
+        "add-adjust 不校验参数（value 拼错静默按 0 建一个没效果的层）",
+        "agent/session.mbt",
+        r"""  match check_kv_args(tokens, 1, ["op", "value", "id", "name"], "add-adjust") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }""",
+        r"""  let _ = tokens""",
+        "killed",
+    ),
+    (
+        "R42",
+        "session-open 的拒绝不回显收到的参数（拼错时误导成模型不合格）",
+        "agent/session.mbt",
+        r"""    let got = if tokens.length() > 1 {
+      tokens[1:].join(" ")
+    } else {
+      "(无参数)"
+    }""",
+        r"""    let got = "(无参数)" """"",
+        "killed",
+    ),
+    (
+        "R43",
+        "brush/erase 不校验参数（rr= 拼错静默用默认半径）",
+        "agent/session.mbt",
+        r"""  match check_kv_args(tokens, 1, ["layer", "pts", "r", "color"], ctx) {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }""",
+        r"""  let _ = ctx""",
+        "killed",
+    ),
+    (
+        "R44",
+        "new 不校验参数（uuid 拼错静默用默认 uuid）",
+        "agent/session.mbt",
+        r"""  match check_kv_args(tokens, 3, ["uuid"], "new") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }""",
+        r"""  let _ = tokens""",
+        "killed",
+    ),
+    (
         "R18",
         "蒙版羽化解析恒 0（软边蒙版重开后变硬边）",
         "core/json.mbt",

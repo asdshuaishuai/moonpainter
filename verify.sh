@@ -381,6 +381,11 @@ echo "== 9/10 命令参数下界自检（读 tokens[N] 之前必须先卡住 N�
 #
 # 这是纯静态核对：拿每个 cmd_* 里读到的**字面下标最大值**跟它的下界比。
 # 变量下标（循环里的 `tokens[i]`）不在此列，它们本来就被 length 圈着。
+#
+# **必须剥掉注释**：实测这个扫描器被我**自己写的注释**骗过——注释里一句
+# 「静默接受任何 tokens[2]」被当成了真读 tokens[2]，报出一个不存在的越界，
+# 把 verify 卡在 9/10。判据要能分清代码与散文。（鉴别力也当场验过：注入
+# 一行真的 `tokens[2]` 它会响。）
 python3 - agent/session.mbt <<'PYBOUND'
 import re, sys
 
@@ -401,14 +406,32 @@ for i, line in enumerate(lines):
 if cur:
     funcs.append(cur)
 
+def strip_comment(line):
+    """去掉行尾注释（引号内的 `//` 不算）。
+    这一步是必须的：扫描器曾被我**自己写的注释**骗过——注释里提了一句
+    「静默接受任何 tokens[2]」，它就当成真读了 tokens[2]，于是报了一个
+    不存在的越界。**判据必须能分清代码与散文。**"""
+    out, in_str = [], False
+    i = 0
+    while i < len(line):
+        c = line[i]
+        if c == '"' and (i == 0 or line[i - 1] != "\\"):
+            in_str = not in_str
+        if not in_str and c == "/" and i + 1 < len(line) and line[i + 1] == "/":
+            break
+        out.append(c)
+        i += 1
+    return "".join(out)
+
 bad, checked = [], 0
 for f in funcs:
-    body = "\n".join(f["body"])
+    code = [strip_comment(l) for l in f["body"]]
+    body = "\n".join(code)
     g = re.search(r"tokens\.length\(\) < (\d+)", body)
     if not g:
         continue
     lo = int(g.group(1))
-    idxs = {int(m.group(1)) for l in f["body"] for m in re.finditer(r"tokens\[(\d+)\]", l)}
+    idxs = {int(m.group(1)) for l in code for m in re.finditer(r"tokens\[(\d+)\]", l)}
     if not idxs:
         continue
     checked += 1

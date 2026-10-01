@@ -235,8 +235,13 @@ fn cmd_session_open(s : Session, tokens : Array[String]) -> String {
     s.vision_ok = true
     "{\"ok\":true,\"op\":\"session-open\",\"vision\":\"full_image\",\"engine\":\"\{@core.ENGINE_VERSION}\"}"
   } else {
+    let got = if tokens.length() > 1 {
+      tokens[1:].join(" ")
+    } else {
+      "(无参数)"
+    }
     err(
-      "vision 闸拒绝：唯一合法声明是 full_image（能读取整幅渲染图并理解空间关系）。纯文本/仅 OCR 模型请换多模态模型，或改用 moonviz 做纯结构设计",
+      "vision 闸拒绝：唯一合法声明是 full_image（能读取整幅渲染图并理解空间关系），或 vision=full_image。收到的是 `\{got}`。纯文本/仅 OCR 模型请换多模态模型，或改用 moonviz 做纯结构设计",
     )
   }
 }
@@ -284,6 +289,10 @@ fn cmd_new(s : Session, tokens : Array[String]) -> String {
   }
   if w.to_int64() * h.to_int64() > @mpd.LIMIT_MAX_PIXELS.to_int64() {
     return err("画布总像素超限")
+  }
+  match check_kv_args(tokens, 3, ["uuid"], "new") {
+    Ok(_) => ()
+    Err(e) => return err(e)
   }
   let m = kv_args(tokens, 3)
   let uuid = match m.get("uuid") {
@@ -525,6 +534,12 @@ fn cmd_add_shape(
 fn cmd_add_image(s : Session, tokens : Array[String]) -> String {
   let doc = match require_doc(s) {
     Ok(d) => d
+    Err(e) => return err(e)
+  }
+  let img_keys = add_shape_keys(@core.ShapeKind::Image)
+  img_keys.push("b64")
+  match check_kv_args(tokens, 1, img_keys, "add-image") {
+    Ok(_) => ()
     Err(e) => return err(e)
   }
   let m = kv_args(tokens, 1)
@@ -908,6 +923,12 @@ fn cmd_add_adjust(s : Session, tokens : Array[String]) -> String {
     Ok(d) => d
     Err(e) => return err(e)
   }
+  // 此前 `value` 拼错（`vlaue=1.5`）会静默按 0 处理 —— 建出一个"没效果"的
+  // 调整层，回包 ok。
+  match check_kv_args(tokens, 1, ["op", "value", "id", "name"], "add-adjust") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }
   let m = kv_args(tokens, 1)
   let adj = match parse_adjust(m) {
     Ok(a) => a
@@ -954,6 +975,12 @@ fn cmd_set_adjust(s : Session, tokens : Array[String]) -> String {
         "层 \{id} 是 \{kind_str(target.kind)} 不是调整层（改画面用 set-style；要加调整层用 add-adjust）",
       )
   }
+  // 先查键：`set-adjust l2 vallue=1` 拼错时 kv_args 给出空表，此前会报
+  // "至少要给 op= 或 value="——那句错话在"拼错了"时是**误导**。
+  match check_kv_args(tokens, 2, ["op", "value"], "set-adjust") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }
   let m = kv_args(tokens, 2)
   if m.length() == 0 {
     return err("set-adjust 至少要给 op= 或 value=（都没给就什么都没改）")
@@ -985,6 +1012,17 @@ fn cmd_add_mask(s : Session, tokens : Array[String]) -> String {
   let id = tokens[1]
   if @core.find_layer(doc.layers, id) is None {
     return err("层不存在：\{id}")
+  }
+  // 蒙版的 `radius` 当年正是"静默接受任何 tokens[2]"那类 bug 的发源地
+  // （见 set-mask 的注释）；这里同样把"没认出来"变成错误。
+  match check_kv_args(
+    tokens,
+    2,
+    ["kind", "x", "y", "w", "h", "radius", "feather", "invert"],
+    "add-mask",
+  ) {
+    Ok(_) => ()
+    Err(e) => return err(e)
   }
   let m = kv_args(tokens, 2)
   let kind = match m.get("kind") {
@@ -1907,6 +1945,15 @@ fn cmd_brush(s : Session, tokens : Array[String], erase : Bool) -> String {
   }
   if tokens.length() < 2 {
     return err("用法：brush layer=<id> pts=x1,y1;x2,y2[;…] r=<半径px> [color=#RRGGBB[AA]]")
+  }
+  let ctx = if erase {
+    "erase"
+  } else {
+    "brush"
+  }
+  match check_kv_args(tokens, 1, ["layer", "pts", "r", "color"], ctx) {
+    Ok(_) => ()
+    Err(e) => return err(e)
   }
   let m = kv_args(tokens, 1)
   let lid = match m.get("layer") {

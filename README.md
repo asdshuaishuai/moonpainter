@@ -132,8 +132,9 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   `sel_h≈28, sel_c≈0.20` 而 `hsv_h=0, hsv_s=0.85`——拿错一套的表现是
   「命令成功但一个像素都没选中」；彩度窗整条高于 sRGB 可达上限 0.3225
   会在装表前被**拒绝**（而不是静默返回空选）；
-- **参数零容忍（拼错的键不再静默通过）**：`set-style`/`add-rect`/`add-ellipse`/
-  `add-polygon`/`add-line`/`add-text`/`add-paint` 会逐个检查参数——**不认识的键、
+- **参数零容忍（拼错的键不再静默通过）**：**所有** kv 参数命令
+  （`set-style`、`add-{rect,ellipse,polygon,line,text,paint,image,adjust,mask}`、
+  `set-adjust`、`brush`/`erase`、`new`）都会逐个检查参数——**不认识的键、
   漏了 `=` 的裸词、空值一律拒绝**，并给出合法键清单；键归别的命令管时直接指路
   （`points` → add-polygon、`x/y` → move、`w/h` → resize、`text` → set-text）。
   此前 `kv_args` 是**静默**的：`set-style l1 fil=#FF0000`（拼错）、
@@ -142,6 +143,11 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   但实现里没有那条分支 —— `add-rect … tag=background` 一直**被静默忽略**
   （不报错、`tags` 为空），而两条既有测试都用着它、谁也没断言它真的落上。
   现在 `tag=` 可用（与 `tag` 命令共用 `@core.layer_with_tag`，追加去重）。
+  第二批挂上时又抓到：`add-mask radus=5` 静默给出硬边直角蒙版、
+  `add-adjust value` 拼成 `vlaue` 静默按 0 建一个"没效果"的调整层、
+  `brush rr=4` 静默用默认半径。`session-open` 不接受 kv 校验（它认位置参数
+  `full_image`），但把**收到的参数回显**进拒绝文案——拼错 `vison=` 时原来的
+  文案会把人误导成"模型不是多模态"。
 - **调整层读得回来、改得动**：`query-layer`/`list-layers` 报
   `adjust:{op,value}`（此前调整层整个层就由 op+value 定义，两者却都不报，
   两个不同的调整层长得一模一样）；`set-adjust <id> [op=] [value=]` 原地改，

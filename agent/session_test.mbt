@@ -943,3 +943,54 @@ test "points 只对 polygon/line 有意义：rect 上给顶点是死数据，必
   let joined = @agent.lint_doc(doc).join(" | ")
   assert_true(joined.contains("2 个顶点"), msg="lint 必须报死顶点：\{joined}")
 }
+
+///|
+test "参数零容忍（第二批）：蒙版/调整/画笔/新建/加图 也要挂上校验" {
+  // 上一批只挂了 set-style 与 add-{rect,ellipse,polygon,line,text,paint}。
+  // `set-mask` 当年正是"静默接受任何 tokens[2]"那类 bug 的发源地，而它的
+  // 兄弟 `add-mask` 一直没检查：`radus=5` 会静默给出硬边直角蒙版。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  assert_true(run(s, "new 64 64 uui=abc").contains("不认识的参数"), msg="new 拼错要拒")
+  let _ = run(s, "new 64 64 uuid=kv2")
+  let _ = run(s, "add-rect x=0 y=0 w=40 h=40 fill=#FF0000FF name=A")
+  assert_true(
+    run(s, "add-mask l1 kind=rect x=0 y=0 w=10 h=10 radus=5").contains("不认识的参数"),
+    msg="add-mask 拼错 radius 要拒（否则静默给硬边直角）",
+  )
+  assert_true(
+    run(s, "add-adjust op=brightness vlaue=1.5").contains("不认识的参数"),
+    msg="add-adjust 拼错 value 要拒（否则静默按 0 建一个没效果的调整层）",
+  )
+  let _ = run(s, "add-adjust op=brightness value=1.5")
+  // set-adjust 拼错键时，报的必须是"不认识的参数"而不是误导性的"至少要给"
+  let bad = run(s, "set-adjust l2 vallue=0.5")
+  assert_true(bad.contains("不认识的参数"), msg="拼错键要说清是拼错：\{bad}")
+  assert_true(!bad.contains("至少要给"), msg="别用误导性的话：\{bad}")
+  let _ = run(s, "add-paint name=P")
+  assert_true(
+    run(s, "brush layer=l3 pts=0,0;5,5 rr=4").contains("不认识的参数"),
+    msg="brush 拼错 r 要拒",
+  )
+  // erase 走同一个函数，但报错里的命令名要指对
+  assert_true(run(s, "erase layer=l3 pts=0,0;5,5 rr=4").contains("erase"), msg="erase 的报错要点名 erase")
+  assert_true(run(s, "add-image bogus=1").contains("不认识的参数"), msg="add-image 拼错要拒")
+  // 正常路径不许误伤
+  assert_true(!run(s, "add-mask l1 kind=rect x=0 y=0 w=10 h=10 radius=5 feather=2").contains("error"), msg="蒙版正常参数要能用")
+  assert_true(!run(s, "brush layer=l3 pts=0,0;5,5 r=4").contains("error"), msg="画笔正常参数要能用")
+  assert_true(!run(s, "new 8 8 uuid=again").contains("error"), msg="new 正常参数要能用")
+}
+
+///|
+test "session-open 的拒绝要说清收到了什么（拼错参数名时别误导成「模型不是多模态」）" {
+  // `vison=full_image`（拼错）此前会报"纯文本/仅 OCR 模型请换多模态模型"——
+  // 把"参数名拼错"误导成"模型不合格"，排查方向完全错了。
+  let s = @agent.Session::new()
+  let r = run(s, "session-open vison=full_image")
+  assert_true(r.contains("vison"), msg="要把收到的参数回显出来：\{r}")
+  // 合法声明仍要通过（位置参数与 vision= 两种形态）
+  let s2 = @agent.Session::new()
+  assert_true(!run(s2, "session-open full_image").contains("error"), msg="位置参数要能用")
+  let s3 = @agent.Session::new()
+  assert_true(!run(s3, "session-open vision=full_image").contains("error"), msg="vision= 要能用")
+}
