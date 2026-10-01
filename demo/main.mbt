@@ -1093,7 +1093,16 @@ fn main {
       r5.contains("ok") &&
       r6.contains("png_b64")
     let ok_val : Json = Json::boolean(ok)
-    let ver_val : Json = Json::string(@core.ENGINE_VERSION)
+    // 版本从**已加载的 wasm 引擎**读（`mp_version`），不读 demo 自己编译进去的
+    // 常量：wasm 产物过期时两者会不一致，而自检报的应该是引擎的版本、不是
+    // 页面的版本。这同时消掉了 demo 对引擎包唯一的 import（铁律 5：demo 只经
+    // wasm ABI 驱动引擎，`dep_audit.py` 第 12 步守着这条）。
+    let ver_raw = engine_version_json()
+    let ver_val : Json = try {
+      @json.parse(ver_raw)
+    } catch {
+      _ => Json::string(ver_raw)
+    }
     let result : Json = Json::object({
       "headless_selftest": Json::boolean(true),
       "engine_ok": ok_val,

@@ -166,9 +166,9 @@
                                 # render≡impact 同一张图→断言→软过渡带不
                                 # 算泄漏→lint 空操作/违约→容器往返→预览
                                 # 走编辑表）；渐变端点单位等静默失败也在此拦
-                                # 8/11 命令字典与分发一致：list-tools 吐出的每个
+                                # 8/12 命令字典与分发一致：list-tools 吐出的每个
                                 # 命令都逐个真实调用，必须不报"未知命令"（铁律 6）
-                                # 9/11 命令参数下界自检：每个 cmd_* 读 tokens[N]
+                                # 9/12 命令参数下界自检：每个 cmd_* 读 tokens[N]
                                 # 之前必须先卡住 N。下界写小了**不报用法错、
                                 # 而是越界 panic**（实测 `set-text l1` 把 CLI
                                 # 干掉了），而第 8 步只用裸命令名逐个戳、
@@ -176,13 +176,21 @@
                                 # **剥注释**：实测扫描器被自己写的注释骗过
                                 # （注释里一句 tokens[2] 被当成真读）。判据要能
                                 # 分清代码与散文；改完判据要注入反例证明它还咬得住
-                                # 10/11 变异锚点自检：每个变异锚点必须唯一命中 1 处
+                                # 10/12 变异锚点自检：每个变异锚点必须唯一命中 1 处
                                 # （秒级）。锚点失效 = 那块覆盖被悄悄拿掉，
                                 # 而汇总里的「N 个变异全部通过」照旧好看——实测
                                 # 踩过，两个变异静静失效了一轮
-                                # 11/11 字典 ↔ 解析器 参数对账：字典承诺的
+                                # 11/12 字典 ↔ 解析器 参数对账：字典承诺的
                                 # key= 必须真的认（双向）。读不出键表/命令名
                                 # 不是字面量 → 判失败，别静默跳过
+                                # 第 8 步还顺带核对**文档里的命令条数**
+                                # （DESIGN §2 曾写 57，而字典是 59）；开头核
+                                # verify.sh 自己的步骤编号自洽（加步骤忘了改
+                                # 分母 → 日志里的"10/10"是真数、分母是假的）
+                                # 12/12 依赖方向门禁（铁律 5）：内部边全部朝前、
+                                # pixel 不依赖 render、引擎包零第三方、FFI 只在
+                                # cli/demo、demo 不 import 引擎包（只走 wasm ABI）。
+                                # moon 编译器只管有没有环，**反向依赖照样编得过**
 ./build_demo.sh                 # AI 修图 demo 构建 + Node headless 自检 + npm SDK 冒烟
                                 # （含 save→open 往返）+ 页面接线源码核对 + demo 测试
                                 # （工具面与 MVSL 闭环可达，需 Node；
@@ -216,7 +224,12 @@ moon run --target native cli    # stdin 行协议；help 查看全部 59 个命�
 
 - demo 包允许 mooncakes 依赖（当前 colmugx/posoco + moonbitlang/async）；
   **引擎包（base/codec/core/pixel/render/mpd/agent/wasm/cli）仍零第三方依赖**；
-- 引擎交互必须经 wasm SDK 实例（wasm 包 ABI），不得在 demo 里旁路直调引擎包；
+- 引擎交互必须经 wasm SDK 实例（wasm 包 ABI），不得在 demo 里旁路直调引擎包。
+  **这三条现在有门禁**（`dep_audit.py`，verify.sh 第 12 步）。实测它一上来就
+  抓到 `demo/moon.pkg` 里的 `moonpainter/core`——那是**只为 `@core.ENGINE_VERSION`
+  一个常量**而存在的旁路：同一个事实有两条路（demo 编译进去的常量 vs 已加载
+  wasm 的 `mp_version`），wasm 产物过期时页面就会报错的版本。改成从引擎读之后
+  demo 一个引擎包都不 import 了；
 - mooncakes 依赖进模块前必须查 `supported_targets`（例：moonllm 锁 +native，
   浏览器 demo 不可用）；
 - 工具回包给 LLM 一律截断（shorten），render 的 PNG 走 attachments 不走文本

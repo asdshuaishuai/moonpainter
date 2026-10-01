@@ -29,7 +29,30 @@ run_quiet() {
   tail -1 "$log"
 }
 
-echo "== 1/11 moon check =="
+# 步骤编号自洽：分母必须是实际步数、编号必须连续。此前加了一整步（对账门禁）
+# 而前面 10 个标题还写着 /10 —— 日志里的"10/10"是真的、分母是假的。
+python3 - <<'PYD'
+import re, sys
+text = open('verify.sh', encoding='utf-8').read()
+steps = re.findall(r'^echo "== (\d+)/(\d+) ', text, re.M)
+if not steps:
+    print('FAIL: 找不到步骤标题')
+    sys.exit(1)
+nums = [int(a) for a, _ in steps]
+totals = {int(b) for _, b in steps}
+bad = []
+if totals != {len(steps)}:
+    bad.append('分母写着 %s，实际 %d 步（加步骤忘了改分母？）'
+               % (sorted(totals), len(steps)))
+if nums != list(range(1, len(steps) + 1)):
+    bad.append('编号不连续：%s' % nums)
+if bad:
+    print('FAIL: ' + '；'.join(bad))
+    sys.exit(1)
+print('verify.sh 步骤编号自洽（%d 步，分母全是 %d）' % (len(steps), len(steps)))
+PYD
+
+echo "== 1/12 moon check =="
 CHECK_OUT=$(moon check 2>&1)
 echo "$CHECK_OUT" | tail -1
 if echo "$CHECK_OUT" | grep -q "Warning"; then
@@ -38,10 +61,10 @@ if echo "$CHECK_OUT" | grep -q "Warning"; then
   exit 1
 fi
 
-echo "== 2/11 moon test --target native =="
+echo "== 2/12 moon test --target native =="
 run_quiet moon test --target native
 
-echo "== 3/11 wasm-gc 可检 + 测试（引擎纯字节进出的背书） =="
+echo "== 3/12 wasm-gc 可检 + 测试（引擎纯字节进出的背书） =="
 # wasm-gc 的 check 也要查 warning：铁律 1 的"0 error / 0 warning"不分 target。
 # （步骤 1 查的是默认 target；target 特有的 warning 只能在这里抓。）
 WASM_CHECK=$(moon check --target wasm-gc 2>&1)
@@ -53,7 +76,7 @@ if echo "$WASM_CHECK" | grep -q "Warning"; then
 fi
 run_quiet moon test --target wasm-gc
 
-echo "== 4/11 CLI 子进程端到端 =="
+echo "== 4/12 CLI 子进程端到端 =="
 # 生成最小 2×2 RGBA PNG（python3 标准库，zlib+struct 手工构造）作为位图资产
 PNG_B64=$(python3 -c "
 import zlib, struct, base64
@@ -102,7 +125,7 @@ printf '%s\n' \
 grep -q '渐变端点必须落在 0..1' "$OUT/grad.log" || { echo "FAIL: 像素坐标写进渐变端点未被拒绝（静默变成纯色）"; exit 1; }
 grep -q '0.375' "$OUT/grad.log" || { echo "FAIL: 拒绝信息未给出换算建议"; exit 1; }
 
-echo "== 5/11 独立外部验证（系统 unzip，非引擎自证） =="
+echo "== 5/12 独立外部验证（系统 unzip，非引擎自证） =="
 unzip -t "$OUT/verify.mpd" > /dev/null && echo "unzip -t: 容器完整性 OK"
 unzip -l "$OUT/verify.mpd" | grep -q "meta/design.json"  || { echo "FAIL: 缺 meta/design.json"; exit 1; }
 unzip -l "$OUT/verify.mpd" | grep -q "previews/flat.png" || { echo "FAIL: 缺 flat 预览"; exit 1; }
@@ -112,7 +135,7 @@ echo "manifest/预览/资产三件套齐全"
 # 元参数层可直接文本阅读（双层容器的核心承诺）
 unzip -p "$OUT/verify.mpd" meta/design.json | head -c 200; echo " …"
 
-echo "== 6/11 open → save 字节一致（进程级确定性闭环） =="
+echo "== 6/12 open → save 字节一致（进程级确定性闭环） =="
 printf '%s\n' \
   'session-open full_image' \
   "open-mpd $OUT/verify.mpd" \
@@ -173,7 +196,7 @@ if w == 16:
 print("open-mpd-b64 载入 OK（指纹 %s…，画布 %s 宽）" % (want[:12], w))
 PYX
 
-echo "== 7/11 MVSL 编辑表命令面 + 渲染管线闭环（安装 → render/impact 同图 → 断言 → 软边界/空操作/违约 lint → 容器往返） =="
+echo "== 7/12 MVSL 编辑表命令面 + 渲染管线闭环（安装 → render/impact 同图 → 断言 → 软边界/空操作/违约 lint → 容器往返） =="
 # canonical 编辑表由引擎自己产出（不手写 JSON——少一个大括号就会得到
 # 指不到病根的解析错误）。这里用固定文本：字段序即 canonical 字段序。
 MVSL_PROG='{"version":1,"ops":[{"id":"e1","kind":"recolor","sel":{"basis":"base","expr":{"t":"geo","shape":"rect","w":{"x":0,"y":0,"w":160,"h":240,"feather":0}}},"amount":1,"hue_deg":120,"temp_kelvin":0,"relight_gain":1,"refine":[],"note":"","evidence":null}],"guards":[{"id":"g1","sel":{"basis":"base","expr":{"t":"geo","shape":"rect","w":{"x":160,"y":0,"w":160,"h":240,"feather":0}}},"max_de":0.001,"max_changed_ratio":0}]}'
@@ -355,7 +378,7 @@ printf '%s\n' \
 grep -q '保护断言被违反' "$OUT/mvsl_lintbad.log" || { echo "FAIL: lint 未报出被违反的保护断言"; exit 1; }
 echo "MVSL：安装/render≡impact/断言/软过渡带不算泄漏/容器往返/预览走编辑表/lint 空操作与违约 全部 OK"
 
-echo "== 8/11 命令字典与分发一致（铁律 6） =="
+echo "== 8/12 命令字典与分发一致（铁律 6） =="
 # 字典（agent/tools.mbt，经 list-tools 输出）与分发（session.mbt 的命令 match）
 # 是两张**手写表**，铁律 6 要求同步，但此前没有任何自动化守着。
 # demo 侧就栽在这上面：10 个工具"注册了却接不上"，而人类走前端按钮、测试
@@ -396,7 +419,30 @@ if bad:
 print(f"命令字典一致性 OK（{n} 个命令逐个可达）")
 PYEOF
 
-echo "== 9/11 命令参数下界自检（读 tokens[N] 之前必须先卡住 N） =="
+# 文档里写的**命令条数**也要对得上：DESIGN §2 写着"agent（57 命令…"而字典
+# 早已是 59 —— 同一个数字在三份文档里各写一遍，谁都没查（README 的"59 条命令"
+# 与 AGENTS 的"查看全部 59 个命令"同样没人查，只是碰巧是对的）。
+# 只审**活文档**（README/DESIGN/AGENTS）：PLAN.md 是实施历史，
+# 里面的数字是当时的记录，改它等于篡改历史。
+# 路径走 argv：`<<'PYD'` 是引号 heredoc，块里的 $OUT **不会**被 shell 展开
+# （上一版就栽在这：FileNotFoundError: '$OUT/cmdlist.txt'）
+python3 - "$OUT/cmdlist.txt" <<'PYD'
+import re, sys
+n = len([l for l in open(sys.argv[1], encoding='utf-8') if l.strip()])
+bad = []
+for path in ('README.md', 'DESIGN.md', 'AGENTS.md'):
+    for i, line in enumerate(open(path, encoding='utf-8'), 1):
+        # 负向后视 `(?<![/\d])`：步骤编号「8/12 命令字典…」里的 12 不是命令条数
+        for m in re.finditer(r'(?<![/\d])(\d+)\s*(?:条)?\s*(?:个)?命令', line):
+            if int(m.group(1)) != n:
+                bad.append('%s:%d 写「%s 条命令」，实际 %d' % (path, i, m.group(1), n))
+if bad:
+    print('FAIL: ' + '；'.join(bad))
+    sys.exit(1)
+print('文档命令数 OK（README/DESIGN/AGENTS 里的命令数都是 %d）' % n)
+PYD
+
+echo "== 9/12 命令参数下界自检（读 tokens[N] 之前必须先卡住 N） =="
 # 每个命令开头的 `if tokens.length() < K` 是唯一的越界防线。K 写小了，
 # 命令**不报用法错、而是越界 panic**：进程从 cmd_* 里直接崩掉，用户看到调用栈
 # 而不是提示。实测栽过一次——`set-text l1` 的下界写成 2（应为 3），
@@ -472,7 +518,7 @@ if checked == 0:
 print(f"命令参数下界 OK（{checked} 个命令，读 tokens[N] 的都在下界之内）")
 PYBOUND
 
-echo "== 10/11 变异锚点自检（变异门不许静默失效） =="
+echo "== 10/12 变异锚点自检（变异门不许静默失效） =="
 # 变异门（mutation_scan.py）往实现里注入语义 bug、看测试能否抓住——但它自己
 # 也有一个静默失效模式：锚点文本一旦被重构改掉、或变得不再唯一，那个变异
 # 就**再也没跑过**，而汇总里的「N 个变异全部通过」照旧好看。实测踩过：
@@ -481,7 +527,7 @@ echo "== 10/11 变异锚点自检（变异门不许静默失效） =="
 # （秒级，不跑那 5 分钟的测试），把失效挡在常规门禁里。
 python3 mutation_scan.py --check-anchors
 
-echo "== 11/11 字典 ↔ 解析器 参数对账（承诺的参数必须真的认） =="
+echo "== 11/12 字典 ↔ 解析器 参数对账（承诺的参数必须真的认） =="
 # 铁律 6 只覆盖**命令清单**；**参数**一直是两张互不校验的表：工具字典里
 # 写 `key=`（LLM 就是照这个发参数的），解析器里另有 check_kv_args 的允许键表。
 # 对不上的两种表现都实测过：
@@ -492,6 +538,16 @@ echo "== 11/11 字典 ↔ 解析器 参数对账（承诺的参数必须真的�
 # 一律判失败——静默跳过就等于这块覆盖没了（同第 10 步的道理）。
 # 判别力已注入验证：字典多写一个键 / 解析器多认一个键，两向都会红。
 python3 param_audit.py
+
+echo "== 12/12 依赖方向门禁（铁律 5：方向/零第三方/FFI 边界） =="
+# 铁律 5 此前**一条都没门禁**：moon 编译器只管有没有环，**反向依赖照样编得过**。
+# 判据：①每个包都在 ORDER 里（新包必须登记，不许静默不审）②内部边全部朝前
+# ③pixel 绝不依赖 render ④引擎包零第三方依赖 ⑤demo 不 import 任何引擎包
+# （引擎交互只走 wasm ABI）⑥FFI 只在 cli/demo。实测它一上来就抓到
+# `demo/moon.pkg` 里那句 `moonpainter/core`——只为 `@core.ENGINE_VERSION`
+# 一个常量而存在的旁路（同一个事实两条路：demo 编译进去的常量 vs 已加载 wasm
+# 的 `mp_version`）。
+python3 dep_audit.py
 
 echo ""
 echo "ALL VERIFY PASS ✓"

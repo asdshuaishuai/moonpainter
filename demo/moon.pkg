@@ -5,7 +5,6 @@
 // 本包同时是引擎能力的端到端验证器（demo_test：mock 模型 + 真实 wasm 实例）。
 
 import {
-  "moonpainter/core",
   "colmugx/posoco",
   "moonbitlang/async",
   "moonbitlang/async/js_async",
