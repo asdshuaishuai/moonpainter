@@ -374,6 +374,73 @@ MUTS = [
         "killed",
     ),
     (
+        "R33",
+        "set-style 不校验参数（拼错的键静默 no-op，返回 ok 而没改）",
+        "agent/session.mbt",
+        r"""  match check_kv_args(tokens, 2, set_style_keys(), "set-style") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }""",
+        r"""  let _ = check_kv_args(tokens, 2, set_style_keys(), "set-style")""",
+        "killed",
+    ),
+    (
+        "R34",
+        "check_kv_args 放行未知键（等于不校验）",
+        "agent/ops.mbt",
+        r"""        if !allowed.contains(k) {""",
+        r"""        if false {""",
+        "killed",
+    ),
+    (
+        "R35",
+        "check_kv_args 放行裸词（漏了 = 的参数静默丢弃）",
+        "agent/ops.mbt",
+        r"""      None => return Err("\{ctx}：`\{t}` 不是 key=value 形式（是不是漏了 `=`？）")""",
+        r"""      None => ()""",
+        "killed",
+    ),
+    (
+        "R36",
+        "apply_style_kv 不应用 tag（tag= 又是静默 no-op）",
+        "agent/ops.mbt",
+        r"""      nl = @core.layer_with_tag(nl, v)""",
+        r"""      let _ = v""",
+        "killed",
+    ),
+    (
+        "R37",
+        "build_shape_layer 不查 kind 就收 points（rect 上的死顶点）",
+        "agent/ops.mbt",
+        r"""      if !(kind is @core.ShapeKind::Polygon) && !(kind is @core.ShapeKind::Line) {
+        return Err(
+          "points 只对 polygon/line 有意义：这层是 \{kind_str(kind)}，渲染器不读它的顶点（矩形/椭圆用 w/h/radius 定义形状；要折线请用 add-polygon）",
+        )
+      }""",
+        r"""      let _ = kind""",
+        "killed",
+    ),
+    (
+        "R38",
+        "lint 不报非 polygon/line 上的死顶点",
+        "agent/ops.mbt",
+        r"""        v.push(
+          "P2 noop 层 \{l.id} 是 \{kind_str(l.kind)} 却带着 \{l.points.length()} 个顶点（渲染器只对 polygon/line 读 points，纯粹改变指纹）",
+        )""",
+        r"""        let _ = l.points""",
+        "killed",
+    ),
+    (
+        "R39",
+        "query-layer 不报顶点（polygon 的形状读不回来）",
+        "agent/session.mbt",
+        r"""    if l.kind is @core.ShapeKind::Polygon || l.kind is @core.ShapeKind::Line {
+      sb.write_string(",\"points\":[")""",
+        r"""    if false {
+      sb.write_string(",\"points\":[")""",
+        "killed",
+    ),
+    (
         "R18",
         "蒙版羽化解析恒 0（软边蒙版重开后变硬边）",
         "core/json.mbt",

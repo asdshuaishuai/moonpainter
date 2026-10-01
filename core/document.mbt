@@ -163,6 +163,27 @@ pub(all) enum AdjustOp {
 }
 
 ///|
+/// 给层追加一个标签（**已存在则不重复**）。
+///
+/// 这是"打标签"的**单一实现**：`tag <id> <tag>` 命令与 `add-*/set-style` 的
+/// `tag=` 参数都走它。`apply_style_kv` 的注释里早就写着它会应用 `tag`，但实现
+/// 里没有那条分支——于是 `add-rect … tag=background` **被静默忽略**（不报错、
+/// `tags` 为空），而两条既有测试都用着它、又都没断言它真的落上。
+pub fn layer_with_tag(l : Layer, tag : String) -> Layer {
+  let tags = l.tags.copy()
+  let mut dup = false
+  for t in tags {
+    if t == tag {
+      dup = true
+    }
+  }
+  if !dup {
+    tags.push(tag)
+  }
+  { ..l, tags }
+}
+
+///|
 /// 算子名（canonical JSON 的 `op` 值 / 命令面 `op=` 的取值，**单一实现**）。
 /// 这名字此前只写在 `core/json.mbt` 的 `adjust_json` 里（私有），而
 /// `query-layer` 又要报同一个名字——两处各写一遍就是把"故意不一致"的

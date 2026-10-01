@@ -349,6 +349,25 @@ fn layer_summary(l : @core.Layer) -> String {
       sb.write_string(",\"radius\":\{@core.fmt_num(l.corner_radius)}")
     }
   }
+  // polygon/line 的顶点**就是它的形状**（w/h 只是外接框），此前既不报也没有
+  // 任何命令能改——调用方建完折线就再也读不回自己给了哪些顶点。
+  if l.points.length() > 0 {
+    if l.kind is @core.ShapeKind::Polygon || l.kind is @core.ShapeKind::Line {
+      sb.write_string(",\"points\":[")
+      let mut pf = true
+      for p in l.points {
+        if pf {
+          pf = false
+        } else {
+          sb.write_string(",")
+        }
+        sb.write_string(
+          "[\{@core.fmt_num(p.0)},\{@core.fmt_num(p.1)}]",
+        )
+      }
+      sb.write_string("]")
+    }
+  }
   if l.flip_h || l.flip_v {
     sb.write_string(",\"flip_h\":\{l.flip_h},\"flip_v\":\{l.flip_v}")
   }
@@ -480,6 +499,11 @@ fn cmd_add_shape(
     Ok(d) => d
     Err(e) => return err(e)
   }
+  // 参数校验（同 set-style：拼错的键、裸词、空值一律拒绝，不留静默 no-op）
+  match check_kv_args(tokens, 1, add_shape_keys(kind), "add-\{kind_str(kind)}") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }
   let m = kv_args(tokens, 1)
   let id = match m.get("id") {
     Some(i) => i
@@ -550,9 +574,42 @@ fn cmd_add_image(s : Session, tokens : Array[String]) -> String {
 }
 
 ///|
+fn add_text_keys() -> Array[String] {
+  ["id", "name", "x", "y", "w", "h", "text", "font_size", "fill"]
+}
+
+///|
+/// `set-style` 认的全部键（与 `apply_style_kv` 的分支一一对应）。
+/// 放在这里当**单一事实源**：用法串、错误消息都从它出。
+///|
+/// `add-rect`/`add-ellipse`/`add-polygon`/`add-line` 认的全部键。
+/// 只有 polygon/line 才认 `points`（其余 kind 上的 points 是死数据，见
+/// `build_shape_layer` 里的拒绝）；只有 rect 才认 `radius`。
+fn add_shape_keys(kind : @core.ShapeKind) -> Array[String] {
+  let ks : Array[String] = [
+    "id", "name", "x", "y", "w", "h", "fill", "lgrad", "stroke", "stroke_w", "opacity", "blend",
+    "radius", "rot", "visible", "tag",
+  ]
+  if kind is @core.ShapeKind::Polygon || kind is @core.ShapeKind::Line {
+    ks.push("points")
+  }
+  ks
+}
+
+///|
+fn set_style_keys() -> Array[String] {
+  [
+    "fill", "lgrad", "stroke", "stroke_w", "opacity", "blend", "radius", "rot", "visible", "name",
+    "tag",
+  ]
+}
+
+///|
 fn cmd_set_style(s : Session, tokens : Array[String]) -> String {
   if tokens.length() < 2 {
-    return err("用法：set-style <id> [fill=..] [lgrad=..] [stroke=..] [stroke_w=..] [opacity=..] [blend=..] [radius=..] [rot=..] [visible=..] [name=..]")
+    // 用法串从键清单**生成**（此前是手写的第二份拷贝，加了 tag 就会不同步）
+    let usage = set_style_keys().map(fn(k) { "[\{k}=..]" }).join(" ")
+    return err("用法：set-style <id> \{usage}")
   }
   let doc = match require_doc(s) {
     Ok(d) => d
@@ -561,6 +618,13 @@ fn cmd_set_style(s : Session, tokens : Array[String]) -> String {
   let id = tokens[1]
   if @core.find_layer(doc.layers, id) is None {
     return err("层不存在：\{id}")
+  }
+  // 参数校验必须在快照**之前**：被拒的命令不该留下一条撤销记录。
+  // 这里曾经对拼错的键、漏了 `=` 的裸词、空值全部静默返回 ok 而一个像素
+  // 没改（`fil=#FF0000` / `fill` / `fill=` 三种都试过，指纹一字未变）。
+  match check_kv_args(tokens, 2, set_style_keys(), "set-style") {
+    Ok(_) => ()
+    Err(e) => return err(e)
   }
   // 快照必须在任何修改之前（其他命令同此纪律；此前误放在修改后，
   // 导致 undo 恢复的是已改状态——e2e 抓出）。
@@ -740,6 +804,10 @@ fn cmd_add_text(s : Session, tokens : Array[String]) -> String {
     Err(e) => return err(e)
   }
   let m = kv_args(tokens, 1)
+  match check_kv_args(tokens, 1, add_text_keys(), "add-text") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }
   let text = match m.get("text") {
     Some(t) => t
     None => return err("add-text 需要 text=<内容>（含空格用双引号包起来：text=\"Hello World\"）")
@@ -1072,19 +1140,7 @@ fn cmd_tag(s : Session, tokens : Array[String]) -> String {
     return err("层不存在：\{id}")
   }
   snapshot(s, doc, "tag \{id} \{tag}")
-  let _ = update_layer(doc.layers, id, fn(l) {
-    let tags = l.tags.copy()
-    let mut dup = false
-    for t in tags {
-      if t == tag {
-        dup = true
-      }
-    }
-    if !dup {
-      tags.push(tag)
-    }
-    { ..l, tags }
-  })
+  let _ = update_layer(doc.layers, id, fn(l) { @core.layer_with_tag(l, tag) })
   "{\"ok\":true,\"op\":\"tag\",\"id\":\"\{id}\",\"tag\":\"\{tag}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
 }
 
@@ -1818,6 +1874,10 @@ fn tools_json() -> String {
 fn cmd_add_paint(s : Session, tokens : Array[String]) -> String {
   let doc = match require_doc(s) {
     Ok(d) => d
+    Err(e) => return err(e)
+  }
+  match check_kv_args(tokens, 1, ["id", "name"], "add-paint") {
+    Ok(_) => ()
     Err(e) => return err(e)
   }
   let m = kv_args(tokens, 1)

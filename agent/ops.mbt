@@ -84,6 +84,53 @@ fn find_eq(s : String) -> Int? {
 }
 
 ///|
+/// 逐个检查 `key=value` 形式的参数：**未知的键、缺 `=` 的裸词、空键、空值
+/// 一律拒绝**。
+///
+/// `kv_args` 是**静默**的：认不出 `=` 的 token 直接丢、空值的也丢。于是
+/// `set-style l1 fil=#FF0000`（拼错）、`set-style l1 fill`（漏了 `=`）、
+/// `set-style l1 fill=`（空值）**全都返回 ok 而一个像素没改**——调用方以为
+/// 改成功了。`set-mask` 当年栽的正是这一类（"照字典传 x= y= w= h= 会什么都
+/// 不改却返回 ok"），这里把它变成通用检查。
+pub fn check_kv_args(
+  tokens : Array[String],
+  from : Int,
+  allowed : Array[String],
+  ctx : String,
+) -> Result[Unit, String] {
+  let mut i = from
+  while i < tokens.length() {
+    let t = tokens[i]
+    match find_eq(t) {
+      Some(eq) => {
+        if eq == 0 {
+          return Err("\{ctx}：`\{t}` 缺键名（应为 key=value）")
+        }
+        if eq >= t.length() - 1 {
+          let k0 = t[0:eq].to_owned()
+          return Err("\{ctx}：`\{k0}=` 的值是空的（要清空请用专门的命令，别用空值）")
+        }
+        let k = t[0:eq].to_owned()
+        if !allowed.contains(k) {
+          let hint = match k {
+            "points" => "（顶点只能在 add-polygon/add-line 建层时给，建完没有改顶点的命令）"
+            "x" | "y" => "（改位置用 move）"
+            "w" | "h" => "（改尺寸用 resize）"
+            "text" => "（改文字用 set-text）"
+            "font_size" => "（字号在 add-text 建层时给）"
+            _ => ""
+          }
+          return Err("\{ctx}：不认识的参数 `\{k}`\{hint}；认得的是 \{allowed.join("/")}")
+        }
+      }
+      None => return Err("\{ctx}：`\{t}` 不是 key=value 形式（是不是漏了 `=`？）")
+    }
+    i = i + 1
+  }
+  Ok(())
+}
+
+///|
 /// k=v 参数表（同键后值覆盖前值）。
 pub fn kv_args(tokens : Array[String], from : Int) -> Map[String, String] {
   let m : Map[String, String] = Map([])
@@ -290,6 +337,16 @@ pub fn apply_style_kv(
     }
     None => ()
   }
+  match m.get("tag") {
+    Some(v) => {
+      // 兑现注释里的承诺（此前 `tag=` 被静默忽略——不报错、tags 为空）
+      if v == "" {
+        return Err("tag 不能为空")
+      }
+      nl = @core.layer_with_tag(nl, v)
+    }
+    None => ()
+  }
   match m.get("radius") {
     Some(v) => match to_d(v) {
       Some(r) => {
@@ -372,6 +429,15 @@ pub fn build_shape_layer(
   // 默认填充：灰色；显式 fill= 可覆盖
   match m.get("points") {
     Some(v) => {
+      // `points` 只有 polygon 与 line 的渲染路径读（`in_polygon` + 折线描边
+      // 距离测试）。矩形/椭圆上给 points 会**写进 canonical JSON、改变指纹，
+      // 而画面逐位不变**——和"椭圆上的 radius"、"rect 上的 text" 是同一个
+      // 死数据 bug（实测：指纹 7248c56f→189c73d6，render_sha 一字未变）。
+      if !(kind is @core.ShapeKind::Polygon) && !(kind is @core.ShapeKind::Line) {
+        return Err(
+          "points 只对 polygon/line 有意义：这层是 \{kind_str(kind)}，渲染器不读它的顶点（矩形/椭圆用 w/h/radius 定义形状；要折线请用 add-polygon）",
+        )
+      }
       match parse_points(v) {
         Ok(pts) => l = { ..l, points: pts }
         Err(e) => return Err(e)
@@ -429,6 +495,15 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
     // 非矩形层的 `corner_radius` 同上：入口（add-*/set-style）已拒绝，
     // 这里兜住手改 design.json 的容器——它会被写进 canonical JSON、
     // 改变指纹，而渲染器只在 Rect 分支读它。
+    // 同 radius：非 polygon/line 层上的 `points` 是死数据（渲染器只在
+    // `in_polygon` 与折线描边距离测试里读顶点）。
+    if !(l.kind is @core.ShapeKind::Polygon) && !(l.kind is @core.ShapeKind::Line) {
+      if l.points.length() > 0 {
+        v.push(
+          "P2 noop 层 \{l.id} 是 \{kind_str(l.kind)} 却带着 \{l.points.length()} 个顶点（渲染器只对 polygon/line 读 points，纯粹改变指纹）",
+        )
+      }
+    }
     if !(l.kind is @core.ShapeKind::Rect) {
       if l.corner_radius != 0.0 {
         v.push(

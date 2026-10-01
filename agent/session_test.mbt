@@ -839,3 +839,107 @@ test "radius 只对矩形有意义：椭圆上传 radius 必须在入口被拒" 
   // 「报了字段名但没报值」的写法满足（实测：那样写这个变异存活了）。
   assert_true(joined.contains("radius=7"), msg="lint 要报出具体值：\{joined}")
 }
+
+///|
+test "参数零容忍：拼错的键、漏了 = 的裸词、空值都必须拒绝，不许静默 no-op" {
+  // `kv_args` 是**静默**的（认不出 `=` 的 token 直接丢）。于是
+  // `set-style l1 fil=#FF0000`（拼错）、`set-style l1 fill`（漏 `=`）、
+  // `set-style l1 fill=`（空值）**全都返回 ok 而一个像素没改**——
+  // 调用方以为改成功了。set-mask 当年栽的正是这一类。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 64 64 uuid=kvzero")
+  let _ = run(s, "add-rect x=0 y=0 w=40 h=40 fill=#FF0000FF name=R")
+  let fp0 = run(s, "fingerprint")
+  let e1 = run(s, "set-style l1 fil=#0000FFFF")
+  assert_true(e1.contains("不认识的参数"), msg="拼错的键要拒绝：\{e1}")
+  let e2 = run(s, "set-style l1 fill")
+  assert_true(e2.contains("不是 key=value"), msg="漏 `=` 要拒绝：\{e2}")
+  let e3 = run(s, "set-style l1 fill=")
+  assert_true(e3.contains("值是空的"), msg="空值要拒绝：\{e3}")
+  // 关键词归别的命令管时给出指路
+  assert_true(run(s, "set-style l1 points=0,0;1,1").contains("顶点只能"), msg="points 要指路")
+  assert_true(run(s, "set-style l1 text=hi").contains("set-text"), msg="text 要指路")
+  assert_true(run(s, "set-style l1 w=10").contains("resize"), msg="w 要指路")
+  // 三次被拒之后，文档必须**逐位没变**（连指纹都不该动）
+  assert_eq(run(s, "fingerprint"), fp0, msg="被拒的命令不许改文档")
+  // add-* 同样
+  assert_true(run(s, "add-rect x=0 y=0 w=5 h=5 radus=8").contains("不认识的参数"), msg="add-rect 拼错要拒")
+  assert_true(run(s, "add-text x=0 y=0 text=hi fontsize=20").contains("不认识的参数"), msg="add-text 拼错要拒")
+  assert_true(run(s, "add-paint bogus=1").contains("不认识的参数"), msg="add-paint 拼错要拒")
+  // 正常路径不许误伤
+  assert_true(!run(s, "set-style l1 fill=#00FF00FF opacity=0.5").contains("error"), msg="正常参数要能用")
+}
+
+///|
+test "tag= 必须真的落上（此前被静默忽略：注释说会应用，实现里没那条分支）" {
+  // ops.mbt 里 `apply_style_kv` 的注释写着它会应用 `.../name/tag`，但实现里
+  // 没有 tag 分支 —— 于是 `add-rect … tag=background` 不报错、`tags` 为空，
+  // 而两条既有测试都用着它、谁也没断言它真的落上（"注册了≠接得上"的同型）。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 64 64 uuid=tagkv")
+  let _ = run(s, "add-rect x=0 y=0 w=40 h=40 fill=#FF0000FF name=A tag=background")
+  let q1 = run(s, "query-layer l1")
+  assert_true(q1.contains("background"), msg="add-rect 的 tag= 必须落上：\{q1}")
+  // 追加且去重（与 tag 命令同一实现）
+  let _ = run(s, "set-style l1 tag=前景")
+  let q2 = run(s, "query-layer l1")
+  assert_true(q2.contains("前景"), msg="set-style 的 tag= 也要落上：\{q2}")
+  assert_true(q2.contains("background"), msg="追加不能覆盖原有标签：\{q2}")
+  let _ = run(s, "set-style l1 tag=background")
+  let q3 = run(s, "query-layer l1")
+  // 数一下 background 出现几次（重复添加不该产生第二条）
+  let mut n = 0
+  let mut rest = q3
+  while true {
+    match rest.find("background") {
+      Some(i) => {
+        n = n + 1
+        rest = rest[i + 10:].to_owned()
+      }
+      None => break
+    }
+  }
+  assert_eq(n, 1, msg="重复标签不该重复添加：\{q3}")
+  // tag 命令本身仍可用（两条路径共用 @core.layer_with_tag）
+  let _ = run(s, "tag l1 命令加的")
+  assert_true(run(s, "query-layer l1").contains("命令加的"), msg="tag 命令仍要能用")
+}
+
+///|
+test "points 只对 polygon/line 有意义：rect 上给顶点是死数据，必须拒绝" {
+  // 实测：`add-rect … points=0,0;10,10` 指纹 7248c56f→189c73d6（变了），
+  // render_sha256 一字未变——与椭圆上的 radius、rect 上的 text 同型。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 64 64 uuid=pointsdead")
+  let r = run(s, "add-rect x=0 y=0 w=40 h=40 fill=#FF0000FF points=0,0;10,10")
+  // 这一层拒绝来自**键校验**（`points` 不在 rect 的键集里），比
+  // `build_shape_layer` 里的 kind 门更早。断言咬住**这条**消息：如果谁把
+  // `points` 加进 rect 的键集，拒绝会改由 kind 门给出，这条断言就红。
+  assert_true(r.contains("不认识的参数 `points`"), msg="rect 的 points 必须被拒：\{r}")
+  assert_true(r.contains("顶点只能"), msg="要指路到 add-polygon：\{r}")
+  // polygon/line 照常，且顶点读得回来（此前既不报、也没命令能改）
+  // 被拒的命令**也会消耗一个 id**，所以别写死 l2；从回包取真实 id。
+  let added = run(
+    s,
+    "add-polygon x=0 y=0 w=40 h=40 points=0,0;40,0;20,40 fill=#00FF00FF name=tri",
+  )
+  let pid = match @core.parse_json(added) {
+    Ok(v) =>
+      match v.get("id") {
+        Some(@core.JValue::JStr(x)) => x
+        _ => abort("add-polygon 没回 id：\{added}")
+      }
+    Err(e) => abort("add-polygon 回包不是 JSON：\{e}")
+  }
+  let q = run(s, "query-layer \{pid}")
+  assert_true(q.contains("[[0,0],[40,0],[20,40]]"), msg="顶点必须报得出来：\{q}")
+  // 手改容器的情形由 lint 兜住
+  let doc = @core.new_document("pointsdead-2", 64, 64)
+  let l = @core.default_layer("r1", "hand", 0.0, 0.0, 20.0, 20.0)
+  doc.layers.push({ ..l, kind: @core.ShapeKind::Rect, points: [(0.0, 0.0), (5.0, 5.0)] })
+  let joined = @agent.lint_doc(doc).join(" | ")
+  assert_true(joined.contains("2 个顶点"), msg="lint 必须报死顶点：\{joined}")
+}
