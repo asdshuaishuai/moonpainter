@@ -30,6 +30,18 @@
    FFI 只许出现在 cli（native-only），引擎包保持纯字节进出。
    `render` 依赖 `pixel`（编辑表是渲染的**最终一遍**：层合成底图 → 施加编辑表 →
    再裁剪缩放）；`pixel` 绝不反向依赖 `render`。改这里必须同步 DESIGN §2 依赖图。
+   **这条现在有门禁**（`dep_audit.py`，verify.sh 第 12 步）：内部边全部朝前、
+   引擎包零第三方、`extern` FFI 只在 cli/demo、demo 不 import 任何引擎包。
+   为什么以前没人疼：moon 编译器**只管有没有环**——反向依赖不构成环，照样编得过。
+   同一步还做 **DESIGN §3 ↔ `core/document.mbt` 逐字对账**：层类型 ==
+   `ShapeKind` 变体、层属性 == `Layer` 字段、填充/混合同理，**双向**（代码加了
+   而文档没写要红，文档写了代码里没有的也要红）。实测这段描述是早期版本写的：
+   层类型列 6 种而实际 9 种（少了 Text/Adjust/Raster），层属性列 17 个而实际
+   25 个（少了 kind/flip_h/flip_v/text/font_size/mask/adjust/dabs）——
+   读文档的人**根本不知道层有蒙版、有翻转、有笔触**。散文里的清单没人对账就会烂，
+   所以名单进标记块（`<!-- layer-kinds:begin/end -->` 等）。
+   ⚠️ 改 `Layer`/`ShapeKind`/`Fill`/`BlendMode` 的声明后，**同一次提交里**
+   改 DESIGN §3 的标记块，否则第 12 步会红。
    重采样路径不许分叉：空编辑表必须走与"没有编辑表"逐位相同的代码路径。
 6. **工具字典同步**：改 agent/session.mbt 的命令分发必须同步 agent/tools.mbt
    （反之亦然）——它是 help/list-tools/文档的单一事实源。
@@ -189,8 +201,10 @@
                                 # 分母 → 日志里的"10/10"是真数、分母是假的）
                                 # 12/12 依赖方向门禁（铁律 5）：内部边全部朝前、
                                 # pixel 不依赖 render、引擎包零第三方、FFI 只在
-                                # cli/demo、demo 不 import 引擎包（只走 wasm ABI）。
-                                # moon 编译器只管有没有环，**反向依赖照样编得过**
+                                # cli/demo、demo 不 import 引擎包（只走 wasm ABI）；
+                                # 外加 DESIGN §3 ↔ core/document.mbt 逐字对账
+                                # （层类型/层属性/填充/混合，双向）。moon 编译器
+                                # 只管有没有环，**反向依赖照样编得过**
 ./build_demo.sh                 # AI 修图 demo 构建 + Node headless 自检 + npm SDK 冒烟
                                 # （含 save→open 往返）+ 页面接线源码核对 + demo 测试
                                 # （工具面与 MVSL 闭环可达，需 Node；

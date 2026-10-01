@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""依赖方向门禁（verify.sh 第 12 步）。
+"""结构门禁（verify.sh 第 12 步）：依赖方向 + 模型文档逐字对账。
 
 铁律 5 说了三件事，此前**一件都没有门禁**：
 
@@ -20,7 +20,16 @@ moon 编译器只管有没有环，**反向依赖照样编得过**。
 3. `pixel` 绝不依赖 `render`（铁律 5 点名的反向边）；
 4. 引擎包（base…wasm）零第三方依赖；第三方只许出现在 demo；
 5. demo 不 import 任何 `moonpainter/` 包（引擎交互只走 wasm ABI）；
-6. `extern "…"` FFI 只许出现在 cli/demo，引擎包内出现 → 红。
+6. `extern "…"` FFI 只许出现在 cli/demo，引擎包内出现 → 红；
+7. **DESIGN §3 的模型描述与 `core/document.mbt` 逐字对账**：层类型 ==
+   `ShapeKind` 变体、层属性 == `Layer` 字段、填充 == `Fill`、混合 == `BlendMode`。
+
+第 7 条是这轮加进来的，理由：DESIGN §3 一直是**早期版本**写的——层类型列了 6 种
+而实际 9 种（少了 Text/Adjust/Raster），层属性列了 17 个而实际 25 个（少了
+kind/flip_h/flip_v/text/font_size/mask/adjust/dabs）。读文档的人**根本不知道
+层有蒙版、有翻转、有笔触**。散文里的清单没人对账就一定会烂，所以名单进标记块
+（`<!-- layer-kinds:begin/end -->` 等），由这里逐字核。**双向**：代码加了字段/
+变体而文档没写 → 红；文档写了代码里没有的 → 也红。
 
 用法：python3 dep_audit.py
 """
@@ -58,6 +67,56 @@ def parse_pkg(path):
             else:
                 third.add(dep)
     return internal, third
+
+
+def decl_names(path, keyword, name):
+    """从 `pub(all) enum|struct NAME { … }` 里取变体名 / 字段名。
+
+    只认**声明体**里的行：枚举取 `  Name`（可带载荷），结构体取 `  field : Type`。
+    注释行（`///`）与 `}` 之后的都排除。
+    """
+    text = path.read_text(encoding="utf-8")
+    m = re.search(r"\b%s\s+%s\s*\{" % (keyword, re.escape(name)), text)
+    if not m:
+        return None
+    i = text.index("{", m.end() - 1)
+    depth, j = 0, i
+    while j < len(text):
+        if text[j] == "{":
+            depth += 1
+        elif text[j] == "}":
+            depth -= 1
+            if depth == 0:
+                break
+        j += 1
+    body = text[i + 1:j]
+    out = []
+    pdepth = 0  # 载荷括号深度：`LinearGradient(Int, Int, Double, …)` 是**多行**的，
+    for line in body.split("\n"):  # 载荷里的 `Int`/`Double` 不是变体（实测踩过）
+        code = line.split("//")[0]
+        stripped = code.strip()
+        if pdepth == 0 and stripped:
+            if keyword == "enum":
+                mm = re.match(r"([A-Z][A-Za-z0-9]*)", stripped)
+            else:
+                mm = re.match(r"([a-z_][a-z_0-9]*)\s*:", stripped)
+            if mm:
+                out.append(mm.group(1))
+        pdepth += code.count("(") - code.count(")")
+        if pdepth < 0:
+            pdepth = 0
+    return out
+
+
+def doc_block(doc, marker):
+    """取 `<!-- marker:begin -->` 与 `:end` 之间的反引号名字（按出现顺序）。"""
+    text = doc.read_text(encoding="utf-8")
+    b = "<!-- %s:begin -->" % marker
+    e = "<!-- %s:end -->" % marker
+    if b not in text or e not in text:
+        return None
+    seg = text[text.index(b) + len(b):text.index(e)]
+    return re.findall(r"`([A-Za-z_][A-Za-z_0-9]*)`", seg)
 
 
 def main():
@@ -111,6 +170,30 @@ def main():
     for d in sorted(p.name for p in ROOT.iterdir() if p.is_dir()):
         if (ROOT / d / "moon.pkg").exists() and d not in ORDER:
             fails.append("包 %s 有 moon.pkg 却没登记进 ORDER（静默不审 = 这块覆盖没了）" % d)
+
+    # 7. DESIGN §3 的模型描述 ↔ core/document.mbt 逐字对账
+    ir = ROOT / "core" / "document.mbt"
+    design = ROOT / "DESIGN.md"
+    for marker, keyword, decl, label in (
+        ("layer-kinds", "enum", "ShapeKind", "层类型"),
+        ("layer-fields", "struct", "Layer", "层属性"),
+        ("fill-kinds", "enum", "Fill", "填充"),
+        ("blend-kinds", "enum", "BlendMode", "混合"),
+    ):
+        want = decl_names(ir, keyword, decl)
+        got = doc_block(design, marker)
+        if want is None:
+            fails.append("core/document.mbt 里找不到 %s 声明（判据自己瞎了）" % decl)
+        elif got is None:
+            fails.append("DESIGN.md 里找不到 %s 标记块（%s 的清单没被对账）"
+                         % (marker, label))
+        elif set(got) != set(want):
+            fails.append("DESIGN §3 的%s与代码不符：文档多写 %s / 漏写 %s"
+                         % (label, sorted(set(got) - set(want)), sorted(set(want) - set(got))))
+        elif len(got) != len(set(got)):
+            fails.append("DESIGN §3 的%s清单里有重复" % label)
+        else:
+            print("模型文档 OK（%s %s：%d 项逐字对上）" % (label, decl, len(want)))
 
     if fails:
         print("依赖方向门禁失败 %d 条：" % len(fails))

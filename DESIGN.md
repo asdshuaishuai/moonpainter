@@ -71,9 +71,30 @@ macOS 原生类 Photoshop 编辑器。对本工程最有价值的三块遗产：
 
 ## 3. IR 文档模型（core/document.mbt）
 
-- 层类型：`Rect / Ellipse / Line / Polygon / Image / Group`；
-- 层属性：id/name/visible/opacity(0..1)/blend/x/y/w/h/rotation_deg/corner_radius/points/fill/stroke/asset_hash/tags/children；
-- 填充：`NoFill / Solid(#AARRGGBB) / LinearGradient(c0,c1,x0,y0,x1,y1 局部 0..1 端点)`；
+- 层类型（`ShapeKind`，与代码**逐字对账**，`dep_audit.py` 第 12 步）：
+  <!-- layer-kinds:begin -->
+  `Rect` `Ellipse` `Line` `Polygon` `Image` `Group` `Text` `Adjust` `Raster`
+  <!-- layer-kinds:end -->
+  ——`Text` 是 ASCII 真字形（非 ASCII 盒形占位，诚实边界）、`Adjust` 作用于其下
+  全部可见层的合成结果（PSD 语义）、`Raster` 是画笔层（`dabs` 为唯一内容）。
+- 层属性（`Layer` 字段，与代码**逐字对账**）：
+  <!-- layer-fields:begin -->
+  `id` `name` `kind` `visible` `opacity` `blend` `x` `y` `w` `h` `rotation_deg`
+  `corner_radius` `flip_h` `flip_v` `text` `font_size` `mask` `adjust` `points`
+  `dabs` `fill` `stroke` `asset_hash` `tags` `children`
+  <!-- layer-fields:end -->
+  ——`opacity` 0..1；`rotation_deg` 顺时针绕层中心；`flip_h/flip_v` 先翻转后旋转；
+  部分字段只对特定 kind 有意义，那一面由 `agent/ops.mbt` 的 `kind_only_fields`
+  表 + lint 罩着（铁律 6），**别在文档里另写一份"哪个字段属于哪个 kind"**。
+- 填充（`Fill`，与代码逐字对账）：
+  <!-- fill-kinds:begin -->
+  `NoFill` `Solid` `LinearGradient`
+  <!-- fill-kinds:end -->
+  ——`LinearGradient(c0,c1,x0,y0,x1,y1)` 端点是**局部 0..1**（非像素，铁律 8）。
+- 混合（`BlendMode`，与代码逐字对账）：
+  <!-- blend-kinds:begin -->
+  `Normal` `Multiply` `Screen` `Overlay` `Darken` `Lighten` `Difference`
+  <!-- blend-kinds:end -->
 - 层序 = 数组序自底向上；Group 以 children 嵌套，直通合成（组只传递可见性/透明度，组级混合不生效——诚实边界）；
 - Image 层引用 `assets/sha256/<hash>` 内容寻址资产，置入矩形拉伸绘制（最近邻，诚实边界）；
 - 文档：uuid/画布(可变，set-canvas 用)/dpi/profile("srgb")/layers/assets/params/next_layer_no。
