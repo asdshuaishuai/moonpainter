@@ -18,9 +18,24 @@ test "build_shape_layer：非 polygon/line 给 points 必须拒绝（命令面�
     Ok(_) => abort("rect 上的 points 必须被拒")
     Err(e) => assert_true(e.contains("只对 polygon/line 有意义"), msg=e)
   }
-  // polygon：照常接受
+  // polygon：够数就接受（样本从 2 个顶点改成 3 个——不是"迁就测试"：
+  // `in_polygon` 第一句就是 `if pts.length() < 3 { return false }`，
+  // 2 顶点的 polygon 一个像素都不画，属于"装了却什么都不干"，现在入口就拒）
+  m.set("points", "0,0;5,5;10,0")
   match build_shape_layer("p1", @core.ShapeKind::Polygon, m) {
-    Ok(l) => assert_eq(l.points.length(), 2, msg="polygon 要收下顶点")
+    Ok(l) => assert_eq(l.points.length(), 3, msg="polygon 要收下顶点")
     Err(e) => abort("polygon 的 points 不该被拒：\{e}")
+  }
+  // 同一道门里再加一格：顶点数不足也要拒（哪怕 kind 是对的）
+  m.set("points", "0,0;5,5")
+  match build_shape_layer("p2", @core.ShapeKind::Polygon, m) {
+    Ok(_) => abort("2 顶点的 polygon 必须被拒（渲染器不围面）")
+    Err(e) => assert_true(e.contains("至少要 3 个顶点"), msg=e)
+  }
+  // line：2 个顶点就够（它画的是线段，不围面）
+  m.set("points", "0,0;5,5")
+  match build_shape_layer("l1", @core.ShapeKind::Line, m) {
+    Ok(l) => assert_eq(l.points.length(), 2, msg="2 顶点的线段合法")
+    Err(e) => abort("2 顶点的 line 不该被拒：\{e}")
   }
 }

@@ -434,14 +434,10 @@ MUTS = [
     ),
     (
         "R37",
-        "build_shape_layer 不查 kind 就收 points（rect 上的死顶点）",
+        "points 的 kind 门写反（rect 收下顶点、polygon 反被拒）—— 判据的允许集合错",
         "agent/ops.mbt",
-        r"""      if !(kind is @core.ShapeKind::Polygon) && !(kind is @core.ShapeKind::Line) {
-        return Err(
-          "points 只对 polygon/line 有意义：这层是 \{kind_str(kind)}，渲染器不读它的顶点（矩形/椭圆用 w/h/radius 定义形状；要折线请用 add-polygon）",
-        )
-      }""",
-        r"""      let _ = kind""",
+        """      if !(nl.kind is @core.ShapeKind::Polygon) && !(nl.kind is @core.ShapeKind::Line) {""",
+        """      if !(nl.kind is @core.ShapeKind::Rect) && !(nl.kind is @core.ShapeKind::Line) {""",
         "killed",
     ),
     (
@@ -955,6 +951,56 @@ MUTS = [
         "agent/session.mbt",
         r"""      } else if c == '\\' && i < n {""",
         r"""      } else if false {""",
+        "killed",
+    ),
+    (
+        "Q21",
+        "set-style 收下 points 但不写回层（回 ok 而顶点没变，指纹照样变）",
+        "agent/ops.mbt",
+        """      match parse_points_for(nl.kind, v) {
+        Ok(pts) => nl = { ..nl, points: pts }
+        Err(e) => return Err(e)
+      }""",
+        """      match parse_points_for(nl.kind, v) {
+        Ok(pts) => nl = { ..nl, points: nl.points }
+        Err(e) => return Err(e)
+      }""",
+        "killed",
+    ),
+    (
+        "Q22",
+        "set-style 不在入口拦「非 polygon/line 上的 points」（死数据照样写进 JSON 改指纹）",
+        "agent/ops.mbt",
+        """      if !(nl.kind is @core.ShapeKind::Polygon) && !(nl.kind is @core.ShapeKind::Line) {
+        return Err(
+          "points 只对 polygon/line 有意义：这层是 \{kind_str(nl.kind)}""",
+        """      if !(nl.kind is @core.ShapeKind::Polygon) && !(nl.kind is @core.ShapeKind::Line) && false {
+        return Err(
+          "points 只对 polygon/line 有意义：这层是 \{kind_str(nl.kind)}""",
+        "killed",
+    ),
+    (
+        "Q23",
+        "顶点数下界放宽（2 顶点的 polygon 收了，而渲染器一个像素都不落）",
+        "agent/ops.mbt",
+        """  let need = points_min_count(kind)
+  if need == 0 || n >= need {""",
+        """  let need = points_min_count(kind)
+  if need == 0 || n + 1 >= need {""",
+        "killed",
+    ),
+    (
+        "Q24",
+        "lint 不再报顶点数不足（手改容器里「什么都不画」的层没了声音）",
+        "agent/ops.mbt",
+        """      let e = points_count_error(l.kind, l.points.length())
+      if e != "" {
+        v.push("P2 geom 层 \{l.id}：\{e}")
+      }""",
+        """      let e = points_count_error(l.kind, l.points.length())
+      if e != "" && false {
+        v.push("P2 geom 层 \{l.id}：\{e}")
+      }""",
         "killed",
     ),
     (

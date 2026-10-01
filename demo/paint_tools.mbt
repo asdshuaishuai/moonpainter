@@ -228,6 +228,7 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
         ("opacity", "number:透明度 0..1"),
         ("blend", "string:混合模式"),
         ("radius", "number:圆角"),
+        ("points", "string:顶点 x,y;x,y;…（层内局部坐标，只对 polygon/line 有效）"),
         ("rot", "number:旋转角度（顺时针度）"),
         ("visible", "string:true/false"),
         ("name", "string:新名称"),
@@ -730,7 +731,7 @@ pub fn tool_line(name : String, args : Json) -> String {
         args,
         [
           "fill", "lgrad", "stroke", "stroke_w", "opacity", "blend", "radius",
-          "rot", "visible", "name",
+          "points", "rot", "visible", "name",
         ],
       )
       "set-style \{id} \{tail}"

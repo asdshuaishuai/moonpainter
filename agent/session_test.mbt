@@ -857,8 +857,12 @@ test "参数零容忍：拼错的键、漏了 = 的裸词、空值都必须拒�
   assert_true(e2.contains("不是 key=value"), msg="漏 `=` 要拒绝：\{e2}")
   let e3 = run(s, "set-style l1 fill=")
   assert_true(e3.contains("值是空的"), msg="空值要拒绝：\{e3}")
-  // 关键词归别的命令管时给出指路
-  assert_true(run(s, "set-style l1 points=0,0;1,1").contains("顶点只能"), msg="points 要指路")
+  // 关键词归别的命令管时给出指路。
+  // `points` 现在是 set-style 认得的键，但**只对 polygon/line 有意义** ——
+  // 这一层是矩形，所以拒绝改由 kind 门给出（与 radius 同一句话），
+  // 断言咬住"两类层才收顶点"这个语义，而不是某句措辞。
+  let ep = run(s, "set-style l1 points=0,0;1,1")
+  assert_true(ep.contains("只对 polygon/line 有意义"), msg="points 要指路：\{ep}")
   assert_true(run(s, "set-style l1 text=hi").contains("set-text"), msg="text 要指路")
   assert_true(run(s, "set-style l1 w=10").contains("resize"), msg="w 要指路")
   // 三次被拒之后，文档必须**逐位没变**（连指纹都不该动）
@@ -919,7 +923,10 @@ test "points 只对 polygon/line 有意义：rect 上给顶点是死数据，必
   // `build_shape_layer` 里的 kind 门更早。断言咬住**这条**消息：如果谁把
   // `points` 加进 rect 的键集，拒绝会改由 kind 门给出，这条断言就红。
   assert_true(r.contains("不认识的参数 `points`"), msg="rect 的 points 必须被拒：\{r}")
-  assert_true(r.contains("顶点只能"), msg="要指路到 add-polygon：\{r}")
+  // 指路要同时给出**两条路**：建层（add-polygon/add-line）与原地改顶点
+  // （set-style … points=）。只写前者，调用方就会以为改不动只能删了重加。
+  assert_true(r.contains("add-polygon"), msg="要指路到建层：\{r}")
+  assert_true(r.contains("set-style"), msg="要指路到改顶点：\{r}")
   // polygon/line 照常，且顶点读得回来（此前既不报、也没命令能改）
   // 被拒的命令**也会消耗一个 id**，所以别写死 l2；从回包取真实 id。
   let added = run(

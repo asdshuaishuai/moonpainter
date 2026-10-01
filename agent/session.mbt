@@ -644,8 +644,8 @@ fn add_shape_keys(kind : @core.ShapeKind) -> Array[String] {
 ///|
 fn set_style_keys() -> Array[String] {
   [
-    "fill", "lgrad", "stroke", "stroke_w", "opacity", "blend", "radius", "rot", "visible", "name",
-    "tag",
+    "fill", "lgrad", "stroke", "stroke_w", "opacity", "blend", "radius", "points", "rot", "visible",
+    "name", "tag",
   ]
 }
 

@@ -113,7 +113,7 @@ pub fn check_kv_args(
         let k = t[0:eq].to_owned()
         if !allowed.contains(k) {
           let hint = match k {
-            "points" => "（顶点只能在 add-polygon/add-line 建层时给，建完没有改顶点的命令）"
+            "points" => "（顶点只在 polygon/line 层上有意义：建层用 add-polygon/add-line，改已建层的顶点用 set-style <id> points=x,y;x,y;…）"
             "x" | "y" => "（改位置用 move）"
             "w" | "h" => "（改尺寸用 resize）"
             "text" => "（改文字用 set-text）"
@@ -259,6 +259,52 @@ pub fn remove_layer(layers : Array[@core.Layer], id : String) -> Bool {
     i = i + 1
   }
   false
+}
+
+///|
+/// 顶点数下界：渲染器**只对 ≥3 个顶点的 polygon 围面**（`in_polygon` 第一句
+/// 就是 `if pts.length() < 3 { return false }`），**≥2 个顶点才画得出线段**。
+/// 少于下界 = 装了却什么都不干：指纹变了、`query-layer` 报着那串顶点、
+/// 画面逐位没变（实测 `add-polygon w=40 h=40 points=0,0;40,40` 回 ok、
+/// `lint` 报 0 违规、渲染一像素不落）。
+/// **一处实现，命令面与 lint 共用**——两处各写一遍就会分叉。
+pub fn points_min_count(kind : @core.ShapeKind) -> Int {
+  if kind is @core.ShapeKind::Polygon {
+    3
+  } else if kind is @core.ShapeKind::Line {
+    2
+  } else {
+    0 // 不适用：矩形/椭圆/文本/位图都不用顶点定义形状
+  }
+}
+
+///|
+/// 顶点数不足的说明（"" = 够，或这个 kind 本来就不用顶点）。
+/// **命令面（建层 + `set-style points=`）与 lint 共用这一句**——三处各写一遍
+/// 必然分叉（一处说 2、一处说 3，或者两处对"几分算够"各有一套）。
+pub fn points_count_error(kind : @core.ShapeKind, n : Int) -> String {
+  let need = points_min_count(kind)
+  if need == 0 || n >= need {
+    return ""
+  }
+  "\{kind_str(kind)} 至少要 \{need} 个顶点才画得出东西（\{n} 个 = 什么都不画）；只画两点之间的线段请用 add-line"
+}
+
+///|
+/// 按层类型解析并校验顶点串（命令面用）。
+pub fn parse_points_for(
+  kind : @core.ShapeKind,
+  s : String,
+) -> Result[Array[(Double, Double)], String] {
+  let pts = match parse_points(s) {
+    Ok(p) => p
+    Err(e) => return Err(e)
+  }
+  let e = points_count_error(kind, pts.length())
+  if e != "" {
+    return Err(e)
+  }
+  Ok(pts)
 }
 
 ///|
@@ -422,6 +468,25 @@ pub fn apply_style_kv(
     }
     None => ()
   }
+  match m.get("points") {
+    Some(v) => {
+      // 顶点原先只能在建层时给：想改一个三角形的顶点只能删了重加，而重加把层
+      // 推到栈顶（蒙版/标签/透明度/层序全丢）。这里补上"改得动"这条路，
+      // 与 set-text / set-adjust 同一条纪律。
+      // 种类检查与建层同一句话：非 polygon/line 上写 points 是**死数据**
+      // （写进 canonical JSON、改变指纹、画面逐位不变）。
+      if !(nl.kind is @core.ShapeKind::Polygon) && !(nl.kind is @core.ShapeKind::Line) {
+        return Err(
+          "points 只对 polygon/line 有意义：这层是 \{kind_str(nl.kind)}，渲染器不读它的顶点（矩形/椭圆用 w/h/radius 定义形状；要折线请用 add-line）",
+        )
+      }
+      match parse_points_for(nl.kind, v) {
+        Ok(pts) => nl = { ..nl, points: pts }
+        Err(e) => return Err(e)
+      }
+    }
+    None => ()
+  }
   match m.get("radius") {
     Some(v) => match to_d(v) {
       Some(r) => {
@@ -502,37 +567,30 @@ pub fn build_shape_layer(
   let mut l = @core.default_layer(id, name, x, y, w, h)
   l = { ..l, kind }
   // 默认填充：灰色；显式 fill= 可覆盖
-  match m.get("points") {
-    Some(v) => {
-      // `points` 只有 polygon 与 line 的渲染路径读（`in_polygon` + 折线描边
-      // 距离测试）。矩形/椭圆上给 points 会**写进 canonical JSON、改变指纹，
-      // 而画面逐位不变**——和"椭圆上的 radius"、"rect 上的 text" 是同一个
-      // 死数据 bug（实测：指纹 7248c56f→189c73d6，render_sha 一字未变）。
-      if !(kind is @core.ShapeKind::Polygon) && !(kind is @core.ShapeKind::Line) {
-        return Err(
-          "points 只对 polygon/line 有意义：这层是 \{kind_str(kind)}，渲染器不读它的顶点（矩形/椭圆用 w/h/radius 定义形状；要折线请用 add-polygon）",
-        )
-      }
-      match parse_points(v) {
-        Ok(pts) => l = { ..l, points: pts }
-        Err(e) => return Err(e)
-      }
-    }
-    None => if kind is @core.ShapeKind::Line {
-      // 默认对角线
-      l = { ..l, points: [(0.0, 0.0), (w, h)], fill: @core.Fill::NoFill, stroke: { color: 0xFF000000, width: 2.0 } }
-    }
+  // 只有 **line 的默认对角线**在这里给（那是"建层"的语义）。显式 `points=`/
+  // `stroke_w=` 一律交给末尾的 `apply_style_kv` —— 它俩此前在这里**各有一份
+  // 拷贝**（同一个判断两处实现）：`points` 的 kind 门与顶点数下界、`stroke_w`
+  // 的范围检查都在两边各写一遍。两份拷贝的后果实测到了：往这里注入
+  // "kind 门不生效"的变异**不会红**——另一份拷贝还在守（变异门判 SURVIVED）。
+  // 判据存活的原因不是"没人守"，是"守的人有两个"。
+  if !(m.get("points") is Some(_)) && kind is @core.ShapeKind::Line {
+    // 默认对角线
+    l = { ..l, points: [(0.0, 0.0), (w, h)], fill: @core.Fill::NoFill, stroke: { color: 0xFF000000, width: 2.0 } }
   }
-  match m.get("stroke_w") {
-    Some(_) => {
-      match arg_d(m, "stroke_w", 2.0) {
-        Ok(w) => l = { ..l, stroke: { color: l.stroke.color, width: w } }
-        Err(e) => return Err(e)
+  let built = apply_style_kv(l, m)
+  // 顶点数再判一次（用**同一句话**）：`points=` 走上面的字符串校验，
+  // 而"根本没给 points 的 polygon"要到这儿才看得出来 —— 0 顶点的多边形
+  // 渲染器同样一个像素不落，回包却是 ok。
+  match built {
+    Ok(nl) => {
+      let e = points_count_error(nl.kind, nl.points.length())
+      if e != "" {
+        return Err(e)
       }
+      Ok(nl)
     }
-    None => ()
+    Err(e) => Err(e)
   }
-  apply_style_kv(l, m)
 }
 
 ///|
@@ -695,6 +753,17 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
             "P2 geom 文本层 \{l.id} 的盒子装不下自己的文字（\{@core.fmt_num(l.w)}x\{@core.fmt_num(l.h)} < 估算 \{@core.fmt_num(ew)}x\{@core.fmt_num(eh)}）：渲染器不裁剪，字会画到盒子外，而 pick/overlay/lgrad 按盒子算",
           )
         }
+      }
+    }
+    // 顶点数不足：`in_polygon` 要求 ≥3、线段要 ≥2 —— 少于下界就是
+    // "装了却什么都不干"（指纹变了、query-layer 报着顶点、画面一像素不落）。
+    // 命令面已拦（add-polygon/add-line 与 set-style points= 共用
+    // `points_min_count`），这里兜住手改容器。下界与命令面**同一处实现**。
+    {
+      // 说明文字与命令面**同一句**（`points_count_error`）
+      let e = points_count_error(l.kind, l.points.length())
+      if e != "" {
+        v.push("P2 geom 层 \{l.id}：\{e}")
       }
     }
     // 顶点落在渲染窗外：那部分**不会被画出来**（`paint_layer` 只在

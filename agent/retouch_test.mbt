@@ -438,3 +438,93 @@ test "lint 兜住「顶点落在渲染窗外」：判据与渲染窗同一把尺
   let j5 = (@agent.lint_doc(d5)).join(" | ")
   assert_true(j5.contains("渲染窗外"), msg="线段的窗外顶点要报：\{j5}")
 }
+
+test "顶点改得动：set-style points= 原地改，蒙版/标签/层序都不丢（改得动吗）" {
+  // 此前顶点只能在建层时给（`set-style p1 points=…` 报"建完没有改顶点的命令"），
+  // 想改一个三角形的顶点只能删了重加 —— 而重加把层推到栈顶，蒙版/标签/
+  // 透明度/层序全丢。同 set-text / set-adjust 那条纪律。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 60 60")
+  let _ = run(s, "add-rect x=0 y=0 w=60 h=60 fill=#000000FF id=bg")
+  let _ = run(s, "add-polygon x=0 y=0 w=40 h=40 points=0,0;40,0;40,40 fill=#FF0000FF id=p1")
+  // 给这层挂上"重加就会丢"的东西：蒙版 + 标签 + 非默认透明度 + 名称
+  let _ = run(s, "add-mask p1 kind=ellipse x=0 y=0 w=30 h=30 invert=true")
+  let _ = run(s, "tag p1 hero")
+  let _ = run(s, "set-style p1 opacity=0.5 name=Tri")
+  let before = run(s, "query-layer p1")
+  assert_true(before.contains("\"points\":[[0,0],[40,0],[40,40]]"), msg=before)
+  assert_true(before.contains("hero"), msg=before)
+  // ① 改顶点：原地改，全部附带状态还在
+  let a = run(s, "set-style p1 points=0,0;20,0;20,20")
+  assert_true(!a.contains("error"), msg=a)
+  let after = run(s, "query-layer p1")
+  assert_true(after.contains("\"points\":[[0,0],[20,0],[20,20]]"), msg="顶点要真的换掉：\{after}")
+  assert_true(after.contains("hero"), msg="标签不能丢：\{after}")
+  assert_true(after.contains("0.5"), msg="透明度不能丢：\{after}")
+  assert_true(after.contains("invert"), msg="蒙版不能丢：\{after}")
+  // 层序也不能变（层还是第 2 个；重加会跑到最后）
+  let ls = run(s, "list-layers")
+  let ib = ls.find("bg").unwrap_or(-1)
+  let ip = ls.find("p1").unwrap_or(-1)
+  assert_true(ib >= 0 && ip > ib, msg="层序不能变：\{ls}")
+  // ② 改顶点要真的到像素：渲染 sha 必须变（"改成功了吗"的三个信号里最硬的那个）
+  let sh1 = run(s, "render 60")
+  let _ = run(s, "set-style p1 points=0,0;40,0;40,40")
+  let sh2 = run(s, "render 60")
+  assert_true(sh1 != sh2, msg="顶点改了画面必须变")
+  // ③ 线段也改得动（默认对角线 → 自定义折线）
+  let _ = run(s, "add-line x=0 y=0 w=40 h=40 id=l1")
+  let b = run(s, "set-style l1 points=0,0;0,40;40,40")
+  assert_true(!b.contains("error"), msg=b)
+  assert_true(run(s, "query-layer l1").contains("[[0,0],[0,40],[40,40]]"), msg="线段顶点要换掉")
+  // ④ 非 polygon/line 上写 points 是死数据（写进 JSON、改指纹、画面不变）→ 入口拒
+  let r = run(s, "set-style bg points=1,1;2,2;3,3")
+  assert_true(r.contains("只对 polygon/line 有意义"), msg="矩形要拒：\{r}")
+  let e = run(s, "set-style bg points=0,0;1")
+  assert_true(e.contains("只对 polygon/line 有意义"), msg="种类检查要在形态检查之前（同一句话）：\{e}")
+}
+
+test "顶点数不足 = 什么都不画：入口拒 + lint 兜（判据的空集也要说话）" {
+  // 实测 `add-polygon w=40 h=40 points=0,0;40,40` 回 ok、`lint` 报 0 违规，
+  // 而渲染器 `in_polygon` 第一句就是 `if pts.length() < 3 { return false }`
+  // —— 一个像素都不落，只有"指纹变了"这一个信号在说"改过了"。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 60 60")
+  let a = run(s, "add-polygon x=0 y=0 w=40 h=40 points=0,0;40,40 id=p2")
+  assert_true(a.contains("至少要 3 个顶点"), msg="2 顶点的多边形要拒：\{a}")
+  assert_true(run(s, "add-line x=0 y=0 w=40 h=40 points=0,0 id=l1").contains("至少 2 个顶点"), msg="1 顶点的线要拒")
+  // 根本不给 points 的 polygon：入口也要拒（0 顶点同样是"什么都不画"）
+  let nop = run(s, "add-polygon x=0 y=0 w=40 h=40 id=p0")
+  assert_true(nop.contains("至少要 3 个顶点") && nop.contains("0 个 = 什么都不画"), msg="不给顶点要拒：\{nop}")
+  // 正控：不给 points 的 line 合法（默认对角线）
+  assert_true(!run(s, "add-line x=0 y=0 w=40 h=40 id=l0").contains("error"), msg="line 的默认对角线要保留")
+  // 非数顶点同样不许静默（parse_points 走 to_d，一律报错）
+  assert_true(run(s, "add-polygon x=0 y=0 w=40 h=40 points=0,0;x,0;1,1 id=p3").contains("不是数字"), msg="非数顶点")
+  assert_true(run(s, "add-polygon x=0 y=0 w=40 h=40 points=0,0;1 id=p4").contains("x,y 形态"), msg="形态错")
+  // lint 兜住手改容器（命令面进不去的状态）
+  let mk = fn(pts : Array[(Double, Double)], kind : @core.ShapeKind) {
+    let doc = @core.new_document("few", 60, 60)
+    let l = @core.default_layer("g1", "g1", 0.0, 0.0, 40.0, 40.0)
+    doc.layers.push({ ..l, kind, points: pts })
+    doc
+  }
+  // lint 与命令面**同一句**说明（`points_count_error`），所以断言咬数值：
+  // "至少要 N 个顶点" + "n 个 = 什么都不画"
+  let j1 = (@agent.lint_doc(mk([(0.0, 0.0), (40.0, 40.0)], @core.ShapeKind::Polygon))).join(" | ")
+  assert_true(j1.contains("至少要 3 个顶点") && j1.contains("2 个 = 什么都不画"), msg="2 顶点多边形要报：\{j1}")
+  let j2 = (@agent.lint_doc(mk([(0.0, 0.0)], @core.ShapeKind::Line))).join(" | ")
+  assert_true(j2.contains("至少要 2 个顶点") && j2.contains("1 个 = 什么都不画"), msg="1 顶点线段要报：\{j2}")
+  // **正控**：够数的顶点一个都不许报（漏报与误报都是 bug）
+  let j3 = (@agent.lint_doc(mk([(0.0, 0.0), (40.0, 0.0), (0.0, 40.0)], @core.ShapeKind::Polygon))).join(" | ")
+  assert_true(!j3.contains("顶点只有"), msg="3 顶点多边形不该报：\{j3}")
+  let j4 = (@agent.lint_doc(mk([(0.0, 0.0), (40.0, 40.0)], @core.ShapeKind::Line))).join(" | ")
+  assert_true(!j4.contains("顶点只有"), msg="2 顶点线段不该报：\{j4}")
+  // 空的顶点表（0 个）也要报——判据的空集也要说话
+  let j5 = (@agent.lint_doc(mk([], @core.ShapeKind::Polygon))).join(" | ")
+  assert_true(j5.contains("0 个 = 什么都不画"), msg="0 顶点要报：\{j5}")
+  // **正控**：矩形/椭圆/文本层不用顶点定义形状，不该被这条规则误报
+  let j6 = (@agent.lint_doc(mk([], @core.ShapeKind::Rect))).join(" | ")
+  assert_true(!j6.contains("个顶点才画得出东西"), msg="矩形不该被顶点规则误报：\{j6}")
+}

@@ -57,7 +57,7 @@ pub fn list_tools() -> Array[AgentTool] {
   )
   add(
     "set-style",
-    "set-style <id> " + set_style_keys().map(fn(k) { "\{k}=/" }).join("") + "（lgrad 端点归一化 0..1，非像素；tag= 追加标签，与 tag 命令同一实现）",
+    "set-style <id> " + set_style_keys().map(fn(k) { "\{k}=/" }).join("") + "（lgrad 端点归一化 0..1，非像素；**points=x,y;x,y;… 是层内局部坐标**，只对 polygon/line 有意义，用来原地改顶点——顶点原先只能建层时给；tag= 追加标签，与 tag 命令同一实现）",
     "meta",
   )
   add("move", "move <id> <x> <y>", "meta")
