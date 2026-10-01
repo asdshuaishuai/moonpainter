@@ -5,3 +5,5 @@ _build/
 .DS_Store
 npm/moonpainter-sdk/moonpainter.wasm
 dist/
+__pycache__/
+*.pyc
