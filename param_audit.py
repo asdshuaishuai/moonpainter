@@ -257,11 +257,21 @@ def doc_keys(expr):
 
 # 字典：命令 → 描述表达式（用实参切分，别用正则——描述里有逗号）
 descs = {}
+bad_desc = []
 for args, _ in call_args(tools, 'add'):
     if len(args) < 3:
         continue
     cmd = args[0].strip().strip('"')
     descs[cmd] = args[1]
+    # 描述表达式必须是**看得见的样子**（字面量 + 键表调用）。被赋给变量的写法
+    # （`let d = "…" + keys().map(…)` 然后 `add(name, d, ch)`）会让对账**读不出
+    # 任何键**，于是把解析器认下的每个键都报成"字典没写"——判据名义上还在，
+    # 实际看不懂输入。宁可在这里明说"读不出来"，也别让它猜。
+    if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", descs[cmd].strip()):
+        bad_desc.append(
+            '%s：字典描述是一个变量名（%s），读不出承诺了哪些 key= —— '
+            '请把描述写成字面量 + 键表调用的表达式' % (cmd, descs[cmd].strip())
+        )
 
 # 解析器：命令 → 认下的键集合
 parsed = {}
@@ -316,7 +326,7 @@ for cmd in sorted(descs):
     if parses and cmd not in sites:
         hand.append('%s：解析 kv 参数却没有键表校验（认不出的键会被静默收下）' % cmd)
 
-fails = list(unreadable) + list(dynamic) + hand
+fails = list(unreadable) + list(dynamic) + hand + list(bad_desc)
 # 每个真实的 kv 调用点都必须被审到（否则这门外禁有洞）
 for cmd in sorted(sites - set(parsed)):
     fails.append('%s：有 check_kv_* 调用点却没能被审（键表读不出来？）' % cmd)

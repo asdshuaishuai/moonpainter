@@ -681,6 +681,20 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
         v.push(
           "P2 style 文本层 \{l.id} 的 font_size 非正（\{@core.fmt_num(l.font_size)}）：渲染不出任何字形",
         )
+      } else if l.text.length() > 0 {
+        // 盒子装不下自己的文字：渲染器**不按盒子裁剪**（实测 add-text text=Hi 再
+        // set-text 成 "Hello World"，两张图的 render sha256 逐位相同），所以字会
+        // 画到盒子外面；而 `pick`/`overlay` 线框/`lgrad` 端点全按盒子算 ——
+        // 同一个层，"看得见的范围"与"报出来的范围"对不上。
+        // 命令面已拦（set-text 重算盒子），这里兜住手改容器 / resize 缩小。
+        let est = text_box(l.text, l.font_size)
+        let ew = est.0
+        let eh = est.1
+        if l.w + 0.000000001 < ew || l.h + 0.000000001 < eh {
+          v.push(
+            "P2 geom 文本层 \{l.id} 的盒子装不下自己的文字（\{@core.fmt_num(l.w)}x\{@core.fmt_num(l.h)} < 估算 \{@core.fmt_num(ew)}x\{@core.fmt_num(eh)}）：渲染器不裁剪，字会画到盒子外，而 pick/overlay/lgrad 按盒子算",
+          )
+        }
       }
     }
     // 所有「某 kind 才有意义」的字段走同一张表。此前这里只有三条手写 if

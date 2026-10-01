@@ -77,7 +77,11 @@ pub fn list_tools() -> Array[AgentTool] {
     "add-text x= y= text=<内容>：文本层（ASCII 真字形）；**含空格用双引号包住** text=\"Hello World\"，name= 同理。可选：" + add_text_keys().map(fn(k) { "[\{k}=]" }).join(""),
     "meta",
   )
-  add("set-text", "set-text <id> <新内容>（含空格用双引号包住）", "meta")
+  add(
+    "set-text",
+    "set-text <id> <新内容> [font_size=<px>] [w=<px>] [h=<px>]：改文字内容；**盒子跟着内容与字号重算**（不给 w/h 时按 6/7 字宽 × 字数 × 字号估算），要固定盒子就显式给 w=/h=（必须为正）。含空格用双引号包住。可选：" + set_text_keys().map(fn(k) { "[\{k}=]" }).join(""),
+    "meta",
+  )
   add(
     "add-adjust",
     // 算子清单与取值范围从 `adjust_value_range` 那张表生成（单一事实源）

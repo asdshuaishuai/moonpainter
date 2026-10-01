@@ -604,6 +604,13 @@ fn add_adjust_keys() -> Array[String] {
 
 ///|
 /// `add-paint` 认的全部键。
+///|
+/// `set-text` 认的全部键：位置参数是 `<id> <内容>`，之后只认这三个。
+fn set_text_keys() -> Array[String] {
+  ["font_size", "w", "h"]
+}
+
+///|
 fn add_paint_keys() -> Array[String] {
   ["id", "name"]
 }
@@ -902,6 +909,19 @@ fn parse_adjust(m : Map[String, String]) -> Result[@core.Adjust, String] {
 }
 
 ///|
+/// 文本层的**占位盒**（ASCII 点阵字形）：宽 = 6/7 字宽 × 字数，高 = 字号。
+///
+/// `add-text` 与 `set-text` **共用这一处**。以前只有 `add-text` 用它，`set-text`
+/// 只换文字不动盒子 —— 于是 `add-text text=Hi`（盒子 27.43）之后
+/// `set-text … "Hello World"`，渲染器照样把 11 个字**画到盒子外面**
+/// （实测两种建法的 render sha256 逐位相同，而 query-layer 报的 w 还是 27.43）。
+/// 盒子是渲染之外唯一的范围事实源：`pick`/`overlay` 线框/`lgrad` 归一化端点
+/// 都按它算，所以"装不下自己的像素"就是三个信号自相矛盾。
+fn text_box(text : String, fs : Double) -> (Double, Double) {
+  (text.length().to_double() * fs * 6.0 / 7.0, fs)
+}
+
+///|
 fn cmd_add_text(s : Session, tokens : Array[String]) -> String {
   let doc = match require_doc(s) {
     Ok(d) => d
@@ -955,8 +975,9 @@ fn cmd_add_text(s : Session, tokens : Array[String]) -> String {
   // 注意：这里 `w ≤ 0 → 估算盒` 只对**缺省**成立。显式 `w=0`/负值走不到这儿
   // ——下面 `build_shape_layer` 会先报 "w/h 必须为正"（实测 `add-text … w=0`
   // 报的是那句）。原来这里注释写"w ≤ 0 时估算"，读起来像"给 0 也行"。
-  let bw = if w > 0.0 { w } else { text.length().to_double() * fs * 6.0 / 7.0 }
-  let bh = if h > 0.0 { h } else { fs }
+  let est = text_box(text, fs)
+  let bw = if w > 0.0 { w } else { est.0 }
+  let bh = if h > 0.0 { h } else { est.1 }
   let layer = match build_shape_layer(id, @core.ShapeKind::Text, m) {
     Ok(l) => l
     Err(e) => return err(e)
@@ -992,7 +1013,9 @@ fn cmd_set_text(s : Session, tokens : Array[String]) -> String {
   // 注意内容可以为空（`set-text l1 ""` 是"清空文本"的合法写法，分词后
   // 仍是 3 个 token），所以下界卡 3 不会误伤这条用法。
   if tokens.length() < 3 {
-    return err("用法：set-text <id> <新内容>（含空格用双引号包起来；清空用 \"\"）")
+    return err(
+      "用法：set-text <id> <新内容> [font_size=<px>] [w=<px>] [h=<px>]（含空格用双引号包起来；清空用 \"\"）",
+    )
   }
   let doc = match require_doc(s) {
     Ok(d) => d
@@ -1012,8 +1035,57 @@ fn cmd_set_text(s : Session, tokens : Array[String]) -> String {
       "层 \{id} 是 \{kind_str(target.kind)} 不是文本层，设不了文字内容（要给图形加标题请先 add-text 建一个文本层）",
     )
   }
+  // 可选 kv：字号（**此前字号只有 add-text 能定**，想改大一点只能删了重加——
+  // 而重加把层推到栈顶、还会丢掉蒙版/标签/透明度。这是 set-adjust/set-mask
+  // 同一条"改得动吗"纪律）与显式盒子（不给就按 text_box 重算）。
+  match check_kv_args(tokens, 3, set_text_keys(), "set-text") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }
+  let m = kv_args(tokens, 3)
+  let content = tokens[2]
+  let fs = match m.get("font_size") {
+    Some(_) =>
+      match arg_d(m, "font_size", target.font_size) {
+        Ok(v) => v
+        Err(e) => return err(e)
+      }
+    None => target.font_size
+  }
+  if fs <= 0.0 {
+    return err("font_size 必须为正（像素）：\{@core.fmt_num(fs)} ≠ 正数")
+  }
+  // 盒子：显式给 w/h 就用给的（与 add-text 同一条规则：必须为正），
+  // 否则按内容与字号**重算**——`set-text` 曾只换文字不动盒子，于是层报出来的
+  // 范围装不下自己的像素（`pick` 拾不到、overlay 线框画小了、lgrad 端点错位）。
+  let est = text_box(content, fs)
+  let ew = est.0
+  let eh = est.1
+  let nw = match m.get("w") {
+    Some(_) =>
+      match arg_d(m, "w", ew) {
+        Ok(v) => v
+        Err(e) => return err(e)
+      }
+    None => ew
+  }
+  let nh = match m.get("h") {
+    Some(_) =>
+      match arg_d(m, "h", eh) {
+        Ok(v) => v
+        Err(e) => return err(e)
+      }
+    None => eh
+  }
+  if (m.get("w") is Some(_) || m.get("h") is Some(_)) && (nw <= 0.0 || nh <= 0.0) {
+    return err("w/h 必须为正（显式给盒子时）：\{@core.fmt_num(nw)} x \{@core.fmt_num(nh)}")
+  }
   snapshot(s, doc, "set-text \{id}")
-  let _ = update_layer(doc.layers, id, fn(l) { { ..l, text: tokens[2] } })
+  let _ = update_layer(
+    doc.layers,
+    id,
+    fn(l) { { ..l, text: content, font_size: fs, w: nw, h: nh } },
+  )
   "{\"ok\":true,\"op\":\"set-text\",\"id\":\"\{id}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
 }
 

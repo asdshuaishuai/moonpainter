@@ -825,9 +825,11 @@ MUTS = [
         "set-text 下界写小（缺参数时越界 panic 而非报用法错）",
         "agent/session.mbt",
         """  if tokens.length() < 3 {
-    return err("用法：set-text <id>""",
+    return err(
+      "用法：set-text <id>""",
         """  if tokens.length() < 2 {
-    return err("用法：set-text <id>""",
+    return err(
+      "用法：set-text <id>""",
         "killed",
     ),
     (
@@ -956,6 +958,38 @@ MUTS = [
         "killed",
     ),
     (
+        "Q12",
+        "set-text 不重算盒子（层报出来的范围装不下自己的像素）",
+        "agent/session.mbt",
+        """  let est = text_box(content, fs)
+  let ew = est.0
+  let eh = est.1""",
+        """  let est = text_box(content, fs)
+  let ew = target.w
+  let eh = target.h""",
+        "killed",
+    ),
+    (
+        "Q13",
+        "set-text 不再卡非正字号（改字号这条新路绕过了 add-text 的校验）",
+        "agent/session.mbt",
+        """    None => target.font_size
+  }
+  if fs <= 0.0 {""",
+        """    None => target.font_size
+  }
+  if fs <= -1000000.0 {""",
+        "killed",
+    ),
+    (
+        "Q14",
+        "lint 不再报「盒子装不下自己的文字」（手改容器/缩小盒子静默错位）",
+        "agent/ops.mbt",
+        """        if l.w + 0.000000001 < ew || l.h + 0.000000001 < eh {""",
+        """        if l.w + 0.000000001 < ew - 1000000.0 || l.h + 0.000000001 < eh {""",
+        "killed",
+    ),
+    (
         "Q8",
         "笔宽不再卡负值（描边静默不画，而回包 ok）",
         "agent/ops.mbt",
@@ -969,10 +1003,16 @@ MUTS = [
         "Q9",
         "字号不再卡非正（建出负尺寸层，只有 lint 说话）",
         "agent/session.mbt",
-        """  if fs <= 0.0 {
-    return err("font_size 必须为正（像素）：""",
-        """  if fs <= -1000000.0 {
-    return err("font_size 必须为正（像素）：""",
+        """  let fs = match arg_d(m, "font_size", 16.0) {
+    Ok(v) => v
+    Err(e) => return err(e)
+  }
+  if fs <= 0.0 {""",
+        """  let fs = match arg_d(m, "font_size", 16.0) {
+    Ok(v) => v
+    Err(e) => return err(e)
+  }
+  if fs <= -1000000.0 {""",
         "killed",
     ),
     (

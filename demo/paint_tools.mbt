@@ -342,8 +342,12 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
     ),
     make_tool(
       "set_text",
-      "改文本层的内容（保留位置/字号/颜色）",
-      [("id", "string:req:文本层 id"), ("text", "string:req:新内容，可含空格")],
+      "改文本层的内容（位置/颜色保留）。盒子跟着内容与字号重算；要固定盒子用 resize",
+      [
+        ("id", "string:req:文本层 id"),
+        ("text", "string:req:新内容，可含空格"),
+        ("font_size", "integer:选填:新字号 px（不给则沿用当前字号）"),
+      ],
     ),
     make_tool(
       "visible",
@@ -649,7 +653,14 @@ pub fn tool_line(name : String, args : Json) -> String {
     }
     "set_text" => {
       let id = arg_of(args, "id")
-      "set-text \{id} \{quote_arg(arg_of(args, "text"))}"
+      let fs = arg_of(args, "font_size")
+      // 字号可选：不给就不写这个 kv（引擎按"沿用当前字号"处理）
+      let head = "set-text \{id} \{quote_arg(arg_of(args, "text"))}"
+      if fs == "" {
+        head
+      } else {
+        "\{head} font_size=\{fs}"
+      }
     }
     "visible" => "visible \{arg_of(args, "id")} \{arg_of(args, "visible")}"
     "group" => {

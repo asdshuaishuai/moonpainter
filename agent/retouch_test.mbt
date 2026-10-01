@@ -338,3 +338,68 @@ test "数值参数的「值面」第六批：非数与越界都不许静默退�
   let t2 = (@agent.lint_doc(doc2)).join(" | ")
   assert_true(t2.contains("font_size 非正"), msg="手改的非正字号要报：\{t2}")
 }
+
+test "set-text：字号改得动，盒子跟着内容走（改得动吗 + 报得准吗）" {
+  // 三件事此前都不成立：
+  //  ① 字号只能 add-text 定 —— 想改大一点只能删了重加（层被推到栈顶、
+  //     蒙版/标签/透明度全丢），同 set-adjust / set-mask 那条"改得动吗"纪律；
+  //  ② set-text 只换文字**不动盒子** —— add-text text=Hi（盒子 27.43）之后
+  //     set-text 成 "Hello World"，渲染器把 11 个字全画出来（实测两种建法
+  //     render sha256 逐位相同），而 query-layer 仍报 w=27.43；
+  //  ③ 于是层报出来的范围装不下自己的像素：pick 拾不到、overlay 线框画小了、
+  //     lgrad 的归一化端点算错。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 200 20")
+  let _ = run(s, "add-text x=0 y=0 text=Hi id=t1")
+  assert_true(run(s, "query-layer t1").contains("\"w\":27.4"), msg="初始盒子 = 2×16×6/7")
+  // ①+② 改内容：盒子涨到 11×16×6/7
+  let a = run(s, "set-text t1 \"Hello World\"")
+  assert_true(!a.contains("error"), msg=a)
+  let q1 = run(s, "query-layer t1")
+  assert_true(q1.contains("\"w\":150.8"), msg="盒子要跟着内容走：\{q1}")
+  assert_true(q1.contains("\"h\":16"), msg="高仍是字号：\{q1}")
+  // ① 改字号：盒子按新字号重算（2×32×6/7 = 54.86）
+  let b = run(s, "set-text t1 Hi font_size=32")
+  assert_true(!b.contains("error"), msg=b)
+  let q2 = run(s, "query-layer t1")
+  assert_true(q2.contains("\"w\":54.8"), msg="字号变了盒子要重算：\{q2}")
+  assert_true(q2.contains("\"h\":32"), msg="高 = 新字号：\{q2}")
+  assert_true(q2.contains("\"font_size\":32"), msg="字号要报得出来：\{q2}")
+  // 范围：非正与非数都拒（与 add-text 同一条规则）
+  assert_true(run(s, "set-text t1 Hi font_size=0").contains("font_size 必须为正"), msg="0")
+  assert_true(run(s, "set-text t1 Hi font_size=-2").contains("font_size 必须为正"), msg="-2")
+  assert_true(run(s, "set-text t1 Hi font_size=abc").contains("不是数字"), msg="abc")
+  // 显式盒子：给了就用给的（必须为正），不给就重算
+  let c = run(s, "set-text t1 Hi w=100 h=20")
+  assert_true(!c.contains("error"), msg=c)
+  let q3 = run(s, "query-layer t1")
+  assert_true(q3.contains("\"w\":100"), msg="显式盒子要生效：\{q3}")
+  assert_true(q3.contains("\"h\":20"), msg="显式盒子要生效：\{q3}")
+  assert_true(run(s, "set-text t1 Hi w=0").contains("w/h 必须为正"), msg="w=0")
+  assert_true(run(s, "set-text t1 Hi h=-1").contains("w/h 必须为正"), msg="h=-1")
+  // 不认识的键：报合法清单（字典是 LLM 唯一的说明书）
+  let e = run(s, "set-text t1 Hi bogus=1")
+  assert_true(e.contains("font_size/w/h"), msg="要报出认得的键：\{e}")
+  // 清空文字仍是合法写法，且不会因为盒子归零而误报文字装不下
+  assert_true(!run(s, "set-text t1 \"\"").contains("error"), msg="清空合法")
+  // **正控**：空文字的盒子归零，不该被"装不下自己的文字"误报（那是"空文本层"
+  // 那条规则的活）。判据的空集也要说话。
+  let docz = @core.new_document("empty-text", 64, 64)
+  let lz = @core.default_layer("z1", "hand", 0.0, 0.0, 0.0, 16.0)
+  docz.layers.push({ ..lz, kind: @core.ShapeKind::Text, text: "", font_size: 16.0 })
+  let tz = (@agent.lint_doc(docz)).join(" | ")
+  assert_true(!tz.contains("装不下自己的文字"), msg="空文字不该报'装不下'：\{tz}")
+  // lint 兜住手改容器 / resize 缩小：盒子装不下自己的文字
+  let doc = @core.new_document("stale-box", 64, 64)
+  let l = @core.default_layer("x1", "hand", 0.0, 0.0, 27.428571428571427, 16.0)
+  doc.layers.push({ ..l, kind: @core.ShapeKind::Text, text: "Hello World", font_size: 16.0 })
+  let t = (@agent.lint_doc(doc)).join(" | ")
+  assert_true(t.contains("装不下自己的文字"), msg="手改的窄盒子要报：\{t}")
+  // **正控**：同一层把盒子给足，lint 一个字都不报（漏报与误报都是 bug）
+  let doc2 = @core.new_document("ok-box", 64, 64)
+  let l2 = @core.default_layer("x2", "hand", 0.0, 0.0, 150.85714285714286, 16.0)
+  doc2.layers.push({ ..l2, kind: @core.ShapeKind::Text, text: "Hello World", font_size: 16.0 })
+  let t2 = (@agent.lint_doc(doc2)).join(" | ")
+  assert_true(!t2.contains("装不下自己的文字"), msg="盒子够大不该报：\{t2}")
+}
