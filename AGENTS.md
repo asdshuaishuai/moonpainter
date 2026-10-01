@@ -184,6 +184,20 @@
    `adjust_op_name` / `adjust_op_from_name` **四个方向只有一处实现**，
    加算子只改这两处（core 的名字表 + agent 的范围表），别的手写清单一律算 bug。
 
+   **同一面继续推的第六批：非数不许静默退默认，越界不许静默夹紧。**
+   实测 `set-style l1 stroke_w=-3` 回 ok，而渲染器 `inside_stroke` 第一句就把
+   ≤0 折成 0——**描边一个像素不画**；`add-text font_size=-3` 建出 -5.14x-3 的
+   **负尺寸层**（只有 lint 说话）；`add-text font_size=abc` 更是**静默按 16**
+   （同一个函数里 `w`/`h`/`x`/`y` 四兄弟一模一样，全是
+   `match to_d(...) { Some(v) => v, None => 默认 }`）。
+   纪律：**数值一律走 `arg_d`**（它把"给了但不是数"变成错误），范围写在解析处
+   （`stroke_w ≥ 0`、`font_size > 0`、`opacity 0..1`、`radius/feather ≥ 0`、
+   `w/h > 0`），lint 兜住手改容器的负笔宽 / 非正字号。
+   `param_audit.py` 加了机器判据：**`to_d` 的 `None` 分支不报错就是红**
+   （扫描时**剥注释**——第一版就被自己刚写的注释抓过一次，同第 9 步那课）。
+   ⚠️ 写数值解析时别用 `match to_d(...) { Some(v) => v, None => 默认 }`，
+   也别写 `if v > 0 { 采用 }`（那是把 0/负值悄悄换成默认）——两种门禁都会红。
+
 ## 快速命令
 
 ```bash

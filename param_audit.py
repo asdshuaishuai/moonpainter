@@ -330,6 +330,52 @@ for cmd, desc in sorted(descs.items()):
     for k in sorted(got - dk):
         fails.append('%s：解析器收下 `%s=`，字典没写（只有读源码才知道有它）' % (cmd, k))
 
+# ---- 第四面：数值解析不许**静默退默认** ----
+# `match to_d(m.get("k")) { Some(v) => v, None => 默认 }` 这种写法看着像防守，
+# 实际是把"给了但根本不是数"变成默认值：回包 ok、画面照默认渲染，调用方分不出
+# "我给的数生效了"与"我给的数没被看懂"。实测 `add-text font_size=abc` 静默按 16、
+# `font_size=-3` 建出 -5.14x-3 的负尺寸层（同一个函数里 `w`/`h`/`x`/`y` 四兄弟
+# 一模一样）。要么报错（`arg_d` 就是干这个的），要么这条判据会红。
+def code_only(line):
+    """剥掉行尾注释（字符串字面量里的 `//` 不算）。
+
+    判据必须分得清**代码与散文**：这一版第一跑就抓到了我自己刚写的那段注释
+    （`match to_d(...) { Some(v) => v, None => 默认 }`）——注释里描述的坏写法
+    被当成了真代码。同一课在第 9 步（参数下界扫描）已经上过一次。
+    """
+    out, in_str, i = [], False, 0
+    while i < len(line):
+        c = line[i]
+        if c == '"':
+            in_str = not in_str
+        elif (
+            c == '/'
+            and not in_str
+            and i + 1 < len(line)
+            and line[i + 1] == '/'
+        ):
+            break
+        out.append(c)
+        i += 1
+    return ''.join(out)
+
+
+srcs = read_srcs()
+silent = []
+for name, text in srcs.items():
+    if not name.startswith('agent/') or '_test' in name:
+        continue
+    lines = [code_only(l) for l in text.split('\n')]
+    for i, line in enumerate(lines):
+        if 'to_d(' not in line or 'fn to_d' in line:
+            continue
+        win = '\n'.join(lines[i:i + 5])
+        m = re.search(r'None\s*=>\s*(.{0,80})', win, re.S)
+        if m and not re.search(r'return|err\(|Err\(|abort', m.group(1)):
+            tail = m.group(1).strip().split('\n')[0][:40]
+            silent.append('%s:%d 数值解析静默退默认（%s）' % (name, i + 1, tail))
+fails.extend(silent)
+
 if fails:
     print('字典与解析器参数对账失败 %d 条：' % len(fails))
     for x in fails:

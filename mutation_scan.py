@@ -956,6 +956,48 @@ MUTS = [
         "killed",
     ),
     (
+        "Q8",
+        "笔宽不再卡负值（描边静默不画，而回包 ok）",
+        "agent/ops.mbt",
+        """    if w < 0.0 {
+      return Err("stroke_w 不能为负（0 = 不画描边）：""",
+        """    if w < -1000000.0 {
+      return Err("stroke_w 不能为负（0 = 不画描边）：""",
+        "killed",
+    ),
+    (
+        "Q9",
+        "字号不再卡非正（建出负尺寸层，只有 lint 说话）",
+        "agent/session.mbt",
+        """  if fs <= 0.0 {
+    return err("font_size 必须为正（像素）：""",
+        """  if fs <= -1000000.0 {
+    return err("font_size 必须为正（像素）：""",
+        "killed",
+    ),
+    (
+        "Q10",
+        "add-text 的数值解析退回静默默认（w=abc 当 0、font_size=abc 当 16）",
+        "agent/session.mbt",
+        """  let fs = match arg_d(m, "font_size", 16.0) {
+    Ok(v) => v
+    Err(e) => return err(e)
+  }""",
+        """  let fs = match to_d(m.get("font_size").unwrap_or("16")) {
+    Some(v) => v
+    None => 16.0
+  }""",
+        "killed",
+    ),
+    (
+        "Q11",
+        "lint 不再报负笔宽（手改容器的描边静默消失）",
+        "agent/ops.mbt",
+        """    if l.stroke.width < 0.0 {""",
+        """    if l.stroke.width < -1000000.0 {""",
+        "killed",
+    ),
+    (
         "Q7",
         "调整算子不再校验取值范围（value=99 被收下，clamp 成与 value=1 逐位相同）",
         "agent/session.mbt",

@@ -349,6 +349,16 @@ pub fn apply_style_kv(
     }
     None => ()
   }
+  // 笔宽只许 ≥ 0。负值此前被收下：它写进 canonical JSON、改变指纹、
+  // `query-layer` 报得出来，而渲染器 `inside_stroke` 里第一句就是
+  // `if l.stroke.width > 0.0 { … } else { 0.0 }` —— **描边一个像素都不画**，
+  // 调用方拿到的却是 ok（"我明明设了描边"）。
+  let stroke_w_check = fn(w : Double) -> Result[Unit, String] {
+    if w < 0.0 {
+      return Err("stroke_w 不能为负（0 = 不画描边）：\{@core.fmt_num(w)}")
+    }
+    Ok(())
+  }
   match m.get("stroke") {
     Some(v) => {
       let c = match parse_color(v) {
@@ -359,12 +369,22 @@ pub fn apply_style_kv(
         Ok(x) => x
         Err(e) => return Err(e)
       }
+      match (stroke_w_check)(w) {
+        Ok(_) => ()
+        Err(e) => return Err(e)
+      }
       nl = { ..nl, stroke: { color: c, width: w } }
     }
     None => match m.get("stroke_w") {
         Some(_) => {
           match arg_d(m, "stroke_w", nl.stroke.width) {
-            Ok(w) => nl = { ..nl, stroke: { color: nl.stroke.color, width: w } }
+            Ok(w) => {
+              match (stroke_w_check)(w) {
+                Ok(_) => ()
+                Err(e) => return Err(e)
+              }
+              nl = { ..nl, stroke: { color: nl.stroke.color, width: w } }
+            }
             Err(e) => return Err(e)
           }
         }
@@ -645,6 +665,23 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
     }
     if l.opacity < 0.0 || l.opacity > 1.0 {
       v.push("P2 style 层 \{l.id} opacity 越界")
+    }
+    // 笔宽为负：命令面已拦（`stroke_w 不能为负`），这里兜住手改容器。
+    // 渲染器 `inside_stroke` 第一句就把 ≤0 折成 0 → **描边静默不画**。
+    if l.stroke.width < 0.0 {
+      v.push(
+        "P2 style 层 \{l.id} 的 stroke_w 为负（\{@core.fmt_num(l.stroke.width)}）：渲染器按 0 处理，描边一个像素都不画",
+      )
+    }
+    // 字号非正：命令面已拦（add-text），这里兜住手改容器。文本层的 w/h 是
+    // 由字号推出来的，字号 ≤0 会得到零/负尺寸的层（那两条已有 lint 报，
+    // 但报的是"尺寸非正"，看不出根因在字号）。
+    if l.kind is @core.ShapeKind::Text {
+      if l.font_size <= 0.0 {
+        v.push(
+          "P2 style 文本层 \{l.id} 的 font_size 非正（\{@core.fmt_num(l.font_size)}）：渲染不出任何字形",
+        )
+      }
     }
     // 所有「某 kind 才有意义」的字段走同一张表。此前这里只有三条手写 if
     // （text / radius / points），而同类字段还有五个（font_size / adjust /

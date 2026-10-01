@@ -281,3 +281,60 @@ test "lint 兜住调整层的三种「装了不干活」（命令面拦两种，
   let text2 = (@agent.lint_doc(doc2)).join(" | ")
   assert_true(text2.contains("不接受数值"), msg="手改的用不上的 value 要报：\{text2}")
 }
+
+test "数值参数的「值面」第六批：非数与越界都不许静默退默认" {
+  // 上一轮推平了调整算子的 value（越界 / 用不上的 value）。这里问同一件事的
+  // 另一半：**笔宽与字号**，以及"给了但根本不是数"这种输入。
+  // 实测（修前）：
+  //   set-style l1 stroke_w=-3   → ok，写进 JSON、改指纹、query-layer 报得出来，
+  //                                而 inside_stroke 第一句就把 ≤0 折成 0 → 描边一个像素不画
+  //   add-text font_size=-3      → ok，建出 -5.14x-3 的**负尺寸**层（只有 lint 说话）
+  //   add-text font_size=abc     → ok，**静默按 16**（同一个函数里 w/h/x/y 四兄弟一样）
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 40 40")
+  let _ = run(s, "add-rect x=0 y=0 w=20 h=20 fill=#FF0000FF")
+  // 笔宽：两种给法（stroke= + stroke_w=、只给 stroke_w=）都要拒
+  let a = run(s, "set-style l1 stroke_w=-3")
+  assert_true(a.contains("stroke_w 不能为负"), msg=a)
+  let b = run(s, "set-style l1 stroke=#0000FFFF stroke_w=-1")
+  assert_true(b.contains("stroke_w 不能为负"), msg=b)
+  // **正控**：stroke_w=0（不画描边）与正值都要收
+  assert_true(!run(s, "set-style l1 stroke_w=0").contains("error"), msg="0 要收")
+  assert_true(!run(s, "set-style l1 stroke_w=2.5").contains("error"), msg="正值要收")
+  // 字号：非正与非数都拒
+  let c = run(s, "add-text x=0 y=0 text=Hi font_size=0")
+  assert_true(c.contains("font_size 必须为正"), msg=c)
+  let d = run(s, "add-text x=0 y=0 text=Hi font_size=-3")
+  assert_true(d.contains("font_size 必须为正"), msg=d)
+  let e = run(s, "add-text x=0 y=0 text=Hi font_size=abc")
+  assert_true(e.contains("不是数字"), msg=e)
+  // 同一个函数的 w/h/x/y 也是非数即拒（此前静默退成默认值）
+  assert_true(run(s, "add-text x=0 y=0 text=Hi w=abc").contains("不是数字"), msg="w=abc")
+  assert_true(run(s, "add-text x=0 y=0 text=Hi h=abc").contains("不是数字"), msg="h=abc")
+  assert_true(run(s, "add-text x=abc y=0 text=Hi").contains("不是数字"), msg="x=abc")
+  assert_true(run(s, "add-text x=0 y=abc text=Hi").contains("不是数字"), msg="y=abc")
+  // **正控**：不给 w/h 时按 6px/字符 × 字高估算占位盒（有意的默认，不是静默）
+  let okw = run(s, "add-text x=0 y=0 text=Hi id=t9")
+  assert_true(!okw.contains("error"), msg="不给 w/h 要能建层：\{okw}")
+  let q = run(s, "query-layer t9")
+  // 咬数值：2 字符 × 16px × 6/7 ≈ 27.43，高就是字号
+  assert_true(q.contains("\"w\":27.4"), msg="估算盒宽度要咬住数值：\{q}")
+  assert_true(q.contains("\"h\":16"), msg="估算盒高度 = 字号：\{q}")
+  // 边界写清楚：**显式** w=0 不是"估算"，而是 w/h 必须为正
+  assert_true(
+    run(s, "add-text x=0 y=0 text=Hi w=0 id=t10").contains("w/h 必须为正"),
+    msg="显式 w=0 归 build_shape_layer 的正数校验管",
+  )
+  // lint 兜住手改容器：负笔宽与非正字号
+  let doc = @core.new_document("lint-num", 32, 32)
+  let l = @core.default_layer("n1", "hand", 0.0, 0.0, 20.0, 20.0)
+  doc.layers.push({ ..l, stroke: { color: 0xFF0000FF, width: -2.0 } })
+  let t1 = (@agent.lint_doc(doc)).join(" | ")
+  assert_true(t1.contains("stroke_w 为负"), msg="手改的负笔宽要报：\{t1}")
+  let doc2 = @core.new_document("lint-num2", 32, 32)
+  let l2 = @core.default_layer("n2", "hand", 0.0, 0.0, 20.0, 20.0)
+  doc2.layers.push({ ..l2, kind: @core.ShapeKind::Text, text: "Hi", font_size: 0.0 })
+  let t2 = (@agent.lint_doc(doc2)).join(" | ")
+  assert_true(t2.contains("font_size 非正"), msg="手改的非正字号要报：\{t2}")
+}

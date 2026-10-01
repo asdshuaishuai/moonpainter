@@ -923,27 +923,38 @@ fn cmd_add_text(s : Session, tokens : Array[String]) -> String {
   if @core.find_layer(doc.layers, id) is Some(_) {
     return err("层 id 已存在：\{id}")
   }
-  let w = match to_d(m.get("w").unwrap_or("0")) {
-    Some(v) => v
-    None => 0.0
+  // 数值一律走 `arg_d`：它把"给了但根本不是数"变成错误。此前这五处是
+  // `match to_d(...) { Some(v) => v, None => 默认 }` —— `w=abc`/`font_size=abc`
+  // **静默退成默认值**，回包 ok（同一个键拼错会被 `check_kv_args` 拒，值写坏
+  // 却不会）。`w ≤ 0` 仍然是"按 6px/字符估算占位盒"（有意的默认，键缺席时也如此）。
+  let w = match arg_d(m, "w", 0.0) {
+    Ok(v) => v
+    Err(e) => return err(e)
   }
-  let h = match to_d(m.get("h").unwrap_or("0")) {
-    Some(v) => v
-    None => 0.0
+  let h = match arg_d(m, "h", 0.0) {
+    Ok(v) => v
+    Err(e) => return err(e)
   }
-  let x = match to_d(m.get("x").unwrap_or("0")) {
-    Some(v) => v
-    None => 0.0
+  let x = match arg_d(m, "x", 0.0) {
+    Ok(v) => v
+    Err(e) => return err(e)
   }
-  let y = match to_d(m.get("y").unwrap_or("0")) {
-    Some(v) => v
-    None => 0.0
+  let y = match arg_d(m, "y", 0.0) {
+    Ok(v) => v
+    Err(e) => return err(e)
   }
-  // w ≤ 0 时按 6px/字符、font_size 高度估算占位盒
-  let fs = match to_d(m.get("font_size").unwrap_or("16")) {
-    Some(v) => v
-    None => 16.0
+  // 字号：非数报错、非正也报错（此前 `font_size=-3` 建出 -5.14x-3 的负尺寸层，
+  // 只有 lint 会说话；`font_size=abc` 更是静默按 16 算）。
+  let fs = match arg_d(m, "font_size", 16.0) {
+    Ok(v) => v
+    Err(e) => return err(e)
   }
+  if fs <= 0.0 {
+    return err("font_size 必须为正（像素）：\{@core.fmt_num(fs)} ≠ 正数")
+  }
+  // 注意：这里 `w ≤ 0 → 估算盒` 只对**缺省**成立。显式 `w=0`/负值走不到这儿
+  // ——下面 `build_shape_layer` 会先报 "w/h 必须为正"（实测 `add-text … w=0`
+  // 报的是那句）。原来这里注释写"w ≤ 0 时估算"，读起来像"给 0 也行"。
   let bw = if w > 0.0 { w } else { text.length().to_double() * fs * 6.0 / 7.0 }
   let bh = if h > 0.0 { h } else { fs }
   let layer = match build_shape_layer(id, @core.ShapeKind::Text, m) {
