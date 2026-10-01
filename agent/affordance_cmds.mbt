@@ -196,9 +196,31 @@ fn cmd_probe(s : Session, tokens : Array[String]) -> String {
       }
     None => ()
   }
-  let base = match mvsl_base(s) {
-    Ok(b) => b
+  let (env, base) = match mvsl_context(s) {
+    Ok(pair) => pair
     Err(e) => return err(e)
+  }
+  // 逐算子 membership 的基底：真渲染管线一次算好，所有点共用（见 probe_one_json）。
+  // 表坏了（如落空的 `@tag`）不阻断颜色/边缘诊断，但原因必须报出来。
+  let stages : Array[@render.ImpactStage] = []
+  let mut ops_error = ""
+  let doc = match require_doc(s) {
+    Ok(d) => d
+    Err(e) => return err(e)
+  }
+  match mvsl_resolved(s, doc) {
+    Ok(prog) =>
+      match @render.impact_stages(doc, env, prog) {
+        Ok(pair) => {
+          let mut i = 0
+          while i < pair.0.length() {
+            stages.push(pair.0[i])
+            i = i + 1
+          }
+        }
+        Err(e) => ops_error = e
+      }
+    Err(e) => ops_error = e
   }
   // ── 批量模式：points=x1,y1;x2,y2;... ──
   // 单点模式一次往返只能问一个位置，模型探一圈（比如 9 宫格）要 9 次调用。
@@ -215,7 +237,7 @@ fn cmd_probe(s : Session, tokens : Array[String]) -> String {
       sb.write_string(",\"r\":\{r},\"points\":[")
       let mut first = true
       for pt in pts {
-        let one = match probe_one_json(s, base, pt.0, pt.1, r, false) {
+        let one = match probe_one_json(s, base, stages, ops_error, pt.0, pt.1, r, false) {
           Ok(j) => j
           Err(e) => return err(e)
         }
@@ -248,7 +270,7 @@ fn cmd_probe(s : Session, tokens : Array[String]) -> String {
     Some(v) => v
     None => return err("y=\{yv} 不是整数")
   }
-  let one = match probe_one_json(s, base, x, y, r, true) {
+  let one = match probe_one_json(s, base, stages, ops_error, x, y, r, true) {
     Ok(j) => j
     Err(e) => return err(e)
   }
@@ -304,6 +326,8 @@ fn parse_probe_points(spec : String) -> Result[Array[(Int, Int)], String] {
 fn probe_one_json(
   s : Session,
   base : @codec.RgbaBuf,
+  stages : Array[@render.ImpactStage],
+  ops_error : String,
   x : Int,
   y : Int,
   r : Int,
@@ -328,27 +352,43 @@ fn probe_one_json(
   sb.write_string(stats_json(pr.stats))
   sb.write_string(",\"edge\":\{@core.fmt_num(pr.edge)}")
   sb.write_string(",\"edge_conf\":\{@core.fmt_num(pr.edge_conf)}")
-  // 逐算子的选择子归属（同色异义干扰在这里暴露：membership 高但成分不同）
-  sb.write_string(",\"ops\":[")
+  // 逐算子的选择子归属（同色异义干扰在这里暴露：membership 高但成分不同）。
+  //
+  // **在该算子自己的基底上求值**：`layer=` 算子在层栅格上执行、选择子也在那里
+  // 求值，文档级算子才在合成底图上。此前这里一律用合成底图，于是层算子的
+  // membership/连通域报的是"另一张图上的数"——调用方照它调参，渲染器却在
+  // 别处求值。基底由 `@render.impact_stages` 一次算好传进来（不在每个点里
+  // 重跑整条管线：64 点 × 全图渲染是不可接受的）。
   let ctx = @pixel.SelCtx::new(base)
+  sb.write_string(",\"ops\":[")
   let mut first = true
-  for op in s.mvsl.ops {
-    let wf = match @pixel.op_weight(op, ctx, @pixel.FieldCache::new()) {
+  let mut k = 0
+  while k < stages.length() {
+    let st = stages[k]
+    let wf = match @pixel.op_weight(st.op, @pixel.SelCtx::new(st.basis), @pixel.FieldCache::new()) {
       Ok(w) => w
       Err(e) => return Err(e)
     }
-    let labels = @pixel.label_components(base, wf)
+    let labels = @pixel.label_components(st.basis, wf)
     let cid = @pixel.component_id_at(labels, x, y)
     if first {
       first = false
     } else {
       sb.write_string(",")
     }
-    sb.write_string("{\"id\":\"\{@core.json_escape(op.id)}\"")
+    sb.write_string("{\"id\":\"\{@core.json_escape(st.op.id)}\"")
+    sb.write_string(",\"layer\":\"\{@core.json_escape(st.layer)}\"")
     sb.write_string(",\"membership\":\{@core.fmt_num(@pixel.field_get(wf, x, y))}")
     sb.write_string(",\"component\":\{cid}}")
+    k = k + 1
   }
   sb.write_string("]")
+  // 表跑不起来时**不许静默少一段**：逐算子归属报不出来，就把原因报出来
+  // （点上的颜色/边缘统计与编辑表无关，照旧可用——probe 是诊断工具，
+  // 坏表时期正是最需要它的时候）。
+  if ops_error != "" {
+    sb.write_string(",\"ops_error\":\"\{@core.json_escape(ops_error)}\"")
+  }
   // 当前编辑表的保护断言在这一点上是否覆盖（「这里能不能动」的即答）
   sb.write_string(",\"guards\":[")
   let mut gfirst = true

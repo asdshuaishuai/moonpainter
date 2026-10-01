@@ -535,3 +535,117 @@ test "layer=@tag 的坏写法：裸 @ 与落不到任何层都报错" {
       assert_true(e.contains("nobody"), msg="落不到任何层的报错应点出标签：\{e}")
   }
 }
+
+///|
+/// 逐位比较两张缓冲（尺寸 + 每个像素）。
+fn same_buf(a : @codec.RgbaBuf, b : @codec.RgbaBuf) -> Bool {
+  if a.width != b.width || a.height != b.height {
+    return false
+  }
+  let total = a.width * a.height
+  let mut i = 0
+  while i < total {
+    if a.pixels[i] != b.pixels[i] {
+      return false
+    }
+    i = i + 1
+  }
+  true
+}
+
+///|
+fn stages_of(
+  doc : @core.Document,
+  env : @render.RenderEnv,
+  prog : @core.EditProgram,
+) -> (Array[@render.ImpactStage], @codec.RgbaBuf) {
+  match @render.impact_stages(doc, env, prog) {
+    Ok(pair) => pair
+    Err(e) => abort("不该失败: \{e}")
+  }
+}
+
+///|
+test "分析出口与真渲染同源：impact_stages 的最终图 == render_doc_with（文档级/层作用域/标签作用域）" {
+  let env = @render.RenderEnv::new()
+  let doc = two_tone_doc()
+  let half = rsel(0.0, 0.0, 8.0, 8.0)
+  // 文档级
+  let p_doc = rprog(half, 120.0)
+  // 层作用域
+  let p_layer = rprog_layer(half, 120.0, "l1")
+  // 标签作用域（活在容器上）
+  let tagged = tag_only(doc, "l1", "hero")
+  let p_tag : @core.EditProgram = { ops: [{ ..rprog_layer(half, 120.0, "@hero").ops[0] }], guards: [] }
+  for pair in [
+    (doc, p_doc, "文档级"),
+    (doc, p_layer, "层作用域"),
+    (tagged, p_tag, "标签作用域"),
+  ] {
+    let (stages, out) = stages_of(pair.0, env, pair.1)
+    let real = must_render(pair.0, env, pair.1)
+    assert_true(
+      same_buf(out, real),
+      msg="\{pair.2}：impact_stages 的最终图与真渲染不是逐位同一张",
+    )
+    assert_eq(stages.length(), 1, msg="\{pair.2}：一条算子应有一个阶段")
+  }
+}
+
+///|
+test "逐算子阶段的基底是**该算子真正求值的那张图**：层算子=层栅格，文档级=合成底图" {
+  let env = @render.RenderEnv::new()
+  let doc = two_tone_doc()
+  let half = rsel(0.0, 0.0, 8.0, 8.0)
+  // 层算子：基底必须逐位等于 rasterize_layer(l1)（透明底 + 只画这一层）
+  let (ls, _) = stages_of(doc, env, rprog_layer(half, 120.0, "l1"))
+  let l1 = doc.layers[0]
+  let lb = @render.rasterize_layer(l1, doc.width, doc.height, env)
+  assert_eq(ls[0].layer, "l1", msg="阶段应报出具体层 id")
+  assert_true(same_buf(ls[0].basis, lb), msg="层算子的选择子基底不是该层自己的栅格")
+  assert_true(!same_buf(ls[0].basis, @render.render_doc(doc, env)), msg="层算子的基底不该是合成底图")
+  assert_true(same_buf(ls[0].before, lb), msg="第一个层算子的 before = 层栅格")
+  // 文档级算子：基底是合成底图
+  let (ds, _) = stages_of(doc, env, rprog(half, 120.0))
+  let base = @render.render_doc(doc, env)
+  assert_eq(ds[0].layer, "", msg="文档级算子的 layer 应为空")
+  assert_true(same_buf(ds[0].basis, base), msg="文档级算子的基底不是合成底图")
+  assert_true(same_buf(ds[0].before, base), msg="第一个文档级算子的 before = 合成底图")
+}
+
+///|
+test "混合作用域的阶段顺序与链式一致：层算子按层序在前，文档级算子在后" {
+  let env = @render.RenderEnv::new()
+  let doc = two_tone_doc()
+  let half = rsel(0.0, 0.0, 8.0, 8.0)
+  let l_op : @core.EditOp = { ..rprog_layer(half, 120.0, "l1").ops[0], id: "layer-op" }
+  let d_op : @core.EditOp = { ..rprog(half, 40.0).ops[0], id: "doc-op" }
+  let prog : @core.EditProgram = { ops: [d_op, l_op], guards: [] }
+  let (stages, out) = stages_of(doc, env, prog)
+  assert_eq(stages.length(), 2, msg="两条算子两个阶段")
+  // 表里先写的是文档级算子，但两段式下**层算子先执行**（跨作用域顺序不保留，
+  // DESIGN §8 已声明）——阶段报告必须照执行的顺序，而不是表格字面顺序。
+  assert_eq(stages[0].op.id, "layer-op", msg="第一阶段的算子 id")
+  assert_eq(stages[0].layer, "l1", msg="第一阶段应是层算子")
+  assert_eq(stages[1].layer, "", msg="第二阶段应是文档级算子")
+  assert_eq(stages[1].op.id, "doc-op", msg="第二阶段的算子 id")
+  // 文档级算子的 before = 层算子合成回去之后的图（不是合成底图）
+  let base = @render.render_doc(doc, env)
+  assert_true(!same_buf(stages[1].before, base), msg="文档级 before 应是已改过层的合成图")
+  assert_true(same_buf(out, must_render(doc, env, prog)), msg="最终图必须与真渲染一致")
+}
+
+///|
+test "标签作用域在阶段报告里已展开成具体层：一个标签两条算子两条阶段" {
+  let env = @render.RenderEnv::new()
+  let doc = two_tone_doc()
+  let mut tagged = tag_only(doc, "l1", "hero")
+  tagged = tag_only(tagged, "l2", "hero")
+  let op : @core.EditOp = { ..rprog_layer(whole16(), 120.0, "@hero").ops[0] }
+  let prog : @core.EditProgram = { ops: [op], guards: [] }
+  let (stages, _) = stages_of(tagged, env, prog)
+  assert_eq(stages.length(), 2, msg="两个层带标签 → 两条阶段")
+  assert_eq(stages[0].layer, "l1", msg="层序即顺序（l1 先）")
+  assert_eq(stages[1].layer, "l2", msg="层序即顺序（l2 后）")
+  assert_eq(stages[0].op.id, "e1", msg="展开后 id 保持不变（同一算子落到两个层）")
+}

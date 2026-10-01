@@ -93,12 +93,18 @@ test "probe：单点邻域统计 + 逐算子 membership 与连通域 id" {
   let l = run(s, "probe x=80 y=120 r=2")
   assert_true(l.contains("\"x\":80"), msg=l)
   assert_true(l.contains("\"r\":2"), msg=l)
-  assert_true(l.contains("\"ops\":[{\"id\":\"e1\",\"membership\":1,\"component\":1}]"), msg=l)
+  assert_true(
+    l.contains("\"ops\":[{\"id\":\"e1\",\"layer\":\"\",\"membership\":1,\"component\":1}]"),
+    msg=l,
+  )
   assert_true(l.contains("\"guards\":[{\"id\":\"g1\",\"membership\":0}]"), msg=l)
   assert_true(l.contains("\"edge\":0"), msg=l)
   // 右半：算子不命中（component 0），保护断言覆盖
   let rr = run(s, "probe x=300 y=120 r=2")
-  assert_true(rr.contains("\"ops\":[{\"id\":\"e1\",\"membership\":0,\"component\":0}]"), msg=rr)
+  assert_true(
+    rr.contains("\"ops\":[{\"id\":\"e1\",\"layer\":\"\",\"membership\":0,\"component\":0}]"),
+    msg=rr,
+  )
   assert_true(rr.contains("\"guards\":[{\"id\":\"g1\",\"membership\":1}]"), msg=rr)
   // 边界处（x=159/160 交界）应有明显边缘
   let edge = run(s, "probe x=160 y=120 r=1")

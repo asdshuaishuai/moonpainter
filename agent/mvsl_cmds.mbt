@@ -18,8 +18,16 @@
 /// 「选中的是不是头发」这类语义判断，输入是 overlay 图。
 
 ///|
-/// 一轮 MVSL 求值的底图：当前文档的全尺寸渲染。
-fn mvsl_base(s : Session) -> Result[@codec.RgbaBuf, String] {
+/// 一轮 MVSL 分析的**公共上下文**：同一份 `env`、同一张合成底图。
+///
+/// 为什么合成一对返回：分析出口（impact/assert/lint/probe）既要用 env 跑真
+/// 渲染管线，又要合成底图当基准。若各自算一遍，就会出现"两个命令的 base 不
+/// 是同一张图"这种没人会发现的漂移——本仓库的旧账（同一个判断两处实现，先
+/// 烂的一定是没人读的那一处）在这里的形态就是"同一个基准两处合成"。
+/// 顺带省掉重复的资产解码。
+fn mvsl_context(
+  s : Session,
+) -> Result[(@render.RenderEnv, @codec.RgbaBuf), String] {
   let doc = match require_doc(s) {
     Ok(d) => d
     Err(e) => return Err(e)
@@ -28,7 +36,16 @@ fn mvsl_base(s : Session) -> Result[@codec.RgbaBuf, String] {
     Ok(e) => e
     Err(e) => return Err(e)
   }
-  Ok(@render.render_doc(doc, env))
+  Ok((env, @render.render_doc(doc, env)))
+}
+
+///|
+/// 一轮 MVSL 求值的底图：当前文档的全尺寸渲染。
+fn mvsl_base(s : Session) -> Result[@codec.RgbaBuf, String] {
+  match mvsl_context(s) {
+    Ok(pair) => Ok(pair.1)
+    Err(e) => Err(e)
+  }
 }
 
 ///|
@@ -286,20 +303,26 @@ fn cmd_mvsl_impact(s : Session, tokens : Array[String]) -> String {
       max_side = v
     }
   }
-  let base = match mvsl_base(s) {
-    Ok(b) => b
+  let (env, base) = match mvsl_context(s) {
+    Ok(pair) => pair
     Err(e) => return err(e)
   }
   let prog = match mvsl_resolved(s, doc) {
     Ok(p) => p
     Err(e) => return err(e)
   }
-  let (out, stages) = match @pixel.run_program(base, prog) {
+  // **必须量真渲染那一步**：`layer=` 算子在**该层自己的栅格**上执行、选择子也
+  // 在那里求值，文档级算子才在合成底图上。此前这里直接 `run_program(base, prog)`
+  // （合成底图上跑整张表，`run_program` 根本不看 `layer`），于是 `layer=l1` 的
+  // 表被报成"整幅 512 个像素都改了"（真渲染只改那一层的 256 个），且与文档级
+  // 程序给出**同一个哈希**——README 那句"三条出口同一张图"在层作用域下是假的。
+  // 现在逐算子阶段、选择子基底、最终图都取自 `@render.impact_stages`，
+  // 与 `render` 共用同一段执行代码（构造性一致，不是两处各自小心）。
+  let (stages, out) = match @render.impact_stages(doc, env, prog) {
     Ok(r) => r
     Err(e) => return err(e)
   }
   // 逐算子的泄漏率：第一个越界的算子才是要修的那个
-  let base_ctx = @pixel.SelCtx::new(base)
   let cache = @pixel.FieldCache::new()
   // 信封里的 `result_sha256` 必须是**回吐那张 PNG** 的 sha——与 `render` 的
   // `render_sha256` 同一份契约（"渲染产物缓存的唯一真值"）。此前它哈希的是
@@ -315,33 +338,34 @@ fn cmd_mvsl_impact(s : Session, tokens : Array[String]) -> String {
   sb.write_string(",\"result_sha256\":\"\{@base.sha256_hex(preview_png)}\"")
   sb.write_string(",\"full_sha256\":\"\{@base.sha256_hex(@codec.png_encode(out))}\"")
   sb.write_string(",\"canvas\":[\{base.width},\{base.height}]")
-  sb.write_string(",\"stages\":\{stages.length()}")
+  // `doc_stages` = 能写进 `stage:n` 的阶段数（= 文档级算子数；`layer=` 与
+  // `stage:` 的组合在入口就被拒，见 core.layer_scope_error）。`executed` =
+  // 真正执行到的算子级阶段数（`layer=@tag` 展开成几层就是几个）。
+  sb.write_string(
+    ",\"doc_stages\":\{@core.program_doc_scope(prog).ops.length()},\"executed\":\{stages.length()}",
+  )
   sb.write_string(",\"per_op\":[")
   let mut first = true
-  let mut prev = base
   // 整表支撑集 = 各算子权重场的逐点并集。**不能用零场**：零场里每个像素都在
   // 支撑集之外，total 的 leak_ratio 会退化成 changed/total（语义全错）。
   let mut total_field = @pixel.field_new(base.width, base.height)
-  let mut i = 0
-  while i < s.mvsl.ops.length() {
-    let op = s.mvsl.ops[i]
-    let wf = match @pixel.op_weight(op, base_ctx, cache) {
+  for st in stages {
+    // 选择子在**该算子自己的基底**上求值：层算子是层栅格，文档级是合成底图。
+    // 拿合成底图去算层算子的权重场，就是"用 A 的选区解释 B 上的改动"。
+    let wf = match @pixel.op_weight(st.op, @pixel.SelCtx::new(st.basis), cache) {
       Ok(w) => w
       Err(e) => return err(e)
     }
     total_field = @pixel.field_union(total_field, wf)
-    let after = stages[i]
-    let rep = @pixel.diff_report(prev, after, wf)
+    let rep = @pixel.diff_report(st.before, st.after, wf)
     if first {
       first = false
     } else {
       sb.write_string(",")
     }
     sb.write_string(
-      "{\"id\":\"\{@core.json_escape(op.id)}\",\"changed\":\{rep.changed},\"total\":\{rep.total},\"mean_de\":\{@core.fmt_num(rep.mean_de)},\"max_de\":\{@core.fmt_num(rep.max_de)},\"sel_de\":\{@core.fmt_num(rep.sel_de)},\"leak_ratio\":\{@core.fmt_num(rep.leak_ratio)}}",
+      "{\"id\":\"\{@core.json_escape(st.op.id)}\",\"layer\":\"\{@core.json_escape(st.layer)}\",\"changed\":\{rep.changed},\"total\":\{rep.total},\"mean_de\":\{@core.fmt_num(rep.mean_de)},\"max_de\":\{@core.fmt_num(rep.max_de)},\"sel_de\":\{@core.fmt_num(rep.sel_de)},\"leak_ratio\":\{@core.fmt_num(rep.leak_ratio)}}",
     )
-    prev = after
-    i = i + 1
   }
   sb.write_string("]")
   let total_rep = @pixel.diff_report(base, out, total_field)
@@ -363,19 +387,22 @@ fn cmd_mvsl_assert(s : Session) -> String {
     Ok(d) => d
     Err(e) => return err(e)
   }
-  let base = match mvsl_base(s) {
-    Ok(b) => b
+  let (env, base) = match mvsl_context(s) {
+    Ok(pair) => pair
     Err(e) => return err(e)
   }
   let prog = match mvsl_resolved(s, doc) {
     Ok(p) => p
     Err(e) => return err(e)
   }
-  let (out, _) = match @pixel.run_program(base, prog) {
+  // 断言必须在**真渲染的最终图**上判定：`layer=` 算子的效果不在合成底图上，
+  // 拿近似图去判"保护区被没被破坏"会得出反向结论——安全网变成假安心
+  // （或冤枉一条本来合规的表）。同 impact，取自同一次真管线。
+  let (_, out) = match @render.impact_stages(doc, env, prog) {
     Ok(r) => r
     Err(e) => return err(e)
   }
-  let fails = match @pixel.check_guards(base, out, s.mvsl) {
+  let fails = match @pixel.check_guards(base, out, prog) {
     Ok(f) => f
     Err(e) => return err(e)
   }

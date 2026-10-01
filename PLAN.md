@@ -1828,6 +1828,64 @@ CLI 上手工验"摘标签后 lint 报 P4"时，`lint` 回了 `violations:0` —
 ②**"判据没生效"的第一嫌疑人是输入，不是判据**：先确认前置状态（这里是
 `mvsl-show ops=1`）、再怀疑闸。补了正控测试（同一张表带 `version` 就装得进）。
 
+### 十二、分析出口不许是"另一套实现"：`impact_stages` 一处渲染
+
+这一轮从**读上一轮自己写下的文档**开始：README 写着「`render` / `previews/` /
+`mvsl-impact` 三条出口同一张图」，而 `verify.sh#mvsl-e2e` 的 render≡impact
+断言只用**文档级**表——上一轮刚落地的层作用域根本没有判据照到。先做实验
+（32×16，l1 红左 / l2 蓝右，`recolor hue=180` 全图选择子）：
+
+- `layer=l1`：`render_sha256 = 60b322f2…` vs `mvsl-impact.full_sha256 = 7ee42eff…`
+  ——**不是同一张图**；
+- impact 报 `changed_total = 512`（整幅 32×16）、逐算子 `changed = 512`；
+- 而 `layer=l1` 与 `layer=""` 给出**同一个 `full_sha256`** —— `layer` 被完全忽略。
+
+病根：`cmd_mvsl_impact` 走 `run_program(合成底图, 整表)`，而 `run_program` 的
+契约里**没有 `layer` 这个字段**（它只认 ops 的序号与选择子）。同一根因还波及
+`mvsl-assert`（在错的图上判定保护断言——安全网变成假安心）、`lint_mvsl`
+（白装/违约判定）、`probe`（逐算子 membership）。这是上一轮"同一个**拒绝**
+判断两处实现"的孪生形态：同一个**渲染**两处实现，而分析那处没人对账。
+
+修法不是"再小心一处"，而是**让渲染自己走那个函数**：
+`render.impact_stages(doc, env, prog) -> (Array[ImpactStage], RgbaBuf)`，
+每个阶段带 `op`/`layer`/`basis`/`before`/`after`；`render_doc_with` 改成
+`impact_stages(...)` 的最终图那一半，四个分析出口全部改读它——分叉在**构造上**
+不可能。`layer=@<标签>` 的展开仍只有一处（`core.expand_layer_scopes`），展开后
+每条落到具体层 id，逐算子报告因此带得出 `layer`。
+
+判据（都带**判别力自证**）：
+
+- render：三种作用域下 `impact_stages` 的最终图与 `render_doc_with` **逐位相同**；
+  层算子的 `basis` 逐位等于该层栅格（不是合成底图）；混合作用域的阶段顺序是
+  "层在前、文档级在后"，链式 `after[i] == before[i+1]`；
+- agent：层作用域的 `changed_total` == 真渲染的逐位差异数（38400 而非 76800）、
+  `full_sha256` == 真渲染那张 PNG 的 sha；被遮住的层"改了自己的层、对外不可见"
+  （逐算子 76800 / 总图 0，且 `sel_de > 0`）；`mvsl-assert` 的结论 == 在真渲染图上
+  判定的结论，并**先断言近似口径会给出相反结论**（哪天两者一致，这条测试自己红）；
+  `lint` 的"白装"判据在层作用域下不误报（近似口径与真渲染的结论**恰好相反**）；
+  `probe` 的 membership 按层栅格算、坏表报 `ops_error` 而不是静默少一段；
+- `verify.sh#mvsl-e2e`：层作用域下 render ≡ impact，且 `changed_total` 锚住
+  `1024`（该层像素数），对照组去掉 `layer=` 得 2048 且最终图不同。
+
+新增 6 条变异（U7 忽略 `layer` 作用域 / U8 层算子基底退回合成底图 /
+U9 probe membership 用合成底图 / U10 impact 权重场用合成底图 /
+U11 assert 在近似图上判定 / U12 lint 把「改了层栅格但对外不可见」误归因为
+「选择子没命中」），`MUTS` 到 128 条（127 抓住 + 1 等价）。
+
+⚠️ 本轮还当场撞出**归因**错位：`total_rep.changed == 0` 时 lint 一律说
+"选择子一个像素都没命中"——而在层作用域下这可能是**改了层栅格、只是对外
+看不见**（层被隐藏 / 被上层完全遮住 / 组 opacity=0）。两种情况的修法完全
+不同（改选择子 vs 改层），所以 lint 现在按"逐算子（各自基底上）的真实改动
+总量"分岔归因，正控是"真的没命中时照旧说没命中"。
+
+⚠️ 写 U11 时第一次替换串类型不匹配（`run_program` 返回 `(buf, stages)`，不是
+`(stages, buf)`），变异门当场判 INVALID——**INVALID 不是"通过"**，它意味着这条
+变异压根没在测试任何东西（同 AGENTS 里 R29 那课）。
+⚠️ 手搓 base64 验证"被遮层"场景时又踩了一次同款坑：`luma` 原子的 canonical
+字段名是 `l`/`lh`/`feather`，我写成 `l_center`/`l_half`，`mvsl-set` 拒了而我没看
+回包，差点把 `per_op.changed = 0` 当成渲染 bug——**手工证据的第一步永远是确认
+前置状态**（上一轮刚写下这句，这一轮又撞一次）。
+
 ### 仍未落地（诚实边界，详见 README 与 DESIGN §8）
 
 - **MVSL 的跨作用域顺序与 `stage:n` 的图层粒度**：`layer=@<标签>` 已经覆盖

@@ -551,35 +551,39 @@ MUTS = [
         "R47",
         "mvsl-impact max=0 静默退回默认 1024",
         "agent/mvsl_cmds.mbt",
-        r"""      if v <= 0 {
+        r"""  match check_kv_args(tokens, 1, ["max"], "mvsl-impact") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }
+  let mut max_side = 1024
+  for t in tokens {
+    if t.has_prefix("max=") {
+      let v = match to_i(t[4:].to_owned()) {
+        Some(v) => v
+        None => return err("max=\{t[4:].to_owned()} 不是整数")
+      }
+      if v <= 0 {
         return err("max=\{v} 必须为正（预览最长边像素）")
       }
       max_side = v
     }
-  }
-  let base = match mvsl_base(s) {
-    Ok(b) => b
+  }""",
+        r"""  match check_kv_args(tokens, 1, ["max"], "mvsl-impact") {
+    Ok(_) => ()
     Err(e) => return err(e)
   }
-  let prog = match mvsl_resolved(s, doc) {
-    Ok(p) => p
-    Err(e) => return err(e)
-  }
-  let (out, stages) = match @pixel.run_program(base, prog) {""",
-        r"""      if v > 0 {
+  let mut max_side = 1024
+  for t in tokens {
+    if t.has_prefix("max=") {
+      let v = match to_i(t[4:].to_owned()) {
+        Some(v) => v
+        None => return err("max=\{t[4:].to_owned()} 不是整数")
+      }
+      if v > 0 {
         max_side = v
       }
     }
-  }
-  let base = match mvsl_base(s) {
-    Ok(b) => b
-    Err(e) => return err(e)
-  }
-  let prog = match mvsl_resolved(s, doc) {
-    Ok(p) => p
-    Err(e) => return err(e)
-  }
-  let (out, stages) = match @pixel.run_program(base, prog) {""",
+  }""",
         "killed",
     ),
     (
@@ -1356,6 +1360,68 @@ MUTS = [
         """        if !hit {
           let _ = op
         }""",
+        "killed",
+    ),
+    (
+        "U7",
+        "真渲染/分析忽略 layer= 作用域（整表当文档级跑，层作用域形同不存在）",
+        "render/scene.mbt",
+        """  // 不含图层级算子 → 原来的单段路径，**逐位不变**。
+  if !@core.program_has_layer_scope(prog) {""",
+        """  // 不含图层级算子 → 原来的单段路径，**逐位不变**。
+  if true {""",
+        "killed",
+    ),
+    (
+        "U8",
+        "层算子的选择子基底退回合成底图（在错的图上求值/量数）",
+        "render/scene.mbt",
+        """        list.push({
+          op: sub.ops[k],
+          layer: l.id,
+          basis: lb,""",
+        """        list.push({
+          op: sub.ops[k],
+          layer: l.id,
+          basis: out,""",
+        "killed",
+    ),
+    (
+        "U9",
+        "probe 的逐算子 membership 用合成底图（层算子的选区在错的图上算）",
+        "agent/affordance_cmds.mbt",
+        """    let wf = match @pixel.op_weight(st.op, @pixel.SelCtx::new(st.basis), @pixel.FieldCache::new()) {""",
+        """    let wf = match @pixel.op_weight(st.op, @pixel.SelCtx::new(base), @pixel.FieldCache::new()) {""",
+        "killed",
+    ),
+    (
+        "U10",
+        "mvsl-impact 的逐算子权重场用合成底图（支撑集/核心区 ΔE 量错图）",
+        "agent/mvsl_cmds.mbt",
+        """    let wf = match @pixel.op_weight(st.op, @pixel.SelCtx::new(st.basis), cache) {""",
+        """    let wf = match @pixel.op_weight(st.op, @pixel.SelCtx::new(base), cache) {""",
+        "killed",
+    ),
+    (
+        "U12",
+        "lint 把「改了层栅格但对外不可见」误归因为「选择子没命中」（修法被指错方向）",
+        "agent/mvsl_lint.mbt",
+        """    } else if stage_changed > 0 {""",
+        """    } else if stage_changed > 100000000 {""",
+        "killed",
+    ),
+    (
+        "U11",
+        "mvsl-assert 在近似图（合成底图上跑整表）上判定保护断言",
+        "agent/mvsl_cmds.mbt",
+        """  let (_, out) = match @render.impact_stages(doc, env, prog) {
+    Ok(r) => r
+    Err(e) => return err(e)
+  }""",
+        """  let (out, _) = match @pixel.run_program(base, prog) {
+    Ok(r) => r
+    Err(e) => return err(e)
+  }""",
         "killed",
     ),
 ]

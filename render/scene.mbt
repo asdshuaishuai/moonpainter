@@ -919,6 +919,30 @@ pub fn render_doc(
 }
 
 ///|
+/// 一个算子**真正被施加在哪张图、选择子在哪张图上求值**的事实（逐算子阶段）。
+///
+/// 存在的理由：编辑表有两条语义路径——文档级算子作用在**合成底图**上，而
+/// `layer=` 算子作用在**该层自己的栅格**上（选择子也在那里求值）。分析类
+/// 出口（`mvsl-impact` 的逐算子 diff、`mvsl-assert`/`lint` 的断言判定、
+/// `probe` 的逐算子 membership）必须量的是**真渲染的那一步**，否则它们会
+/// 拿合成底图上的近似值去描述一次根本不在那里发生的编辑（实测：`layer=l1`
+/// 的表被报成"整幅 512 像素都改了"，而真渲染只改那一层的 256 个。
+/// 更糟的是保护断言会在错的图上判定，安全网变成假安心）。
+///
+/// `basis` 是**该算子选择子的求值基底**（层栅格或合成底图），
+/// `before`/`after` 是它在**同一条基线**上的前后缓冲——三者在同一个坐标系
+/// （都是整幅画布尺寸的缓冲），所以既能逐算子做 diff，也能把某条算子的
+/// 权重场搬到"整表支撑集"里求并。
+pub(all) struct ImpactStage {
+  op : @core.EditOp
+  /// "" = 文档级；否则是**具体**层 id（`layer=@tag` 在这里已经展开）
+  layer : String
+  basis : @codec.RgbaBuf
+  before : @codec.RgbaBuf
+  after : @codec.RgbaBuf
+}
+
+///|
 /// 整文档渲染 + 施加 MVSL 编辑表（最终一遍）。
 ///
 /// 语义（PLAN-MVSL §P0）：`最终图 = apply(program, 层合成底图)`。
@@ -931,36 +955,74 @@ pub fn render_doc(
 ///
 /// 编辑表里出现前视 STAGE 引用、未知算子等坏程序时返回 Err，**绝不当空
 /// 程序糊过去**——静默漏渲染一批编辑正是 PLAN-MVSL 明令禁止的错渲。
+///
+/// **实现上它就是 `impact_stages` 的最终图那一半**：渲染与分析共用同一段
+/// 执行代码，于是"分析出口量的是真渲染那一步"是构造性成立的，而不是靠
+/// 两处各自小心（本仓库的旧账：同一个判断两处实现，先烂的一定是没人读的
+/// 那处）。
 pub fn render_doc_with(
   doc : @core.Document,
   env : RenderEnv,
   prog : @core.EditProgram,
 ) -> Result[@codec.RgbaBuf, String] {
-  // 不含图层级算子 → 原来的单段路径，**逐位不变**。
-  if !@core.program_has_layer_scope(prog) {
-    let base = render_layers(doc, env)
-    match @pixel.run_program(base, prog) {
-      Ok(pair) => Ok(pair.0)
-      Err(e) => Err("MVSL 编辑表执行失败：\{e}")
-    }
-  } else {
-    render_doc_with_layer_scope(doc, env, prog)
+  match impact_stages(doc, env, prog) {
+    Ok(pair) => Ok(pair.1)
+    Err(e) => Err(e)
   }
 }
 
 ///|
-/// **两段式**渲染（表里含 `layer=` 算子时）。
+/// 真渲染管线的**逐算子阶段**（渲染与分析出口的唯一实现）。
 ///
-/// 1. 被引用的层各自栅格化，只施加"属于它的算子"——选择子因此在**该层自己的
-///    栅格**上求值，这正是"只改这一层"的关键（合成底图上做不到：那里前景与
-///    背景已经乘在一起了）；
-/// 2. 按原顺序合成：被改的层用改后的栅格，其余层照旧直接画；
-/// 3. 再对合成底图施加**文档级**算子，并统一检查**全部**保护断言。
-fn render_doc_with_layer_scope(
+/// 返回 `(阶段数组, 最终图)`。
+///
+///   * 不含 `layer=` 算子 → 单段：合成底图 → 逐算子应用。这是与老路径
+///     **逐位相同**的那条（`run_program` 的 bit-exact 契约），保留它是因为
+///     既有 golden 与 open→save 断言都钉在这条路径上；
+///   * 含 `layer=` 算子 → **两段式**：
+///     1. 被引用的层各自栅格化到透明底，只施加"属于它的算子"——选择子因此在
+///        **该层自己的栅格**上求值，这正是"只改这一层"的关键（合成底图上做
+///        不到：那里前景与背景已经乘在一起了）；
+///     2. 按原顺序合成：被改的层用改后的栅格，其余层照旧直接画；
+///     3. 再对合成底图施加**文档级**算子。
+///
+/// 每个阶段的 `before`/`after` 都在它自己那条基线（层栅格 或 合成底图）上，
+/// `basis` 是该算子选择子的求值基底。逐算子的口径因此与渲染器**逐位一致**：
+/// 层算子的 diff 在层栅格上算，文档级算子的 diff 在合成图上算。
+///
+/// 段间顺序说明（DESIGN §8 已声明的边界）：两段式下**跨作用域的相对顺序不
+/// 保留**——一条文档级算子无法插在两条图层级算子中间，所以阶段数组的顺序
+/// 是"层算子（按层序、层内按表序）→ 文档级算子（按表序）"，而不是表格字面
+/// 顺序。逐算子报告照这个顺序给出，并把 `layer` 一起报出来，调用方不必猜。
+pub fn impact_stages(
   doc : @core.Document,
   env : RenderEnv,
   prog : @core.EditProgram,
-) -> Result[@codec.RgbaBuf, String] {
+) -> Result[(Array[ImpactStage], @codec.RgbaBuf), String] {
+  // 不含图层级算子 → 原来的单段路径，**逐位不变**。
+  if !@core.program_has_layer_scope(prog) {
+    let base = render_layers(doc, env)
+    let (out, stages) = match @pixel.run_program(base, prog) {
+      Ok(pair) => pair
+      Err(e) => return Err("MVSL 编辑表执行失败：\{e}")
+    }
+    let list : Array[ImpactStage] = []
+    let mut prev = base
+    let mut i = 0
+    while i < prog.ops.length() {
+      let after = stages[i]
+      list.push({
+        op: prog.ops[i],
+        layer: "",
+        basis: base,
+        before: prev,
+        after,
+      })
+      prev = after
+      i = i + 1
+    }
+    return Ok((list, out))
+  }
   match @core.layer_scope_error(prog) {
     Some(e) => return Err(e)
     None => ()
@@ -988,6 +1050,7 @@ fn render_doc_with_layer_scope(
   }
   let out = @codec.rgba_new(w, h)
   @codec.fill_rect_rgba(out, 0, 0, w, h, 0xFFFFFFFF)
+  let list : Array[ImpactStage] = []
   for l in doc.layers {
     let sub = @core.program_for_layer(prog, l.id)
     if sub.ops.length() == 0 {
@@ -996,21 +1059,51 @@ fn render_doc_with_layer_scope(
       paint_layer(l, out, env, 1.0)
     } else {
       let lb = rasterize_layer(l, w, h, env)
-      let edited = match @pixel.run_program(lb, sub) {
-        Ok(pair) => pair.0
+      let sub_stages = match @pixel.run_program(lb, sub) {
+        Ok(pair) => pair
         Err(e) => return Err("MVSL 图层 \{l.id} 执行失败：\{e}")
       }
-      blend_buffer(out, edited, l.blend)
+      // 层栅格上的逐算子阶段：`before/after` 都在**这一层**的缓冲上
+      let mut prev = lb
+      let mut k = 0
+      while k < sub.ops.length() {
+        let after = sub_stages.1[k]
+        list.push({
+          op: sub.ops[k],
+          layer: l.id,
+          basis: lb,
+          before: prev,
+          after,
+        })
+        prev = after
+        k = k + 1
+      }
+      blend_buffer(out, sub_stages.0, l.blend)
     }
   }
   let docprog = @core.program_doc_scope(prog)
   if docprog.ops.length() == 0 && docprog.guards.length() == 0 {
-    return Ok(out)
+    return Ok((list, out))
   }
-  match @pixel.run_program(out, docprog) {
-    Ok(pair) => Ok(pair.0)
-    Err(e) => Err("MVSL 编辑表执行失败：\{e}")
+  let (final_buf, doc_stages) = match @pixel.run_program(out, docprog) {
+    Ok(pair) => pair
+    Err(e) => return Err("MVSL 编辑表执行失败：\{e}")
   }
+  let mut prev = out
+  let mut i = 0
+  while i < docprog.ops.length() {
+    let after = doc_stages[i]
+    list.push({
+      op: docprog.ops[i],
+      layer: "",
+      basis: out,
+      before: prev,
+      after,
+    })
+    prev = after
+    i = i + 1
+  }
+  Ok((list, final_buf))
 }
 
 ///|

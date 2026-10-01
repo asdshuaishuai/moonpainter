@@ -175,7 +175,26 @@ manifest 的 `mvsl` 版本块 pin 住四个独立版本号（`render_contract` /
   （`最终图 = apply(program, 层合成底图)`，`render_doc_with` / `render_view_with`
   / `render_view_overlay_with`）。三条约束见 §2；三条出口
   （`render` / `previews/` / `mvsl-impact`）必须给出**同一张图**，
-  `verify.sh#mvsl-e2e` 把 `render` 与 `mvsl-impact` 的 sha256 相等做成硬断言；
+  `verify.sh#mvsl-e2e` 对**文档级与图层级两种表**都把 `render` 与 `mvsl-impact`
+  的 sha256 相等做成硬断言；
+- **两段式与逐算子阶段（`impact_stages`）**：含 `layer=` 算子的表走两段
+  ——①被引用的层各自栅格化到透明底，只施加属于它的算子（**选择子在该层自己的
+  像素上求值**，这是 `recolor` 边界去污染的关键：`I = αF + (1−α)B` 里 α 在
+  合成那一刻已被乘掉）；②按原顺序合成（被改的层用改后栅格，其余层照旧）；
+  ③再对合成底图施加**文档级**算子。
+  `render.impact_stages(doc, env, prog) -> (Array[ImpactStage], RgbaBuf)` 是
+  **渲染与分析共用的唯一实现**（`render_doc_with` 就是它的最终图那一半），
+  每个 `ImpactStage` 带 `op`/`layer`/`basis`/`before`/`after`：
+  `basis` 是该算子选择子的求值基底（层算子 = 层栅格、文档级 = 合成底图），
+  `before`/`after` 是它在同一基底上的前后缓冲。`mvsl-impact` 的逐算子
+  diff、`mvsl-assert` 的断言判定、`lint` 的白装/违约判定、`probe` 的逐算子
+  membership **全部读它**——分析出口若各自在合成底图上跑整表，就会出现
+  "报的改动数/断言结论/membership 描述的不是真渲染那一步"（实测：
+  `layer=l1` 被报成整幅都改了、且与文档级给出同一个 sha）。
+  ⚠️ **跨作用域的相对顺序不保留**（本节的声明边界）：一条文档级算子无法插在
+  两条图层级算子中间，所以逐算子报告的顺序是"层算子（按层序、层内按表序）→
+  文档级算子（按表序）"，`layer=@<标签>` 展开成几层就报几条；`stage:n` 因此
+  只切**文档级**算子序号，且与 `layer=` 不许组合（入口拒绝）；
 - **两套颜色坐标系必须分家**：`color` 选择子的 `h`/`s`/`l` 是 **OKLCh 色相 /
   OKLCh 彩度 / OKLab 亮度**；HSV 只做分析辅助（V 不是感知亮度）。凡向调用方
   报颜色数值，一律经 `pixel.ColorStats` 产出——`sel_h`/`sel_c`/`sel_l`

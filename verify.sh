@@ -293,6 +293,8 @@ printf '%s\n' \
   "mvsl-set $SCOPE_B64" \
   'sample 16 16' \
   'sample 48 16' \
+  'render 64' \
+  'mvsl-impact' \
   | moon run --target native cli > "$OUT/scope.log"
 grep -q '"op":"mvsl-set"' "$OUT/scope.log" || { echo "FAIL: 图层级编辑表装不上"; cat "$OUT/scope.log"; exit 1; }
 SCOPE_COLORS=$(grep -o '"color":"#[0-9A-F]*"' "$OUT/scope.log")
@@ -314,7 +316,46 @@ printf '%s\n' \
   "mvsl-set $(printf '%s' "${SCOPE_PROG/l1/nope}" | base64 | tr -d '\n')" \
   | moon run --target native cli > "$OUT/scope_bad.log"
 grep -q '"error":"算子引用了不存在的图层' "$OUT/scope_bad.log" || { echo "FAIL: 引用不存在的层未被拒绝"; cat "$OUT/scope_bad.log"; exit 1; }
-echo "图层级作用域 OK（左半被改、右半逐位不变；不存在的层被拒）"
+# **分析出口必须量真渲染那一步**：层作用域下 render 与 impact 仍须同图，
+# 且 impact 的改动数必须是**那一层的像素数**而不是整幅。
+# 这条此前是假的：impact 走 `run_program(合成底图, 整表)`（`run_program` 根本不看
+# `layer`），于是 `layer=l1` 被报成"整幅 2048 像素都改了"（真渲染只改 1024），
+# 而且与文档级程序给出**同一个 full_sha256**。上面那条 sample 判据照不到它
+# （它只看两个采样点的颜色），所以这里补上"图与数"的判据。
+SCOPE_RSHA=$(sed -n 's/.*"render_sha256":"\([0-9a-f]*\)".*/\1/p' "$OUT/scope.log" | tail -1)
+SCOPE_FSHA=$(sed -n 's/.*"full_sha256":"\([0-9a-f]*\)".*/\1/p' "$OUT/scope.log" | tail -1)
+if [ -z "$SCOPE_RSHA" ] || [ -z "$SCOPE_FSHA" ]; then
+  echo "FAIL: 层作用域下 render/impact 缺 sha"; cat "$OUT/scope.log"; exit 1
+fi
+if [ "$SCOPE_RSHA" != "$SCOPE_FSHA" ]; then
+  echo "FAIL: 层作用域下 render($SCOPE_RSHA) 与 impact 全分辨率结果($SCOPE_FSHA) 不是同一张图"
+  exit 1
+fi
+# 32x32 = 1024：只有被引用的那一层（左半）被改。锚住字段值结尾，不做子串匹配。
+grep -Eq '"changed_total":1024[,}]' "$OUT/scope.log" || {
+  echo "FAIL: 层作用域下 impact 的改动数不是那一层的像素数"; grep -o '"changed_total":[0-9]*' "$OUT/scope.log"; exit 1
+}
+grep -q '"layer":"l1"' "$OUT/scope.log" || { echo "FAIL: impact 没报出逐算子作用在哪一层"; exit 1; }
+# 对照：同一条算子去掉 layer= → 整幅 2048 都被改，且最终图必须**不同**
+DOC_PROG=$(printf '%s' "${SCOPE_PROG/\"layer\":\"l1\"/\"layer\":\"\"}")
+printf '%s\n' \
+  'session-open full_image' \
+  'new 64 32 uuid=mvsl-scope-doc' \
+  'add-rect x=0 y=0 w=32 h=32 fill=#FF0000FF id=l1' \
+  'add-rect x=32 y=0 w=32 h=32 fill=#FF0000FF id=l2' \
+  "mvsl-set $(printf '%s' "$DOC_PROG" | base64 | tr -d '\n')" \
+  'render 64' \
+  'mvsl-impact' \
+  | moon run --target native cli > "$OUT/scope_doc.log"
+DOC_RSHA=$(sed -n 's/.*"render_sha256":"\([0-9a-f]*\)".*/\1/p' "$OUT/scope_doc.log" | tail -1)
+grep -Eq '"changed_total":2048[,}]' "$OUT/scope_doc.log" || {
+  echo "FAIL: 文档级对照的改动数不是整幅 2048"; cat "$OUT/scope_doc.log"; exit 1
+}
+if [ "$DOC_RSHA" = "$SCOPE_RSHA" ]; then
+  echo "FAIL: 带 layer= 与不带 layer= 渲染出了同一张图——作用域没被量进去"
+  exit 1
+fi
+echo "图层级作用域 OK（左半被改、右半逐位不变；不存在的层被拒；render≡impact 且改动数=该层像素数）"
 printf '%s\n' \
   'session-open full_image' \
   "open-mpd $OUT/mvsl.mpd" \

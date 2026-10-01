@@ -1994,12 +1994,12 @@ fn cmd_lint(s : Session) -> String {
       Some(e) => v.push("P4 \{e}")
       None => ()
     }
-    match mvsl_base(s) {
-      Ok(base) =>
+    match mvsl_context(s) {
+      Ok(pair) =>
         match mvsl_resolved(s, doc) {
           // 坏作用域已经作为 P4 报过，别再拿一张解释不了的表算一遍数字
           Err(_) => ()
-          Ok(prog) => for item in lint_mvsl(base, prog) {
+          Ok(prog) => for item in lint_mvsl(doc, pair.0, pair.1, prog) {
             v.push(item)
           }
         }

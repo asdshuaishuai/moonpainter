@@ -229,7 +229,11 @@ test "MVSL：mvsl-impact 逐算子证书（改动数/ΔE/选区外泄漏率）" 
   let _ = run(s, "mvsl-set \{b64_of(text)}")
   let r = run(s, "mvsl-impact max=120")
   assert_true(r.contains("\"op\":\"mvsl-impact\""), msg=r)
-  assert_true(r.contains("\"stages\":1"), msg=r)
+  // `stages` 拆成两个各自说清自己的字段：`doc_stages` = 能写进 `stage:n` 的阶段数
+  // （= 文档级算子数），`executed` = 真正执行的算子级阶段数（`layer=@tag` 展开
+  // 成几层就是几个）。旧的单字段 `stages` 无人消费、含义还随作用域含混。
+  assert_true(jnum_field(r, "doc_stages") == 1.0, msg=r)
+  assert_true(jnum_field(r, "executed") == 1.0, msg=r)
   // 左半边 160×240 = 38400 像素被改
   assert_true(r.contains("\"changed\":38400"), msg=r)
   // 去污染 + 支撑集判据：选区外泄漏率必须精确为 0
@@ -240,8 +244,9 @@ test "MVSL：mvsl-impact 逐算子证书（改动数/ΔE/选区外泄漏率）" 
   // 空编辑表：stages 0、零改动
   let _ = run(s, "mvsl-clear")
   let r2 = run(s, "mvsl-impact")
-  assert_true(r2.contains("\"stages\":0"), msg=r2)
-  assert_true(r2.contains("\"changed_total\":0"), msg=r2)
+  assert_true(jnum_field(r2, "doc_stages") == 0.0, msg=r2)
+  assert_true(jnum_field(r2, "executed") == 0.0, msg=r2)
+  assert_true(jnum_field(r2, "changed_total") == 0.0, msg=r2)
 }
 
 ///|
@@ -682,4 +687,377 @@ test "mvsl-set 的报错回显收到的载荷（手搓 base64 漏字段时能自
   let payload_ok = "{\"version\":1,\"ops\":[],\"guards\":[]}"
   let ok = run(s, "mvsl-set \{b64_of(payload_ok)}")
   assert_true(ok.contains("\"ok\":true"), msg=ok)
+}
+
+// ---------------------------------------------------------------------------
+// 分析出口必须量真渲染那一步（layer= 算子在层栅格上执行、选择子也在那里求值）
+// ---------------------------------------------------------------------------
+
+///|
+/// 逐位不同的像素数（独立参考值：不经过任何分析出口，直接数两张缓冲）。
+fn count_diff(a : @codec.RgbaBuf, b : @codec.RgbaBuf) -> Int {
+  if a.width != b.width || a.height != b.height {
+    abort("尺寸不同：\{a.width}x\{a.height} vs \{b.width}x\{b.height}")
+  }
+  let total = a.width * a.height
+  let mut n = 0
+  let mut i = 0
+  while i < total {
+    if a.pixels[i] != b.pixels[i] {
+      n = n + 1
+    }
+    i = i + 1
+  }
+  n
+}
+
+///|
+/// 独立参考：把会话里的文档与编辑表取出来，走**真渲染**得到最终图。
+fn real_render(s : @agent.Session, prog : @core.EditProgram) -> (@codec.RgbaBuf, @codec.RgbaBuf) {
+  let doc = match s.doc {
+    Some(d) => d
+    None => abort("会话没有文档")
+  }
+  let env = @render.RenderEnv::new()
+  let base = @render.render_doc(doc, env)
+  let out = match @render.render_doc_with(doc, env, prog) {
+    Ok(x) => x
+    Err(e) => abort("真渲染失败: \{e}")
+  }
+  (base, out)
+}
+
+///|
+/// 整幅几何选择子。
+fn whole_sel() -> @core.SelSpec {
+  let g : @core.GeoWindow = { x: 0.0, y: 0.0, w: 320.0, h: 240.0, feather: 0.0 }
+  { basis: @core.Base, expr: @core.Atom(@core.Geo(g, "rect")) }
+}
+
+///|
+fn scope_rect_sel(x : Double, y : Double, w : Double, h : Double) -> @core.SelSpec {
+  let g : @core.GeoWindow = { x, y, w, h, feather: 0.0 }
+  { basis: @core.Base, expr: @core.Atom(@core.Geo(g, "rect")) }
+}
+
+///|
+fn luma_sel(center : Double, half : Double) -> @core.SelSpec {
+  { basis: @core.Base, expr: @core.Atom(@core.Luma(center, half, 0.0)) }
+}
+
+///|
+fn op_in(layer : String, sel : @core.SelSpec, hue : Double, id : String) -> @core.EditOp {
+  {
+    id,
+    kind: @core.Recolor,
+    sel,
+    amount: 1.0,
+    hue_deg: hue,
+    temp_kelvin: 0.0,
+    relight_gain: 1.0,
+    layer,
+    refine: [],
+    note: "",
+    evidence: None,
+  }
+}
+
+///|
+/// 左半红、右半蓝的双层文档（层作用域与文档级的结果必然不同）。
+fn two_layer(uuid : String) -> @agent.Session {
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 320 240 uuid=\{uuid}")
+  let _ = run(s, "add-rect x=0 y=0 w=160 h=240 fill=#C81E1EFF id=l1")
+  let _ = run(s, "add-rect x=160 y=0 w=160 h=240 fill=#1E5ACCFF id=l2")
+  s
+}
+
+///|
+test "mvsl-impact 在层作用域下量的是真渲染：改动数/最终图/逐算子层 id 全对齐" {
+  let s = two_layer("impact-scope")
+  let prog : @core.EditProgram = { ops: [op_in("l1", whole_sel(), 120.0, "e1")], guards: [] }
+  let _ = run(s, "mvsl-set \{b64_of(@core.program_to_json(prog))}")
+  let r = run(s, "mvsl-impact")
+  // 参考值由**真渲染**独立算出（不经过 impact 自己）
+  let (base, real) = real_render(s, prog)
+  let want = count_diff(base, real)
+  // 层作用域：只改 l1 那一半（160×240=38400）；近似路径会报整幅 76800
+  assert_eq(want, 38400, msg="前提：真渲染应只改左半")
+  assert_true(jnum_field(r, "changed_total") == want.to_double(), msg="impact 的改动数不是真渲染的：\{r}")
+  assert_true(
+    jfield(r, "full_sha256") == @base.sha256_hex(@codec.png_encode(real)),
+    msg="impact 的最终图不是真渲染那张：\{r}",
+  )
+  assert_true(per_op_str(r, 0, "layer") == "l1", msg="逐算子应报出具体层：\{r}")
+  assert_true(per_op_num(r, 0, "changed") == want.to_double(), msg="逐算子改动数不是该层上的真改动：\{r}")
+  assert_true(jnum_field(r, "executed") == 1.0, msg=r)
+  assert_true(jnum_field(r, "doc_stages") == 0.0, msg="层算子不算文档级阶段：\{r}")
+  // 对照：同一条算子改成**文档级** → 数字与最终图都必须变（否则作用域没被量进去）
+  let s2 = two_layer("impact-scope-doc")
+  let doc_prog : @core.EditProgram = { ops: [op_in("", whole_sel(), 120.0, "e1")], guards: [] }
+  let _ = run(s2, "mvsl-set \{b64_of(@core.program_to_json(doc_prog))}")
+  let r2 = run(s2, "mvsl-impact")
+  let (base2, real2) = real_render(s2, doc_prog)
+  assert_eq(count_diff(base2, real2), 76800, msg="前提：文档级会改整幅")
+  assert_true(jnum_field(r2, "changed_total") == 76800.0, msg=r2)
+  assert_true(jfield(r2, "full_sha256") != jfield(r, "full_sha256"), msg="层作用域与文档级给出了同一张图")
+  assert_true(per_op_str(r2, 0, "layer") == "", msg=r2)
+}
+
+///|
+test "mvsl-impact：层算子改了自己的层、却被上层遮住 → 逐算子有改动、总图零改动" {
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 320 240 uuid=impact-covered")
+  // l1 黄铺满整幅，l2 蓝不透明盖在上面 → 合成底图上只剩蓝
+  let _ = run(s, "add-rect x=0 y=0 w=320 h=240 fill=#FFFF00FF id=l1")
+  let _ = run(s, "add-rect x=0 y=0 w=320 h=240 fill=#1E5ACCFF id=l2")
+  // 选择子按**层栅格上的黄**（L≈0.968）命中；合成底图是蓝（L≈0.501）→ 命中 0。
+  // 这条场景同时是"逐算子权重场必须在自己的基底上求值"的判据：基底退回合成底图
+  // 时支撑集为空，sel_de 会变成 0（diff_report 的空集分支）。
+  let prog : @core.EditProgram = {
+    ops: [op_in("l1", luma_sel(0.968, 0.05), 120.0, "e1")],
+    guards: [],
+  }
+  let _ = run(s, "mvsl-set \{b64_of(@core.program_to_json(prog))}")
+  let r = run(s, "mvsl-impact")
+  let (base, real) = real_render(s, prog)
+  // 真渲染：l1 的层栅格整幅被改，但最终图逐位不变（l2 盖住了它）
+  assert_eq(count_diff(base, real), 0, msg="前提：被遮住的层改了对最终图不可见")
+  assert_true(per_op_num(r, 0, "changed") == 76800.0, msg="逐算子改动数应是那一层的像素：\{r}")
+  assert_true(per_op_str(r, 0, "layer") == "l1", msg=r)
+  assert_true(jnum_field(r, "changed_total") == 0.0, msg="对外不可见 → 总改动数必须是 0：\{r}")
+  let sel_de = per_op_num(r, 0, "sel_de")
+  let mean_de = per_op_num(r, 0, "mean_de")
+  assert_true(sel_de > 0.0, msg="逐算子支撑集算在了错的基底上（sel_de=\{sel_de}）：\{r}")
+  assert_true(near(sel_de, mean_de), msg="支撑集覆盖了全部被改像素时两者应相等：\{r}")
+  assert_true(
+    jfield(r, "full_sha256") == @base.sha256_hex(@codec.png_encode(real)),
+    msg="被遮住的层不该改变最终图：\{r}",
+  )
+}
+
+///|
+/// 取 per_op[idx] 的字符串字段。
+fn per_op_str(text : String, idx : Int, key : String) -> String {
+  let obj = match @core.parse_json(text) {
+    Ok(o) => o
+    Err(e) => abort("回包不是 JSON（\{e}）：\{text}")
+  }
+  let arr = match obj.get("per_op") {
+    Some(@core.JValue::JArr(a)) => a
+    _ => abort("回包缺 per_op 数组：\{text}")
+  }
+  if idx >= arr.length() {
+    abort("per_op 只有 \{arr.length()} 项")
+  }
+  let v = match arr[idx].get(key) {
+    Some(x) => x
+    None => abort("per_op[\{idx}] 缺字段 \{key}：\{text}")
+  }
+  match v.as_str() {
+    Some(x) => x
+    None => abort("per_op[\{idx}].\{key} 不是字符串：\{text}")
+  }
+}
+
+///|
+/// 从 JSON 回包的数组字段里取一个数值（probe 的 ops / impact 的 per_op 共用）。
+fn arr_num(text : String, arr_key : String, idx : Int, key : String) -> Double {
+  match arr_val(text, arr_key, idx, key) {
+    Some(v) =>
+      match v.as_num() {
+        Some(x) => x
+        None => abort("\{arr_key}[\{idx}].\{key} 不是数字：\{text}")
+      }
+    None => abort("回包缺 \{arr_key}[\{idx}].\{key}：\{text}")
+  }
+}
+
+///|
+fn arr_str(text : String, arr_key : String, idx : Int, key : String) -> String {
+  match arr_val(text, arr_key, idx, key) {
+    Some(v) =>
+      match v.as_str() {
+        Some(x) => x
+        None => abort("\{arr_key}[\{idx}].\{key} 不是字符串：\{text}")
+      }
+    None => abort("回包缺 \{arr_key}[\{idx}].\{key}：\{text}")
+  }
+}
+
+///|
+fn arr_val(text : String, arr_key : String, idx : Int, key : String) -> @core.JValue? {
+  let obj = match @core.parse_json(text) {
+    Ok(o) => o
+    Err(e) => abort("回包不是 JSON（\{e}）：\{text}")
+  }
+  let arr = match obj.get(arr_key) {
+    Some(@core.JValue::JArr(a)) => a
+    _ => abort("回包缺 \{arr_key} 数组：\{text}")
+  }
+  if idx >= arr.length() {
+    abort("\{arr_key} 只有 \{arr.length()} 项，取不到第 \{idx} 项")
+  }
+  arr[idx].get(key)
+}
+
+///|
+test "mvsl-assert 的结论 == 在真渲染图上判定的结论（近似图会冤枉的场景必须放行）" {
+  let s = two_layer("assert-scope")
+  let prot : @core.Guard = {
+    id: "g1",
+    // 保护**右半**（l2 的地盘）
+    sel: scope_rect_sel(160.0, 0.0, 160.0, 240.0),
+    max_de: 0.001,
+    max_changed_ratio: 0.0,
+  }
+  let prog : @core.EditProgram = {
+    ops: [op_in("l1", whole_sel(), 120.0, "e1")],
+    guards: [prot],
+  }
+  let _ = run(s, "mvsl-set \{b64_of(@core.program_to_json(prog))}")
+  let (base, real) = real_render(s, prog)
+  // 近似图（旧路径：合成底图上跑整张表，忽略 layer）
+  let approx = match @pixel.run_program(base, prog) {
+    Ok(pair) => pair.0
+    Err(e) => abort("近似执行失败: \{e}")
+  }
+  let real_fails = match @pixel.check_guards(base, real, prog) {
+    Ok(f) => f
+    Err(e) => abort("真图判定失败: \{e}")
+  }
+  let approx_fails = match @pixel.check_guards(base, approx, prog) {
+    Ok(f) => f
+    Err(e) => abort("近似判定失败: \{e}")
+  }
+  // **判别力自证**：两种口径必须给出不同结论，否则这条测试没在测东西
+  assert_eq(real_fails.length(), 0, msg="前提：真渲染只改左半，右半的保护断言应通过")
+  assert_true(approx_fails.length() > 0, msg="前提：近似图整幅都改，右半断言会被冤枉——若相同则失去判别力")
+  let r = run(s, "mvsl-assert")
+  assert_true(r.contains("\"ok\":true"), msg="assert 应照真渲染判为通过（近似口径会冤枉它）：\{r}")
+  // 反向：保护断言改到**左半**（真的会被改）→ 真图判失败，CLI 必须 fail
+  let prot2 : @core.Guard = {
+    id: "g1",
+    sel: scope_rect_sel(0.0, 0.0, 160.0, 240.0),
+    max_de: 0.001,
+    max_changed_ratio: 0.0,
+  }
+  let prog2 : @core.EditProgram = {
+    ops: [op_in("l1", whole_sel(), 120.0, "e1")],
+    guards: [prot2],
+  }
+  let _ = run(s, "mvsl-set \{b64_of(@core.program_to_json(prog2))}")
+  let r2 = run(s, "mvsl-assert")
+  assert_true(r2.has_prefix("{\"error\""), msg="左半被改，断言必须 fail：\{r2}")
+}
+
+///|
+test "lint 的「白装」判据在层作用域下不许误报：近似口径与真渲染的结论恰好相反" {
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 320 240 uuid=lint-scope")
+  // l1 黄（底层）、l2 蓝不透明（盖满整幅）→ 合成底图上只剩蓝
+  let _ = run(s, "add-rect x=0 y=0 w=320 h=240 fill=#FFFF00FF id=l1")
+  let _ = run(s, "add-rect x=0 y=0 w=320 h=240 fill=#1E5ACCFF id=l2")
+  let op_a = op_in("", whole_sel(), 120.0, "e1")
+  // e2：在**层栅格**（黄 L≈0.968）上命中；在合成底图（蓝 L≈0.501）上命中 0
+  let op_b = op_in("l1", luma_sel(0.968, 0.05), 120.0, "e2")
+  // e3：反过来——在层栅格上命中 0，在合成底图上命中整幅
+  let op_c = op_in("l1", luma_sel(0.501, 0.01), 120.0, "e3")
+  let prog : @core.EditProgram = { ops: [op_a, op_b, op_c], guards: [] }
+  let _ = run(s, "mvsl-set \{b64_of(@core.program_to_json(prog))}")
+  let doc = match s.doc {
+    Some(d) => d
+    None => abort("无文档")
+  }
+  let env = @render.RenderEnv::new()
+  let base = @render.render_doc(doc, env)
+  // 真渲染的逐算子改动（e2 应 >0、e3 应 ==0）
+  let (stages, _) = match @render.impact_stages(doc, env, prog) {
+    Ok(pair) => pair
+    Err(e) => abort("真管线失败: \{e}")
+  }
+  let mut real_b = -1
+  let mut real_c = -1
+  for st in stages {
+    if st.op.id == "e2" {
+      real_b = count_diff(st.before, st.after)
+    }
+    if st.op.id == "e3" {
+      real_c = count_diff(st.before, st.after)
+    }
+  }
+  // 近似口径（旧路径）的逐算子改动：e2 应 ==0、e3 应 >0 —— 与真渲染**恰好相反**
+  let ap = match @pixel.run_program(base, prog) {
+    Ok(pair) => pair.1
+    Err(e) => abort("近似执行失败: \{e}")
+  }
+  let approx_b = count_diff(ap[0], ap[1])
+  let approx_c = count_diff(ap[1], ap[2])
+  assert_true(real_b > 0, msg="前提：e2 在层栅格上真的命中（\{real_b}）")
+  assert_true(real_c == 0, msg="前提：e3 在层栅格上命中 0（\{real_c}）")
+  assert_true(approx_b == 0, msg="前提：近似口径下 e2 命中 0（\{approx_b}）——若不然则失去判别力")
+  assert_true(approx_c > 0, msg="前提：近似口径下 e3 命中整幅（\{approx_c}）")
+  // 判据：lint 必须照真渲染说 —— e3 报白装，e2 不报
+  let r = run(s, "lint")
+  assert_true(jnum_field(r, "violations") == 1.0, msg="应恰好一条（e3 白装）：\{r}")
+  assert_true(r.contains("算子 e3"), msg="e3 在自己基底上没命中，必须报：\{r}")
+  assert_true(!r.contains("算子 e2"), msg="e2 在层栅格上命中了，不许误报白装：\{r}")
+}
+
+///|
+test "probe 的逐算子 membership 用该算子自己的基底（层算子=层栅格），坏表报 ops_error" {
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 320 240 uuid=probe-scope")
+  let _ = run(s, "add-rect x=0 y=0 w=320 h=240 fill=#FFFF00FF id=l1")
+  let _ = run(s, "add-rect x=0 y=0 w=320 h=240 fill=#1E5ACCFF id=l2")
+  let prog : @core.EditProgram = { ops: [op_in("l1", luma_sel(0.968, 0.05), 120.0, "e1")], guards: [] }
+  let _ = run(s, "mvsl-set \{b64_of(@core.program_to_json(prog))}")
+  // 合成底图上是蓝（L≈0.501，选择子不命中）；l1 自己的栅格上是黄（命中）
+  let r = run(s, "probe x=160 y=120 r=2")
+  assert_true(r.contains("\"color\":\"#1E5ACCFF\""), msg="点上看到的应是蓝（l2 盖住了 l1）：\{r}")
+  assert_true(arr_str(r, "ops", 0, "layer") == "l1", msg=r)
+  assert_true(arr_num(r, "ops", 0, "membership") == 1.0, msg="层算子的 membership 必须按层栅格算：\{r}")
+  // 活绑定坏掉之后：probe 的点上诊断照旧，但逐算子归属必须报原因，不许静默少一段
+  let _ = run(s, "tag l1 hero")
+  let tagged : @core.EditProgram = { ops: [op_in("@hero", whole_sel(), 120.0, "e1")], guards: [] }
+  let _ = run(s, "mvsl-set \{b64_of(@core.program_to_json(tagged))}")
+  let _ = run(s, "untag l1 hero")
+  let broken = run(s, "probe x=160 y=120 r=2")
+  assert_true(broken.contains("\"ok\":true"), msg="坏表不该让点上诊断不可用：\{broken}")
+  assert_true(broken.contains("\"ops\":[]"), msg=broken)
+  assert_true(jfield(broken, "ops_error").contains("hero"), msg="必须报出原因：\{broken}")
+}
+
+///|
+test "lint 的归因要准：层算子改了栅格但最终图看不见时，不许说成「选择子没命中」" {
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 320 240 uuid=lint-covered")
+  // l1 黄铺满整幅、l2 蓝不透明盖在上面 → 合成底图上只剩蓝
+  let _ = run(s, "add-rect x=0 y=0 w=320 h=240 fill=#FFFF00FF id=l1")
+  let _ = run(s, "add-rect x=0 y=0 w=320 h=240 fill=#1E5ACCFF id=l2")
+  // 选择子按层栅格上的黄命中（整层被改），但最终图逐位不变
+  let prog : @core.EditProgram = {
+    ops: [op_in("l1", luma_sel(0.968, 0.05), 120.0, "e1")],
+    guards: [],
+  }
+  let _ = run(s, "mvsl-set \{b64_of(@core.program_to_json(prog))}")
+  let (base, real) = real_render(s, prog)
+  assert_eq(count_diff(base, real), 0, msg="前提：改动对外不可见")
+  let r = run(s, "lint")
+  assert_true(jnum_field(r, "violations") == 1.0, msg="应恰好一条 P0：\{r}")
+  assert_true(r.contains("最终图逐位未变"), msg="必须说清「改了但看不见」：\{r}")
+  assert_true(!r.contains("选择子一个像素都没命中"), msg="不许误归因为选择子没命中：\{r}")
+  // 正控：选择子真的没命中（层栅格上也不命中）→ 照旧报「选择子没命中」
+  let miss : @core.EditProgram = {
+    ops: [op_in("l1", luma_sel(0.501, 0.01), 120.0, "e1")],
+    guards: [],
+  }
+  let _ = run(s, "mvsl-set \{b64_of(@core.program_to_json(miss))}")
+  let r2 = run(s, "lint")
+  assert_true(r2.contains("选择子一个像素都没命中"), msg="正控：没命中时要说没命中：\{r2}")
 }

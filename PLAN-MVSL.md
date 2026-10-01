@@ -157,6 +157,13 @@ affordance，人机同一编辑表、同一撤销栈。
       · 不变量测试：`render/mvsl_render_test.mbt`（空程序逐位等价 / 只在
         命中区改变 / 取景不改语义 / 坏程序报错 / 重复渲染幂等）+
         `agent` 端「render ≡ impact ≡ 容器预览 三条出口同一张图」。
+      · **「三条出口同一张图」现在对层作用域也成立**（补遗十二）：分析出口
+        （`mvsl-impact` 的逐算子 diff、`mvsl-assert` 的断言判定、`lint` 的白装
+        判定、`probe` 的 membership）全部改读 `render.impact_stages`——与
+        `render_doc_with` **同一段执行代码**，逐算子量的是它自己真正执行的那一步
+        （层算子 = 层栅格、文档级 = 合成底图）。此前它们在合成底图上跑整表
+        （`run_program` 不看 `layer`），层作用域下的证书/断言/membership 描述的
+        不是真渲染那一步。
 
 ### P1 闭环 affordance —— 部分完成
 
