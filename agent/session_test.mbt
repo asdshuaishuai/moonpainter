@@ -779,3 +779,63 @@ test "set-text 缺参数要报用法错，不许越界崩溃" {
   assert_true(ok.contains("\"op\":\"set-text\""), msg=ok)
   assert_true(run(s, "query-layer l1").contains("\"text\":\"Hello\""), msg=run(s, "query-layer l1"))
 }
+
+///|
+test "几何样式必须读得回来：radius 与 flip 此前只有写、没有读" {
+  // `add-rect radius=5` / `flip l1 h` 都改了画面与指纹，而
+  // `query-layer`/`list-layers` 都不报这两个字段 —— 调用方想"再圆一点"
+  // 只能靠自己记住上次设了多少。fill/stroke 还有 sample/census/probe
+  // 这条视觉回读路径，几何样式没有（看渲染只能看出"有圆角"，量不出像素）。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 320 240 uuid=readback")
+  let _ = run(s, "add-rect x=0 y=0 w=20 h=20 fill=#00FF00FF name=R radius=5")
+  let _ = run(s, "flip l1 h")
+  let q = run(s, "query-layer l1")
+  assert_true(q.contains("\"radius\":5"), msg="rect 的 radius 必须报出来：\{q}")
+  assert_true(q.contains("\"flip_h\":true"), msg="flip_h 必须报出来：\{q}")
+  assert_true(q.contains("\"flip_v\":false"), msg="flip_v 也要报（否则不知道另一个方向）：\{q}")
+  let list = run(s, "list-layers")
+  assert_true(list.contains("\"radius\":5"), msg="list-layers 同样要报：\{list}")
+  // 椭圆不该带 radius（它的圆角没有意义，报了反而是误导）
+  let _ = run(s, "add-ellipse x=0 y=0 w=10 h=10 fill=#FF0000FF name=E")
+  let q2 = run(s, "query-layer l2")
+  assert_true(!q2.contains("\"radius\""), msg="椭圆不该报 radius：\{q2}")
+}
+
+///|
+test "radius 只对矩形有意义：椭圆上传 radius 必须在入口被拒" {
+  // 此前 `add-ellipse radius=12` / `set-style <椭圆> radius=9` 都返回 ok，
+  // 把 corner_radius 写进 canonical JSON（**指纹变了**），而渲染器只在
+  // Rect 分支读它（**画面逐位没变**），query-layer 又按 kind 投影所以
+  // **连报都不报**——三个信号自相矛盾，lint 也不响。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 320 240 uuid=radiuskind")
+  let r1 = run(s, "add-ellipse x=0 y=0 w=40 h=40 fill=#FF0000FF name=E radius=12")
+  assert_true(r1.contains("只对矩形"), msg="add-ellipse 的 radius 必须被拒：\{r1}")
+  // 被拒的命令**也会消耗掉一个 id**（id 在参数校验之前就分配），所以别写死
+  // l2；从成功回包里取真实 id。
+  let added = run(s, "add-ellipse x=0 y=0 w=40 h=40 fill=#FF0000FF name=E2")
+  let eid = match @core.parse_json(added) {
+    Ok(v) =>
+      match v.get("id") {
+        Some(@core.JValue::JStr(x)) => x
+        _ => abort("add-ellipse 没回 id：\{added}")
+      }
+    Err(e) => abort("add-ellipse 回包不是 JSON：\{e}")
+  }
+  let r2 = run(s, "set-style \{eid} radius=9")
+  assert_true(r2.contains("只对矩形"), msg="set-style 的 radius 必须被拒：\{r2}")
+  // 矩形照常（入口变严不许误伤正常路径）
+  let ok = run(s, "add-rect x=0 y=0 w=20 h=20 fill=#00FF00FF name=R radius=5")
+  assert_true(!ok.contains("error"), msg="矩形的 radius 不该受影响：\{ok}")
+  // 手改容器的那种状态由 lint 兜住
+  let doc = @core.new_document("radius-kind-2", 64, 64)
+  let l = @core.default_layer("e1", "hand", 0.0, 0.0, 20.0, 20.0)
+  doc.layers.push({ ..l, kind: @core.ShapeKind::Ellipse, corner_radius: 7.0 })
+  let joined = @agent.lint_doc(doc).join(" | ")
+  // 断言**具体数值**而不是"却带着 radius"这个短语：后者会被
+  // 「报了字段名但没报值」的写法满足（实测：那样写这个变异存活了）。
+  assert_true(joined.contains("radius=7"), msg="lint 要报出具体值：\{joined}")
+}

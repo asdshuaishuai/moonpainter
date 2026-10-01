@@ -296,6 +296,15 @@ pub fn apply_style_kv(
         if r < 0.0 {
           return Err("radius 不能为负")
         }
+        // 非矩形层的圆角是**死数据**：`corner_radius` 只在渲染器的 Rect
+        // 分支被读，而 `add-*`/`set-style` 都会把它写进 canonical JSON ——
+        // 于是指纹变了、query-layer 又不报（它按 kind 投影）、画面逐位没变。
+        // 入口直接拒绝（与 set-text 同一条纪律），lint 兜住手改容器。
+        if !(nl.kind is @core.ShapeKind::Rect) {
+          return Err(
+            "radius 只对矩形（rect）有意义：这层是 \{kind_str(nl.kind)}，渲染器不读它的圆角（椭圆本身就是圆的；要给图形加圆角请用 add-rect）",
+          )
+        }
         nl = { ..nl, corner_radius: r }
       }
       None => return Err("radius \{v} 不是数字")
@@ -416,6 +425,16 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
     }
     if l.opacity < 0.0 || l.opacity > 1.0 {
       v.push("P2 style 层 \{l.id} opacity 越界")
+    }
+    // 非矩形层的 `corner_radius` 同上：入口（add-*/set-style）已拒绝，
+    // 这里兜住手改 design.json 的容器——它会被写进 canonical JSON、
+    // 改变指纹，而渲染器只在 Rect 分支读它。
+    if !(l.kind is @core.ShapeKind::Rect) {
+      if l.corner_radius != 0.0 {
+        v.push(
+          "P2 noop 层 \{l.id} 是 \{kind_str(l.kind)} 却带着 radius=\{@core.fmt_num(l.corner_radius)}（渲染器只对 rect 读圆角，纯粹改变指纹）",
+        )
+      }
     }
     // 渐变端点越界：命令面已拦（add-rect/set-style 直接报错），这里兜住
     // 手改 design.json 或外部构造的容器——它渲染出来是个「几乎看不出过渡」

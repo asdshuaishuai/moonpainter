@@ -307,6 +307,35 @@ MUTS = [
         "killed",
     ),
     (
+        "R26",
+        "非矩形层也接受 radius（死数据改变指纹、画面没变）",
+        "agent/ops.mbt",
+        """        if !(nl.kind is @core.ShapeKind::Rect) {
+          return Err(
+            "radius 只对矩形（rect）有意义：这层是 \\{kind_str(nl.kind)}，渲染器不读它的圆角（椭圆本身就是圆的；要给图形加圆角请用 add-rect）",
+          )
+        }
+""",
+        "",
+        "killed",
+    ),
+    (
+        "R27",
+        "lint 不报非矩形层上的 radius 死数据",
+        "agent/ops.mbt",
+        """          "P2 noop 层 \\{l.id} 是 \\{kind_str(l.kind)} 却带着 radius=\\{@core.fmt_num(l.corner_radius)}（渲染器只对 rect 读圆角，纯粹改变指纹）",""",
+        """          "P2 noop 层 \\{l.id} 是 \\{kind_str(l.kind)} 却带着 radius（渲染器只对 rect 读圆角）",""",
+        "killed",
+    ),
+    (
+        "R28",
+        "layer_summary 不报 radius/flip（设了读不回来）",
+        "agent/session.mbt",
+        """  if l.flip_h || l.flip_v {""",
+        """  if false {""",
+        "killed",
+    ),
+    (
         "R18",
         "蒙版羽化解析恒 0（软边蒙版重开后变硬边）",
         "core/json.mbt",

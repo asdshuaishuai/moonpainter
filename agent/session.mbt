@@ -338,6 +338,19 @@ fn layer_summary(l : @core.Layer) -> String {
   sb.write_string(",\"opacity\":\{@core.fmt_num(l.opacity)}")
   sb.write_string(",\"blend\":\"\{blend_str(l.blend)}\"")
   sb.write_string(",\"rot\":\{@core.fmt_num(l.rotation_deg)}")
+  // 圆的圆角与翻转此前**只写不读**：`set-style radius=`/`flip` 改了画面与
+  // 指纹，但 `query-layer`/`list-layers` 都不报，于是调用方无处回读——
+  // 想"再圆一点"只能靠自己记住上次设了多少。fill/stroke 有 sample/census/
+  // probe 这条视觉回读路径，几何样式没有（看渲染只能看出"有圆角"，量不出
+  // 多少像素）。所以这两个必须报出来。
+  if l.kind is @core.ShapeKind::Rect {
+    if l.corner_radius != 0.0 {
+      sb.write_string(",\"radius\":\{@core.fmt_num(l.corner_radius)}")
+    }
+  }
+  if l.flip_h || l.flip_v {
+    sb.write_string(",\"flip_h\":\{l.flip_h},\"flip_v\":\{l.flip_v}")
+  }
   if l.text != "" {
     sb.write_string(",\"text\":\"\{@core.json_escape(l.text)}\"")
     sb.write_string(",\"font_size\":\{@core.fmt_num(l.font_size)}")
