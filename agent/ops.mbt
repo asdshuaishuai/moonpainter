@@ -697,6 +697,38 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
         }
       }
     }
+    // 顶点落在渲染窗外：那部分**不会被画出来**（`paint_layer` 只在
+    // `paint_window` 里落像素），而层的顶点表里还留着它 —— 同一个层，
+    // "它是什么形状"与"画出来什么形状"对不上。判据与渲染器**同一把尺子**
+    // （`@render.paint_window`），并且要先把局部顶点换算成画布坐标
+    // （`@render.to_canvas`，旋转/翻转都要算上），否则误报。
+    // 渲染窗比盒子大（对角线 + 2px），所以"顶点出盒"本身不是错，
+    // 只有出**窗**才是真的画不出来 —— 判据不许比渲染器严。
+    if l.kind is @core.ShapeKind::Polygon || l.kind is @core.ShapeKind::Line {
+      let win = @render.paint_window(l)
+      let x0 = win.0
+      let y0 = win.1
+      let x1 = win.2
+      let y1 = win.3
+      let mut i = 0
+      let mut reported = false
+      while i < l.points.length() && !reported {
+        let pt = l.points[i]
+        let cp = @render.to_canvas(l, pt.0, pt.1)
+        let cx = cp.0
+        let cy = cp.1
+        if cx < x0.to_double() || cx >= x1.to_double() ||
+          cy < y0.to_double() || cy >= y1.to_double() {
+          reported = true
+        }
+        i = i + 1
+      }
+      if reported {
+        v.push(
+          "P2 geom 层 \{l.id} 有顶点落在渲染窗外：渲染器只画窗内的像素（窗 = 以层盒中心为心、对角线为边再放宽 2px），窗外那部分顶点画不出来 —— 放大 w/h 或把顶点写进窗内",
+        )
+      }
+    }
     // 所有「某 kind 才有意义」的字段走同一张表。此前这里只有三条手写 if
     // （text / radius / points），而同类字段还有五个（font_size / adjust /
     // asset_hash / dabs / children）——**特例化的检查一定漏**。

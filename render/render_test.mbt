@@ -383,3 +383,36 @@ test "pick 与 paint_layer 同窗：渲染窗外、画布外的点都不报（�
   assert_eq(@codec.rgba_get(buf, 30, 10), 0xFFFFFFFF)
   assert_eq(@render.pick(d2, 30.0, 10.0), None)
 }
+
+///|
+test "to_canvas 是 to_local 的逆（旋转 + 双向翻转都往返一致）" {
+  // 正/逆变换分开写就有一边先烂：lint 要用 to_canvas 把局部顶点换成画布坐标
+  // 再与渲染窗比，逆变换写错 → 误报/漏报。这里锁住两者互逆。
+  let mut l = @core.default_layer("l1", "l1", 7.0, 13.0, 40.0, 20.0)
+  l = { ..l, rotation_deg: 30.0, flip_h: true, flip_v: true }
+  let pts : Array[(Double, Double)] = [
+    (0.0, 0.0),
+    (40.0, 0.0),
+    (40.0, 20.0),
+    (0.0, 20.0),
+    (13.5, 7.25),
+  ]
+  // 容差按实测精度定：`cos_rad`/`sin_rad` 是**级数近似**（不是 stdlib），
+  // 30° 往返实测差 ~1.7e-6 —— 这是近似的精度，不是变换写错。真正写错
+  // （符号/顺序/少一步 flip）差的是 O(1)~O(10)，0.0001 咬得住。
+  for p in pts {
+    let c = @render.to_canvas(l, p.0, p.1)
+    let back = @render.to_local(l, c.0, c.1)
+    let dx = back.0 - p.0
+    let dy = back.1 - p.1
+    let ax = if dx < 0.0 { -dx } else { dx }
+    let ay = if dy < 0.0 { -dy } else { dy }
+    let d = ax + ay
+    assert_true(d < 0.0001, msg="往返不一致：\{p.0},\{p.1} → \{back.0},\{back.1}")
+  }
+  // 旋转 0 + 不翻转时就是简单的平移（正控：别把最简情形算错）
+  let l2 = @core.default_layer("l2", "l2", 5.0, 6.0, 10.0, 10.0)
+  let c2 = @render.to_canvas(l2, 1.0, 2.0)
+  assert_eq(c2.0, 6.0)
+  assert_eq(c2.1, 8.0)
+}

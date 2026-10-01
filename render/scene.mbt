@@ -25,7 +25,7 @@ pub fn RenderEnv::new() -> RenderEnv {
 
 ///|
 /// 设备坐标 → 层局部坐标（含绕层中心的逆旋转）。
-fn to_local(
+pub fn to_local(
   l : @core.Layer,
   px : Double,
   py : Double,
@@ -56,6 +56,35 @@ fn to_local(
     ly = l.h - ly
   }
   (lx, ly)
+}
+
+///|
+/// 局部坐标 → 画布坐标（`to_local` 的**逆**）。
+///
+/// **与 `to_local` 成对**：正变换与逆变换分开写，就有一边先烂——这里靠
+/// `render` 的往返测试锁住（`to_local(to_canvas(p)) == p`，含旋转 + 双向翻转）。
+/// lint 要用它把"局部顶点"换算到画布坐标，才能和渲染窗（画布坐标）比。
+pub fn to_canvas(l : @core.Layer, lx : Double, ly : Double) -> (Double, Double) {
+  let mut x = lx
+  let mut y = ly
+  // 正向管线：局部 →（flip 镜像）→ 绕中心旋转 → 平移到层位（to_local 的注释）
+  if l.flip_h {
+    x = l.w - x
+  }
+  if l.flip_v {
+    y = l.h - y
+  }
+  if l.rotation_deg == 0.0 {
+    return (l.x + x, l.y + y)
+  }
+  let rad = l.rotation_deg * 3.141592653589793 / 180.0
+  let cos_t = cos_rad(rad)
+  let sin_t = sin_rad(rad)
+  let cx = l.x + l.w / 2.0
+  let cy = l.y + l.h / 2.0
+  let dx = x - l.w / 2.0
+  let dy = y - l.h / 2.0
+  (cx + dx * cos_t - dy * sin_t, cy + dx * sin_t + dy * cos_t)
 }
 
 ///|
@@ -259,7 +288,7 @@ fn fill_color_at(
 /// 顶点伸出盒子的多边形（`add-polygon w=10 h=10 points=0,0;50,0;50,50`，
 /// 窗只到 x≤25）在 (30,10) 被 `pick` 报成"有这层"，而 `probe` 是白纸。
 /// 同一件事两个实现，就会一边说有一边说没有。
-fn paint_window(l : @core.Layer) -> (Int, Int, Int, Int) {
+pub fn paint_window(l : @core.Layer) -> (Int, Int, Int, Int) {
   let reach = Double::sqrt(l.w * l.w + l.h * l.h)
   let cx = l.x + l.w / 2.0
   let cy = l.y + l.h / 2.0

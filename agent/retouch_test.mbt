@@ -403,3 +403,38 @@ test "set-text：字号改得动，盒子跟着内容走（改得动吗 + 报得
   let t2 = (@agent.lint_doc(doc2)).join(" | ")
   assert_true(!t2.contains("装不下自己的文字"), msg="盒子够大不该报：\{t2}")
 }
+
+test "lint 兜住「顶点落在渲染窗外」：判据与渲染窗同一把尺子（不许比它严）" {
+  // 渲染器只在保守渲染窗里落像素（对角线为边 + 2px 松弛），窗**比盒子大**。
+  // 于是"顶点出盒"本身不是错，只有出**窗**才是真的画不出来 —— 判据若拿盒子
+  // 当尺子就会误报，拿窗外当尺子才是与渲染器一致。
+  let mk = fn(pts : Array[(Double, Double)], w : Double, h : Double) {
+    let doc = @core.new_document("win", 60, 60)
+    let l = @core.default_layer("g1", "g1", 0.0, 0.0, w, h)
+    doc.layers.push({ ..l, kind: @core.ShapeKind::Polygon, points: pts })
+    doc
+  }
+  // ① 顶点伸到 50（10×10 盒的窗只到 x≤14）→ 报
+  let far = mk([(0.0, 0.0), (50.0, 0.0), (50.0, 50.0)], 10.0, 10.0).layers[0]
+  let d1 = @core.new_document("far", 60, 60)
+  d1.layers.push(far)
+  let j1 = (@agent.lint_doc(d1)).join(" | ")
+  assert_true(j1.contains("渲染窗外"), msg="窗外顶点要报：\{j1}")
+  // ② **正控**：顶点到 13 —— 出盒（10×10）但在窗内（窗 = [-4,14]²），
+  //    那里**真的有墨**（实测 probe 13,2 非白），一个都不许报
+  let d2 = mk([(0.0, 0.0), (13.0, 0.0), (13.0, 13.0)], 10.0, 10.0)
+  let j2 = (@agent.lint_doc(d2)).join(" | ")
+  assert_true(!j2.contains("渲染窗外"), msg="盒外窗内不该报：\{j2}")
+  // ③ **正控**：正常顶点（都在盒内）不报；旋转层同样不报（要经 to_canvas 换算）
+  let d3 = mk([(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)], 10.0, 10.0)
+  assert_true(!(@agent.lint_doc(d3)).join(" | ").contains("渲染窗外"), msg="盒内不报")
+  let d4 = mk([(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)], 10.0, 10.0)
+  d4.layers[0] = { ..d4.layers[0], rotation_deg: 45.0, flip_h: true }
+  assert_true(!(@agent.lint_doc(d4)).join(" | ").contains("渲染窗外"), msg="旋转+翻转也不许误报")
+  // ④ 线段同样管（它的笔触也只在窗内落像素）
+  let d5 = @core.new_document("line", 60, 60)
+  let ln = @core.default_layer("g1", "g1", 0.0, 0.0, 10.0, 10.0)
+  d5.layers.push({ ..ln, kind: @core.ShapeKind::Line, points: [(0.0, 0.0), (200.0, 5.0)] })
+  let j5 = (@agent.lint_doc(d5)).join(" | ")
+  assert_true(j5.contains("渲染窗外"), msg="线段的窗外顶点要报：\{j5}")
+}

@@ -958,6 +958,51 @@ MUTS = [
         "killed",
     ),
     (
+        "Q18",
+        "lint 拿「盒子」当渲染窗（判据比渲染器严：盒外窗内的墨被误报画不出来）",
+        "agent/ops.mbt",
+        """      let win = @render.paint_window(l)""",
+        """      let win = (
+        l.x.to_int(),
+        l.y.to_int(),
+        (l.x + l.w).to_int(),
+        (l.y + l.h).to_int(),
+      )""",
+        "killed",
+    ),
+    (
+        "Q19",
+        "to_canvas 的 flip_h 换算写错（局部→画布坐标错：往返不一致、lint 误报顶点）",
+        "render/scene.mbt",
+        """  if l.flip_h {
+    x = l.w - x
+  }
+  if l.flip_v {
+    y = l.h - y
+  }""",
+        """  if l.flip_h {
+    x = l.w + x
+  }
+  if l.flip_v {
+    y = l.h - y
+  }""",
+        "killed",
+    ),
+    (
+        "Q20",
+        "lint 不再报窗外顶点（顶点被静默裁掉，层自述的形状与画出来的不符）",
+        "agent/ops.mbt",
+        """        if cx < x0.to_double() || cx >= x1.to_double() ||
+          cy < y0.to_double() || cy >= y1.to_double() {
+          reported = true
+        }""",
+        """        if cx < x0.to_double() - 1000000.0 || cx >= x1.to_double() + 1000000.0 ||
+          cy < y0.to_double() - 1000000.0 || cy >= y1.to_double() + 1000000.0 {
+          reported = true
+        }""",
+        "killed",
+    ),
+    (
         "Q15",
         "pick 丢掉渲染窗守卫（窗外的顶点被报成「有这层」，而那里没有像素）",
         "render/scene.mbt",
