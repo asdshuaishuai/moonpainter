@@ -205,6 +205,49 @@ pub fn adjust_op_name(op : AdjustOp) -> String {
 }
 
 ///|
+/// 算子名 → 算子（`adjust_op_name` 的**逆**，同一个事实源）。
+///
+/// 此前这个方向被手写了两份：`core/json.mbt` 的 `adjust_of`（读容器）与
+/// `agent/session.mbt` 的 `parse_adjust`（读命令行），各 11 条臂——加一个算子
+/// 要记得改三处，而漏改哪一处都**不会报错**（命令行报"未知算子"，容器则静默
+/// 把 adjust 字段整块丢掉）。逆映射现在只此一份。
+pub fn adjust_op_from_name(name : String) -> AdjustOp? {
+  match name {
+    "brightness" => Some(Brightness)
+    "contrast" => Some(Contrast)
+    "saturation" => Some(Saturation)
+    "invert" => Some(Invert)
+    "grayscale" => Some(Grayscale)
+    "blur" => Some(Blur)
+    "sharpen" => Some(Sharpen)
+    "smooth" => Some(Smooth)
+    "whiten" => Some(Whiten)
+    "warm" => Some(Warm)
+    "vignette" => Some(Vignette)
+    _ => None
+  }
+}
+
+///|
+/// 全部调整算子（**声明顺序**）。错误提示、工具字典描述、测试遍历都从这里
+/// 出——手写第二份清单就是"加算子时漏改一处"的温床。
+pub fn all_adjust_ops() -> Array[AdjustOp] {
+  [
+    Brightness,
+    Contrast,
+    Saturation,
+    Invert,
+    Grayscale,
+    Blur,
+    Sharpen,
+    Smooth,
+    Whiten,
+    Warm,
+    Vignette,
+  ]
+}
+
+///|
 /// 笔触落点（Raster 层内容原子）：局部坐标圆斑。
 pub(all) struct Dab {
   x : Double

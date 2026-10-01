@@ -683,6 +683,36 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
         v.push("P2 noop 文本层 \{l.id} 内容为空（渲染不出任何字形）")
       }
     }
+    // 调整层：整个层就由 op+value 定义，所以"装了却什么都不干"在这里
+    // 有三种面孔，命令面已经拦掉两种（越界、给无值算子传 value），
+    // 这里兜住**手改 design.json / 外部构造的容器**。
+    // 第三种（value 恰好是 0）命令面**不拦**——把强度调到 0 是合法操作，
+    // 但那确实是一层不干活的层，只有 lint 会说（实测 `add-adjust op=brightness`
+    // 建出来的层 `query-layer` 报得出、指纹变了、画面逐位不变，lint 报 0 违规）。
+    if l.kind is @core.ShapeKind::Adjust {
+      match l.adjust {
+        Some(a) => {
+          let (has_value, lo, hi) = adjust_spec(a.op)
+          let name = @core.adjust_op_name(a.op)
+          if !has_value {
+            if a.value != 0.0 {
+              v.push(
+                "P2 noop 调整层 \{l.id} 的 \{name} 不接受数值（渲染器不读 value），却存着 value=\{@core.fmt_num(a.value)}（纯粹改变指纹）",
+              )
+            }
+          } else if a.value < lo || a.value > hi {
+            v.push(
+              "P2 style 调整层 \{l.id} 的 value=\{@core.fmt_num(a.value)} 超出 \{name} 的范围 [\{@core.fmt_num(lo)}..\{@core.fmt_num(hi)}]",
+            )
+          } else if a.value == 0.0 {
+            v.push(
+              "P2 noop 调整层 \{l.id} 是 \{name} 但 value=0（画面逐位不变；要么给个非零数值，要么删掉这层）",
+            )
+          }
+        }
+        None => ()
+      }
+    }
     // P1 引用
     if l.kind is @core.ShapeKind::Image {
       if l.asset_hash == "" {

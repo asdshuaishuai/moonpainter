@@ -807,32 +807,98 @@ fn cmd_flip(s : Session, tokens : Array[String]) -> String {
 
 ///|
 /// 解析 k=v 中的调整算子（op/value）。
-fn parse_adjust(m : Map[String, String]) -> Result[@core.Adjust, String] {
-  let op = match m.get("op") {
-    Some(v) => v
-    None => return Err("adjust 需要 op=")
-  }
-  let value = match to_d(m.get("value").unwrap_or("0")) {
-    Some(v) => v
-    None => return Err("value=\{m.get("value").unwrap_or("0")} 不是数字")
-  }
+///|
+/// 调整算子的**取值契约**：`(是否有可调数值, 下界, 上界)`。
+///
+/// 此前字典里只有一句 `value=<-1..1>`，而它对一半算子是**错的**：
+/// blur/sharpen/smooth/whiten/vignette 是 0..1（`core` 的类型注释写着），
+/// 而 invert/grayscale 压根**不读** value（渲染器那两个分支不碰它）。
+/// 后果是 `add-adjust op=invert value=0.5` 回 ok 而 0.5 被静默丢掉；
+/// `value=99` 也被收下（brightness 会 clamp 成纯白，而 `value=1.0` 像素
+/// 完全一样、指纹不同——两张"不同"的文档渲染逐位相同，没有任何信号）。
+fn adjust_spec(op : @core.AdjustOp) -> (Bool, Double, Double) {
   match op {
-    "brightness" => Ok({ op: @core.AdjustOp::Brightness, value })
-    "contrast" => Ok({ op: @core.AdjustOp::Contrast, value })
-    "saturation" => Ok({ op: @core.AdjustOp::Saturation, value })
-    "invert" => Ok({ op: @core.AdjustOp::Invert, value: 0.0 })
-    "grayscale" => Ok({ op: @core.AdjustOp::Grayscale, value: 0.0 })
-    "blur" => Ok({ op: @core.AdjustOp::Blur, value })
-    "sharpen" => Ok({ op: @core.AdjustOp::Sharpen, value })
-    "smooth" => Ok({ op: @core.AdjustOp::Smooth, value })
-    "whiten" => Ok({ op: @core.AdjustOp::Whiten, value })
-    "warm" => Ok({ op: @core.AdjustOp::Warm, value })
-    "vignette" => Ok({ op: @core.AdjustOp::Vignette, value })
-    _ =>
-      Err(
-        "未知调整算子 \{op}（brightness/contrast/saturation/invert/grayscale/blur/sharpen/smooth/whiten/warm/vignette）",
+    @core.AdjustOp::Invert => (false, 0.0, 0.0)
+    @core.AdjustOp::Grayscale => (false, 0.0, 0.0)
+    @core.AdjustOp::Blur => (true, 0.0, 1.0)
+    @core.AdjustOp::Sharpen => (true, 0.0, 1.0)
+    @core.AdjustOp::Smooth => (true, 0.0, 1.0)
+    @core.AdjustOp::Whiten => (true, 0.0, 1.0)
+    @core.AdjustOp::Vignette => (true, 0.0, 1.0)
+    _ => (true, -1.0, 1.0)
+  }
+}
+
+///|
+/// 算子清单（**从 `core.all_adjust_ops` 生成**，手工清单是漏改的温床）。
+/// 带上取值范围，让调用方一眼看出该给多少。
+fn adjust_op_list() -> String {
+  @core.all_adjust_ops().map(fn(o) {
+    let (has, lo, hi) = adjust_spec(o)
+    let name = @core.adjust_op_name(o)
+    if has {
+      "\{name}=[\{@core.fmt_num(lo)}..\{@core.fmt_num(hi)}]"
+    } else {
+      "\{name}（无数值）"
+    }
+  }).join(" ")
+}
+
+///|
+/// 工具字典里 `add-adjust` 的算子说明（**从同一张表生成**）。
+/// 此前那句 `value=<-1..1>` 对 blur/sharpen/smooth/whiten/vignette **是错的**
+/// （0..1），也没说 invert/grayscale 不接受 value——字典是 LLM 唯一的说明书，
+/// 写错了它就一直发错参数（而引擎只会静默丢掉）。
+pub fn adjust_op_doc() -> String {
+  adjust_op_list()
+}
+
+///|
+/// 解析命令面的 `op=`/`value=`（`add-adjust` 与 `set-adjust` 共用）。
+///
+/// 三种此前静默收下的输入现在都拒绝：
+/// ①未知算子（本来就会报，但清单从 `core.all_adjust_ops` 生成）；
+/// ②`value` 越界（`value=99` 只被 clamp，画面与 `value=1.0` 逐位相同）；
+/// ③给"没有可调数值"的算子（invert/grayscale）传 `value=`——渲染器不读它，
+/// 回包却是 ok，调用方分不出"改成功了"与"参数被丢了"。
+fn parse_adjust(m : Map[String, String]) -> Result[@core.Adjust, String] {
+  let opname = match m.get("op") {
+    Some(v) => v
+    None => return Err("adjust 需要 op=（可选：" + adjust_op_list() + "）")
+  }
+  let op = match @core.adjust_op_from_name(opname) {
+    Some(o) => o
+    None => return Err("未知调整算子 \{opname}（可选：" + adjust_op_list() + "）")
+  }
+  let (has_value, lo, hi) = adjust_spec(op)
+  let raw = m.get("value")
+  if !has_value {
+    match raw {
+      Some(_) =>
+        return Err(
+          "算子 \{opname} 不接受 value=（它没有可调数值，渲染器不读 value；给了也会被丢掉，所以入口直接拒绝）",
+        )
+      None => ()
+    }
+    return Ok({ op, value: 0.0 })
+  }
+  let text = match raw {
+    Some(v) => v
+    None =>
+      return Err(
+        "算子 \{opname} 需要 value=（范围 [\{@core.fmt_num(lo)}..\{@core.fmt_num(hi)}]；不给就是建一个什么都不干的层）",
       )
   }
+  let value = match to_d(text) {
+    Some(v) => v
+    None => return Err("value=\{text} 不是数字")
+  }
+  if value < lo || value > hi {
+    return Err(
+      "value=\{text} 超出 \{opname} 的范围 [\{@core.fmt_num(lo)}..\{@core.fmt_num(hi)}]",
+    )
+  }
+  Ok({ op, value })
 }
 
 ///|
@@ -1008,10 +1074,23 @@ fn cmd_set_adjust(s : Session, tokens : Array[String]) -> String {
   if m.length() == 0 {
     return err("set-adjust 至少要给 op= 或 value=（都没给就什么都没改）")
   }
-  // 只给了 value 就沿用原算子（反之亦然）
+  // 只给了 value 就沿用原算子（反之亦然）。注意：**新算子没有可调数值时不能
+  // 凭空塞 value=**（老写法无条件塞 `cur.value`），否则 `set-adjust l1 op=invert`
+  // 会被自己的拒绝规则打回——而用户根本没给 value。
   let merged : Map[String, String] = Map([])
-  merged.set("op", m.get("op").unwrap_or(@core.adjust_op_name(cur.op)))
-  merged.set("value", m.get("value").unwrap_or(@core.fmt_num(cur.value)))
+  let opname = m.get("op").unwrap_or(@core.adjust_op_name(cur.op))
+  merged.set("op", opname)
+  match m.get("value") {
+    Some(v) => merged.set("value", v)
+    None =>
+      match @core.adjust_op_from_name(opname) {
+        Some(o) =>
+          if (adjust_spec(o)).0 {
+            merged.set("value", @core.fmt_num(cur.value))
+          }
+        None => ()
+      }
+  }
   let adj = match parse_adjust(merged) {
     Ok(a) => a
     Err(e) => return err(e)

@@ -358,12 +358,20 @@ fn do_crop_cancel() -> Unit {
 /// 调整/滤镜按钮：op + 强度（有符号操作由 JS 传正负）。
 fn do_filter(op : String, value_s : String) -> Unit {
   bootstrap()
-  let v = if value_s == "" { "0.5" } else { value_s }
-  let r = eng("add-adjust op=\{op} value=\{v}")
+  // 空串 = "这个算子没有可调数值"（黑白/反色）：**不要拼 value=**。
+  // 引擎对"给没有数值的算子传 value="直接报错（渲染器压根不读它），
+  // 此前这里一律拼 `value=0`，那两个按钮会因此失败。
+  let line = if value_s == "" {
+    "add-adjust op=\{op}"
+  } else {
+    "add-adjust op=\{op} value=\{value_s}"
+  }
+  let r = eng(line)
   if eng_ok(r) {
     eng_render(800)
     refresh_ui()
-    js_status_bar("🎛 已叠加 \{op}（value=\{v}）— 调整层可撤销")
+    let how = if value_s == "" { "无参数" } else { "value=\{value_s}" }
+    js_status_bar("🎛 已叠加 \{op}（\{how}）— 调整层可撤销")
   } else {
     js_log_line("❌ \{eng_s(r, "error")}", "#f66")
   }
@@ -1049,7 +1057,8 @@ pub fn register_globals() -> Unit {
   js_reg2s("__af", fn(op : String, sign : String) {
     let s = js_state_get("strength")
     let v = if sign == "" {
-      "0"
+      // 无符号算子（黑白/反色）：传空串，由 do_filter 决定不拼 value=
+      ""
     } else if sign == "-" {
       "-\{s}"
     } else {

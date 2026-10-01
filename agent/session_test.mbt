@@ -962,7 +962,10 @@ test "参数零容忍（第二批）：蒙版/调整/画笔/新建/加图 也要
     run(s, "add-adjust op=brightness vlaue=1.5").contains("不认识的参数"),
     msg="add-adjust 拼错 value 要拒（否则静默按 0 建一个没效果的调整层）",
   )
-  let _ = run(s, "add-adjust op=brightness value=1.5")
+  // 这里原先用 `value=1.5`——**越界值**，而当时入口收下了它（brightness 内部
+  // 只 clamp）。范围校验上线后它被拒，l2 压根没建出来，下面那句就报"层不存在"。
+  // 测试用了某个值，不等于那个值合法。
+  let _ = run(s, "add-adjust op=brightness value=0.5")
   // set-adjust 拼错键时，报的必须是"不认识的参数"而不是误导性的"至少要给"
   let bad = run(s, "set-adjust l2 vallue=0.5")
   assert_true(bad.contains("不认识的参数"), msg="拼错键要说清是拼错：\{bad}")

@@ -166,6 +166,24 @@
    静默跳过 = 这块覆盖没了而汇总照旧好看（同第 10 步锚点失效）。
    改了参数面就顺手跑一次 `python3 param_audit.py`（秒级）。
 
+   **值面还有第五件事：这个值合法吗？** 键认得出来不等于值收得下。
+   实测调整算子的取值契约此前只有字典里一句 `value=<-1..1>`，而它对一半算子
+   **是错的**（blur/sharpen/smooth/whiten/vignette 是 0..1），invert/grayscale
+   更是**压根不读 value**。三种静默收下都实测到了：
+   ①`value=99` 被 brightness 内部 clamp —— 画面与 `value=1.0` **逐位相同**
+   而指纹不同（两张"不同"的文档渲染一模一样，没有任何信号）；
+   ②`op=invert value=0.5` 回 ok 而 0.5 被丢掉；③`op=brightness`（不给 value）
+   建出 value=0 的**空操作层**，`lint` 报 0 违规。
+   纪律：**一张表说清每个算子的取值**（`adjust_spec`：是否有值 + 上下界），
+   入口拒绝越界与"用不上的 value"，错误提示与**字典描述从表生成**
+   （`adjust_op_doc`）——字典是 LLM 唯一的说明书，写错它就一直发错参数。
+   第三副面孔（value 恰好 0：调到 0 是合法操作，但那确实是不干活的层）
+   命令面**不拦**，交给 `lint` 报——这是"入口拒绝 vs lint 兜住"的分工，
+   别把它压成一条。
+   ⚠️ 改 `AdjustOp` 或取值契约时，`core.all_adjust_ops` / `adjust_spec` /
+   `adjust_op_name` / `adjust_op_from_name` **四个方向只有一处实现**，
+   加算子只改这两处（core 的名字表 + agent 的范围表），别的手写清单一律算 bug。
+
 ## 快速命令
 
 ```bash
@@ -230,7 +248,10 @@ python3 mutation_scan.py        # 变异门：注入语义 bug 看测试能否�
                                 # 「测试全绿」不等于「行为被守护」）
 python3 mutation_scan.py --check-anchors   # 只校验锚点唯一命中（秒级，已进 verify.sh）
 python3 mutation_scan.py R3 R4  # 按 id 只跑指定的变异（改完测试想快速复验）
-# 锚点失效 → INVALID → **退出码 1**（不再被静默排除在统计之外）
+# INVALID（锚点失效 **或变异本身编译不过**）与 UNKNOWN 都**退出码 1**：
+# 它们不是"通过"，是"这条变异压根没在测试任何东西"。实测 R29 的替换串括号
+# 不配对、一直编译不过，而每次汇总都印"MUTATION SCAN PASS ✓"——因为 INVALID
+# 此前被静默排除在统计之外，连"被抓住 N 个"都把 UNKNOWN 算了进去。
 moon run --target native cli    # stdin 行协议；help 查看全部 59 个命令
 ```
 

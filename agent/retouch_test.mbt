@@ -155,10 +155,11 @@ test "set-adjust：原地改值不丢层序，且调整层必须报得出 op/val
   // 而且只有 add-adjust：想微调只能删了重加，重加会推到栈顶，
   // 于是"只改数值"变成"连作用范围也变了"（调整层作用于其下全部可见层）。
   let s = scene("set-adjust")
-  let _ = run(s, "add-adjust op=brightness value=1.3")
+  // value 用 0.3（原先写 1.3 —— **越界**，而当时入口不校验范围）。
+  let _ = run(s, "add-adjust op=brightness value=0.3")
   let q0 = run(s, "query-layer l2")
   assert_true(q0.contains("brightness"), msg="调整层要报出算子：\{q0}")
-  assert_true(q0.contains("1.3"), msg="调整层要报出数值：\{q0}")
+  assert_true(q0.contains("0.3"), msg="调整层要报出数值：\{q0}")
   // 在它上面再压一层，制造"层序会被破坏"的场景
   let _ = run(s, "add-rect x=0 y=0 w=8 h=8 fill=#FF0000FF name=top")
   let before = run(s, "list-layers")
@@ -184,4 +185,99 @@ test "set-adjust：原地改值不丢层序，且调整层必须报得出 op/val
   assert_true(run(s, "set-adjust l2").contains("至少要给"), msg="空参数要拒绝")
   assert_true(run(s, "set-adjust l1 value=0.5").contains("不是调整层"), msg="非调整层要拒绝")
   assert_true(run(s, "set-adjust l1").contains("不是调整层"), msg="非调整层要拒绝")
+}
+
+test "调整算子的取值契约：越界与「用不上的 value」都拒绝（双向）" {
+  // 此前字典只有一句 `value=<-1..1>`，而它对一半算子是错的：
+  // blur/sharpen/smooth/whiten/vignette 是 0..1，invert/grayscale 压根不读
+  // value。三种静默收下都实测到了：
+  //   ①`value=99` 被 brightness 内部 clamp —— 画面与 value=1.0 **逐位相同**，
+  //     而指纹不同（两张"不同"的文档渲染一模一样，没有任何信号）；
+  //   ②`op=invert value=0.5` 回 ok 而 0.5 被丢掉；
+  //   ③`op=brightness`（不给 value）建出 value=0 的空操作层，lint 报 0 违规。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 32 32")
+  let _ = run(s, "add-rect x=0 y=0 w=8 h=8 fill=#FF0000FF name=A")
+  // ① 越界：两端都要拒，且报出范围
+  let hi = run(s, "add-adjust op=brightness value=99")
+  assert_true(hi.contains("超出"), msg=hi)
+  assert_true(hi.contains("[-1..1]"), msg="越界要报出范围：\{hi}")
+  let lo = run(s, "add-adjust op=warm value=-3")
+  assert_true(lo.contains("超出"), msg=lo)
+  // 0..1 的算子给 -0.1 也要拒（别把两类算子混成一个范围）
+  let neg = run(s, "add-adjust op=blur value=-0.1")
+  assert_true(neg.contains("超出"), msg=neg)
+  // ② 无值算子不接受 value=
+  let iv = run(s, "add-adjust op=invert value=0.5")
+  assert_true(iv.contains("不接受 value="), msg=iv)
+  assert_true(iv.contains("不读 value"), msg="要说清为什么：\{iv}")
+  // ③ 有值算子不给 value 要拒（否则建出空操作层）
+  let nov = run(s, "add-adjust op=brightness")
+  assert_true(nov.contains("需要 value="), msg=nov)
+  assert_true(nov.contains("什么都不干"), msg="要说清后果：\{nov}")
+  // **正控**：合法输入一个都不许被拒（判据要两头都咬得住）
+  assert_true(!run(s, "add-adjust op=brightness value=1").contains("error"), msg="边界 1 要收")
+  assert_true(!run(s, "add-adjust op=warm value=-1").contains("error"), msg="边界 -1 要收")
+  assert_true(!run(s, "add-adjust op=blur value=1").contains("error"), msg="0..1 的边界 1 要收")
+  assert_true(!run(s, "add-adjust op=blur value=0").contains("error"), msg="0..1 的边界 0 要收")
+  assert_true(!run(s, "add-adjust op=invert").contains("error"), msg="无值算子不给 value 要收")
+  assert_true(!run(s, "add-adjust op=grayscale").contains("error"), msg="同上")
+  assert_true(!run(s, "add-adjust op=saturation value=0.5").contains("error"), msg="普通值要收")
+  // 未知算子的清单从 core.all_adjust_ops 生成（含范围），不再手写
+  let unk = run(s, "add-adjust op=deep-fry value=1")
+  assert_true(unk.contains("未知调整算子"), msg=unk)
+  assert_true(unk.contains("brightness=[-1..1]"), msg="清单要带范围：\{unk}")
+  assert_true(unk.contains("invert（无数值）"), msg="无值算子要标出来：\{unk}")
+  // set-adjust 走同一张表：给无值算子传 value 也要拒（此前静默丢掉）
+  let inv = run(s, "add-adjust op=invert id=inv")
+  assert_true(!inv.contains("error"), msg=inv)
+  let bad = run(s, "set-adjust inv value=0.5")
+  assert_true(bad.contains("不接受 value="), msg=bad)
+  // 只改算子到有值算子：不许凭空塞 value=（否则会被自己的规则打回）
+  let to_b = run(s, "set-adjust inv op=brightness")
+  assert_true(to_b.contains("需要 value=") || !to_b.contains("error"), msg=to_b)
+  // 反向：从有值算子改到无值算子，value 要**被丢掉**而不是残留
+  let _ = run(s, "add-adjust op=brightness value=0.4 id=br")
+  let back = run(s, "set-adjust br op=invert")
+  assert_true(!back.contains("error"), msg=back)
+  let q = run(s, "query-layer br")
+  assert_true(q.contains("invert"), msg=q)
+  assert_true(q.contains("\"value\":0"), msg="改成无值算子后 value 要归零：\{q}")
+}
+
+test "lint 兜住调整层的三种「装了不干活」（命令面拦两种，第三种只有 lint 会说）" {
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 32 32")
+  let _ = run(s, "add-rect x=0 y=0 w=8 h=8 fill=#FF0000FF name=A")
+  // 正控：正常调整层一个字都不报
+  let _ = run(s, "add-adjust op=brightness value=0.5")
+  let ok = run(s, "lint")
+  assert_true(ok.contains("\"violations\":0"), msg="正常调整层不该报：\{ok}")
+  // 第三种：value=0 的空操作层（命令面**不拦**——调到 0 是合法操作）
+  let _ = run(s, "set-adjust l2 value=0")
+  let r = run(s, "lint")
+  assert_true(r.contains("noop 调整层"), msg="value=0 要报空操作：\{r}")
+  assert_true(r.contains("value=0"), msg=r)
+  // 手改容器：直接构造那种状态（命令面已拦，这里兜住外部/手改的容器）
+  let doc = @core.new_document("lint-adj-oob", 32, 32)
+  let dl = @core.default_layer("d1", "hand-edited", 0.0, 0.0, 20.0, 20.0)
+  doc.layers.push({
+    ..dl,
+    kind: @core.ShapeKind::Adjust,
+    adjust: Some({ op: @core.AdjustOp::Brightness, value: 99.0 }),
+  })
+  let text = (@agent.lint_doc(doc)).join(" | ")
+  assert_true(text.contains("超出"), msg="手改的越界值要报：\{text}")
+  // 手改容器：给无值算子存了非零 value（渲染器不读它，纯粹改指纹）
+  let doc2 = @core.new_document("lint-adj-dead", 32, 32)
+  let dl2 = @core.default_layer("d1", "hand-edited", 0.0, 0.0, 20.0, 20.0)
+  doc2.layers.push({
+    ..dl2,
+    kind: @core.ShapeKind::Adjust,
+    adjust: Some({ op: @core.AdjustOp::Invert, value: 0.5 }),
+  })
+  let text2 = (@agent.lint_doc(doc2)).join(" | ")
+  assert_true(text2.contains("不接受数值"), msg="手改的用不上的 value 要报：\{text2}")
 }

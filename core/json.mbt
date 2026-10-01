@@ -801,19 +801,10 @@ fn adjust_of(v : JValue) -> Adjust? {
       match str_field(av, "op") {
         Some(op) => {
           let value = num_f(av, "value")
-          match op {
-            "brightness" => Some({ op: Brightness, value })
-            "contrast" => Some({ op: Contrast, value })
-            "saturation" => Some({ op: Saturation, value })
-            "invert" => Some({ op: Invert, value })
-            "grayscale" => Some({ op: Grayscale, value })
-            "blur" => Some({ op: Blur, value })
-            "sharpen" => Some({ op: Sharpen, value })
-            "smooth" => Some({ op: Smooth, value })
-            "whiten" => Some({ op: Whiten, value })
-            "warm" => Some({ op: Warm, value })
-            "vignette" => Some({ op: Vignette, value })
-            _ => None
+          // 逆映射走 core 的**单一实现**（此前这里与 agent 各手写 11 条臂）
+          match adjust_op_from_name(op) {
+            Some(o) => Some({ op: o, value })
+            None => None
           }
         }
         _ => None

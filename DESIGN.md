@@ -243,7 +243,11 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
 - **已落地的部分**（原列在本节，现已实现，留档说明**做到哪**）：
   **P4 蒙版**只做了**几何**的（矩形/椭圆 + 圆角 + `invert`，命令面 + 人类前端拖拽 + AI 工具面），
   栅格蒙版 / live mask / 更复杂的羽化（高斯、按描边自适应）仍未做；**P5 调整层**做了**叠加式像素算子**（`add-adjust` 的
-  11 个算子），可反复编辑参数的独立调整层（levels/curves/hue_sat 面板）仍未做；
+  11 个算子；每个算子的可调数值**有取值范围**——brightness/contrast/saturation/
+  warm 是 -1..1，blur/sharpen/smooth/whiten/vignette 是 0..1，invert/grayscale
+  **没有数值**（渲染器不读 value，给了入口直接拒绝）；范围与清单是
+  `agent/session.mbt` 的 `adjust_spec` **一张表**，字典描述与错误提示都从它生成），
+  可反复编辑参数的独立调整层（levels/curves/hue_sat 面板）仍未做；
   **文本层**做了 **ASCII 点阵字形**（无 CJK、无字体文件）。
 - **仍未做**：贝塞尔、图层样式 fx、多色渐变/径向渐变；
 - **PSD L1 读 → L3 写**（PSD 为第一公民，Photopea 天然覆盖）、AI（PDF 层）导入、Sketch/XCF/KRA；原文保全策略（source/ 层）；

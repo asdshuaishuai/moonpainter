@@ -80,10 +80,11 @@ pub fn list_tools() -> Array[AgentTool] {
   add("set-text", "set-text <id> <新内容>（含空格用双引号包住）", "meta")
   add(
     "add-adjust",
-    "add-adjust op=<算子> value=<-1..1>：调整层（PSD 语义）。算子：brightness/contrast/saturation/invert/grayscale/blur/sharpen/smooth/whiten/warm/vignette。可选：" + add_adjust_keys().map(fn(k) { "[\{k}=]" }).join(""),
+    // 算子清单与取值范围从 `adjust_value_range` 那张表生成（单一事实源）
+    "add-adjust op=<算子> [value=<数>]：调整层（PSD 语义，作用于其下全部可见层）。算子：" + adjust_op_doc() + "。可选：" + add_adjust_keys().map(fn(k) { "[\{k}=]" }).join(""),
     "meta",
   )
-  add("set-adjust", "set-adjust <id> [op=<算子>] [value=<数>]：原地改调整层的算子/数值，**层序不变**（删了重加会把它推到栈顶，作用范围跟着变）", "meta")
+  add("set-adjust", "set-adjust <id> [op=<算子>] [value=<数>]：原地改调整层的算子/数值（**层序不变**——删了重加会把它推到栈顶，作用范围跟着变）。算子与范围同 add-adjust：" + adjust_op_doc(), "meta")
   add("add-mask", "add-mask <id> kind=rect|ellipse x= y= w= h= [radius=<圆角 px，仅矩形，默认 0>] [feather=<边缘羽化 px，默认 0=硬边；过渡带在蒙版内侧>] [invert=true]：蒙版坐标是**画布坐标**（x/y/w/h 用像素，不随图层 move/rotate 走）", "meta")
   add(
     "set-mask",

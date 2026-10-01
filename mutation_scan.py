@@ -17,7 +17,9 @@
 的代码，锚点一旦被后续重构改掉、或变得不再唯一，那个变异就**再也没跑过**。
 实测踩过：R3 的锚点被一次重构改了缩进、R4 的锚点变成匹配 2 处，两个变异静静
 失效了一轮，而汇总里的「变异 N 个全部通过」照旧好看。所以：
-  * 锚点失效（INVALID）会让脚本**退出码 1**，不再被静默排除在统计之外；
+  * INVALID（锚点失效 **或变异本身编译不过**）会让脚本**退出码 1**。两类都
+    意味着"这条变异没在测试任何东西"——实测 R29 的替换串括号不配对、一直编译
+    不过，而每次汇总照旧印 PASS；
   * `--check-anchors` 只校验锚点唯一命中（秒级），已接进 `verify.sh` 第 9 步。
 
 用法（在仓库根）：
@@ -351,8 +353,9 @@ MUTS = [
       return err(""",
         r"""  let cur = match target.adjust {
     Some(a) => a
-    None =>
-      if true { return err(""",
+    None => { op: @core.AdjustOp::Brightness, value: 0.0 }
+  }
+  let _unreachable = if false { return err(""",
         "killed",
     ),
     (
@@ -367,16 +370,20 @@ MUTS = [
         "R31",
         "set-adjust 不沿用原值（只给 op 时把 value 清零）",
         "agent/session.mbt",
-        r"""  merged.set("value", m.get("value").unwrap_or(@core.fmt_num(cur.value)))""",
-        r"""  merged.set("value", m.get("value").unwrap_or("0"))""",
+        r"""          if (adjust_spec(o)).0 {
+            merged.set("value", @core.fmt_num(cur.value))
+          }""",
+        r"""          if (adjust_spec(o)).0 {
+            merged.set("value", "0")
+          }""",
         "killed",
     ),
     (
         "R32",
         "adjust_op_name 把 brightness 的名字写错（报告与 canonical 不一致）",
         "core/document.mbt",
-        r"""brightness""",
-        r"""bright""",
+        '    Brightness => "brightness"',
+        '    Brightness => "bright"',
         "killed",
     ),
     (
@@ -948,6 +955,43 @@ MUTS = [
         r"""      } else if false {""",
         "killed",
     ),
+    (
+        "Q7",
+        "调整算子不再校验取值范围（value=99 被收下，clamp 成与 value=1 逐位相同）",
+        "agent/session.mbt",
+        """  if value < lo || value > hi {""",
+        """  if value < lo - 1000000.0 || value > hi + 1000000.0 {""",
+        "killed",
+    ),
+    (
+        "Q4",
+        "无值算子（invert/grayscale）又收下用不上的 value=（静默丢掉）",
+        "agent/session.mbt",
+        """  let raw = m.get("value")""",
+        """  let raw : String? = if has_value { m.get("value") } else { None }""",
+        "killed",
+    ),
+    (
+        "Q5",
+        "有值算子不给 value 也放行（默认 0 → 建一个什么都不干的层）",
+        "agent/session.mbt",
+        """    None =>
+      return Err(
+        "算子 \\{opname} 需要 value=（范围 [\\{@core.fmt_num(lo)}..\\{@core.fmt_num(hi)}]；不给就是建一个什么都不干的层）",
+      )
+  }""",
+        """    None => "0"
+  }""",
+        "killed",
+    ),
+    (
+        "Q6",
+        "lint 不再报 value=0 的空操作调整层",
+        "agent/ops.mbt",
+        """          } else if a.value == 0.0 {""",
+        """          } else if a.value == -12345.0 {""",
+        "killed",
+    ),
 ]
 
 
@@ -965,11 +1009,13 @@ def judge(out):
     summary = [l for l in out.splitlines() if l.startswith("Total tests")]
     crashed = "exited with signal" in out or "SIGABRT" in out
     if not summary:
-        if "failed when checking" in out or "Parse error" in out:
-            return "INVALID", "编译失败（变异本身不合法）"
         if crashed:
             return "KILLED", "测试进程崩溃（abort）"
-        return "UNKNOWN", "无法判定"
+        # 没有 "Total tests" 行 = **测试压根没跑到**：变异编译不过（"failed when
+        # checking"/"Parse error"）或工具链报错。此前这种情况落在 UNKNOWN 上，
+        # 而 UNKNOWN 被汇总算进了"被抓住"——实测注入一段编译不过的替换串，
+        # 摘要印的是"被抓住 1，存活 0 / PASS"。
+        return "INVALID", "测试没跑起来（变异编译不过 / 工具链报错）"
     failed = int(summary[-1].split("failed:")[1].strip().rstrip("."))
     if failed > 0:
         return "KILLED", f"{failed} 条测试失败"
@@ -986,7 +1032,14 @@ def check_anchors():
     看起来一切正常。所以这一步要独立、要便宜、要进常规门禁。
     """
     bad = []
+    seen_ids = {}
     for mid, desc, rel, old, new, expect in MUTS:
+        # 编号唯一：`mutation_scan.py Q3` 这种按 id 单跑，重复 id 会让它一次跑
+        # 两个变异（而汇总里的计数看起来照旧正常）。实测踩过：新加的三条与既有
+        # 的 Q3 撞了编号。
+        if mid in seen_ids:
+            bad.append((mid, rel, "编号与前面那条重复（按 id 单跑会有歧义）"))
+        seen_ids[mid] = True
         path = os.path.join(ROOT, rel)
         if not os.path.exists(path):
             bad.append((mid, rel, "文件不存在"))
@@ -1046,14 +1099,35 @@ def main():
         print(f"{verdict:9s} {mid:5s} {desc}  ({detail})", flush=True)
         if expect == "killed" and verdict in ("SURVIVED", "UNKNOWN"):
             misses.append(mid)
+    invalid = [r for r in results if r[3] == "INVALID"]
     valid = [r for r in results if r[3] != "INVALID"]
     survived = [r for r in valid if r[3] == "SURVIVED"]
-    print(f"\n变异 {len(valid)} 个：被抓住 {len(valid) - len(survived)}，存活 {len(survived)}")
+    killed = [r for r in valid if r[3] == "KILLED"]
+    unknown = [r for r in valid if r[3] == "UNKNOWN"]
+    print(
+        f"\n变异 {len(valid)} 个：被抓住 {len(killed)}，存活 {len(survived)}"
+        + (f"，无法判定 {len(unknown)}" if unknown else "")
+        + (f"，无效 {len(invalid)}" if invalid else "")
+    )
     for r in survived:
         if r[2] == "equivalent":
             print(f"  存活的 {r[0]} 是**已确认的等价变异**（不改变行为，允许存活）")
     if misses:
         print(f"\nFAIL: 这些变异应当被抓住却存活了：{misses}")
+        return 1
+    # INVALID 必须**判失败**：它不是"通过"，是**这条变异压根没在测试任何东西**
+    # （锚点失效 = 覆盖被拿掉；编译不过 = 变异自己不合法）。此前它被静默排除在
+    # 统计之外——实测 R29 的替换串括号不配对、一直编译不过，而每次汇总都印
+    # "MUTATION SCAN PASS ✓（所有非等价变异都被测试抓住）"。
+    if unknown:
+        print(f"\nFAIL: 这些变异**无法判定**（测试没跑起来 / 结果读不出来）：")
+        for r in unknown:
+            print(f"   {r[0]:5s} {r[1]}  （{r[4]}）")
+        return 1
+    if invalid:
+        print(f"\nFAIL: 这些变异**没有在测试任何东西**（锚点失效 / 编译不过）：")
+        for r in invalid:
+            print(f"   {r[0]:5s} {r[1]}  （{r[4]}）")
         return 1
     print("\nMUTATION SCAN PASS ✓（所有非等价变异都被测试抓住）")
     return 0
