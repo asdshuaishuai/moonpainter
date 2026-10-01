@@ -270,3 +270,94 @@ test "lint：非文本层带 text 字段是死数据（渲染器不读，却改�
   let joined = items.join(" | ")
   assert_true(joined.contains("却带着 text 字段"), msg="lint 必须报死数据：\{joined}")
 }
+
+///|
+test "lint：8 个 kind 专属字段逐格覆盖 —— 错的 kind 上带着死数据一律要报" {
+  // 这张表此前只有 3 格（text / radius / points），另 5 格（font_size /
+  // adjust / asset / dabs / children）**谁都没查**。同一个类别的字段，
+  // 特例化的检查一定漏——现在 Nature 上是「一行一个字段」的表，
+  // 而这条测试**逐格喂一个死值**，漏加一行会在这里红。
+  //
+  // 注意：这些状态从命令面**进不来**（入口都有 kind 守卫，实测
+  // `set-adjust l1`（rect）报「不是调整层」、`brush layer=l1`（rect）报
+  // 「不是画笔层」），容器侧也被 open 的**指纹对账**挡住（手改
+  // design.json 会「指纹对账失败」）。lint 是第三道防线：万一有人
+  // 连 manifest 的指纹一起改了，它就是唯一会说话的东西。
+  // 不写 `Array[(A -> B, String)]`：`Array[...]` 见到逗号会当成两个类型实参
+  // （类型别名也救不了），让闭包各自标参数类型、由编译器推断元组类型。
+  let cases = [
+    (fn(l : @core.Layer) { { ..l, text: "幽灵" } }, "text 字段"),
+    (fn(l : @core.Layer) { { ..l, font_size: 42.0 } }, "font_size=42"),
+    // 基准层是 rect，而圆角对 rect 是**合法**的——只有这一格要换 kind
+    (fn(l : @core.Layer) { { ..l, kind: @core.ShapeKind::Ellipse, corner_radius: 7.0 } }, "radius=7"),
+    (fn(l : @core.Layer) { { ..l, points: [(0.0, 0.0), (1.0, 1.0)] } }, "2 个顶点"),
+    (fn(l : @core.Layer) { { ..l, adjust: Some(@core.Adjust::{ op: @core.AdjustOp::Brightness, value: 0.5 }) } }, "adjust 字段"),
+    (fn(l : @core.Layer) { { ..l, asset_hash: "deadbeef" } }, "asset 引用"),
+    (fn(l : @core.Layer) { { ..l, dabs: [@core.Dab::{ x: 1.0, y: 1.0, r: 2.0, color: 0xFF0000FF, erase: false }] } }, "1 个笔触"),
+    (fn(l : @core.Layer) { { ..l, children: [@core.default_layer("kid", "k", 0.0, 0.0, 4.0, 4.0)] } }, "1 个子层"),
+  ]
+  for c in cases {
+    // `\{...}` 里只放标识符，所以先把元组字段取出来
+    let tamper = c.0
+    let want = c.1
+    let doc = @core.new_document("lint-grid", 64, 64)
+    // 基准层是 rect：上表每一格都是「rect 上带着别人家的字段」
+    let base = @core.default_layer("g1", "grid", 0.0, 0.0, 20.0, 20.0)
+    doc.layers.push(tamper(base))
+    let joined = @agent.lint_doc(doc).join(" | ")
+    assert_true(joined.contains(want), msg="lint 必须报 \{want}：\{joined}")
+    assert_true(joined.contains("rect"), msg="报错要说清是哪一层什么 kind：\{joined}")
+  }
+  // 反向：每格都要有**正控**——字段落在对的 kind 上不许误报。
+  //
+  // 这一半不是装饰：最初只做了"错的 kind 要报"，结果「把某一行的合法 kind
+  // 写错」这种变异**存活了一轮**（把 rect 加进 text 的合法 kind，
+  // "rect 带 text 要报"仍然成立，因为判据是"不在允许集合里"）——只有
+  // 正控能咬住它。**一个判据要在两个方向上都咬得住。**
+  let okdoc = @core.new_document("lint-grid-ok", 64, 64)
+  okdoc.assets.push(@core.Asset::{ hash: "h1", width: 4, height: 4 })
+  let b = @core.default_layer("k0", "x", 0.0, 0.0, 20.0, 20.0)
+  okdoc.layers.push(
+    { ..b, id: "t1", kind: @core.ShapeKind::Text, text: "真的文字", font_size: 24.0 },
+  )
+  okdoc.layers.push({ ..b, id: "r1", kind: @core.ShapeKind::Rect, corner_radius: 7.0 })
+  okdoc.layers.push(
+    {
+      ..b,
+      id: "p1",
+      kind: @core.ShapeKind::Polygon,
+      points: [(0.0, 0.0), (4.0, 0.0), (2.0, 4.0)],
+    },
+  )
+  okdoc.layers.push(
+    {
+      ..b,
+      id: "a1",
+      kind: @core.ShapeKind::Adjust,
+      adjust: Some(@core.Adjust::{ op: @core.AdjustOp::Brightness, value: 0.5 }),
+    },
+  )
+  okdoc.layers.push({ ..b, id: "i1", kind: @core.ShapeKind::Image, asset_hash: "h1" })
+  okdoc.layers.push(
+    {
+      ..b,
+      id: "d1",
+      kind: @core.ShapeKind::Raster,
+      dabs: [@core.Dab::{ x: 1.0, y: 1.0, r: 2.0, color: 0xFF0000FF, erase: false }],
+    },
+  )
+  okdoc.layers.push(
+    {
+      ..b,
+      id: "g1",
+      kind: @core.ShapeKind::Group,
+      children: [@core.default_layer("kid", "k", 0.0, 0.0, 4.0, 4.0)],
+    },
+  )
+  let okj = @agent.lint_doc(okdoc).join(" | ")
+  for f in [
+    "text 字段", "font_size", "radius=", "个顶点", "adjust 字段", "asset 引用", "个笔触", "个子层",
+  ] {
+    assert_true(!okj.contains(f), msg="对的 kind 上不该报 \{f}：\{okj}")
+  }
+}

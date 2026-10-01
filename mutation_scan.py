@@ -300,10 +300,14 @@ MUTS = [
     ),
     (
         "R25",
-        "lint 不报非文本层上的 text 死数据",
+        "lint 不报非文本层上的 text 死数据（表格把 text 的合法 kind 写错）",
         "agent/ops.mbt",
-        """      v.push("P2 noop 层 \\{l.id} 是 \\{kind_str(l.kind)} 却带着 text 字段（渲染器不读，纯粹改变指纹）")""",
-        """      let _ = l""",
+        r"""      field: "text",
+      reader: "text 层",
+      kinds: ["text"],""",
+        r"""      field: "text",
+      reader: "text 层",
+      kinds: ["rect"],""",
         "killed",
     ),
     (
@@ -321,10 +325,12 @@ MUTS = [
     ),
     (
         "R27",
-        "lint 不报非矩形层上的 radius 死数据",
+        "lint 报 radius 却不报数值（「报了字段名不报值」满足不了数值断言）",
         "agent/ops.mbt",
-        """          "P2 noop 层 \\{l.id} 是 \\{kind_str(l.kind)} 却带着 radius=\\{@core.fmt_num(l.corner_radius)}（渲染器只对 rect 读圆角，纯粹改变指纹）",""",
-        """          "P2 noop 层 \\{l.id} 是 \\{kind_str(l.kind)} 却带着 radius（渲染器只对 rect 读圆角）",""",
+        r"""          "radius=\{@core.fmt_num(l.corner_radius)}"
+        } else {""",
+        r"""          "radius"
+        } else {""",
         "killed",
     ),
     (
@@ -433,12 +439,14 @@ MUTS = [
     ),
     (
         "R38",
-        "lint 不报非 polygon/line 上的死顶点",
+        "lint 不报非 polygon/line 上的死顶点（表格把 points 的合法 kind 放宽到 rect）",
         "agent/ops.mbt",
-        r"""        v.push(
-          "P2 noop 层 \{l.id} 是 \{kind_str(l.kind)} 却带着 \{l.points.length()} 个顶点（渲染器只对 polygon/line 读 points，纯粹改变指纹）",
-        )""",
-        r"""        let _ = l.points""",
+        r"""      field: "points",
+      reader: "polygon/line",
+      kinds: ["polygon", "line"],""",
+        r"""      field: "points",
+      reader: "polygon/line",
+      kinds: ["polygon", "line", "rect"],""",
         "killed",
     ),
     (
@@ -586,6 +594,64 @@ MUTS = [
   }
   // render [width] [vx0 vy0 vx1 vy1]""",
         r"""  // render [width] [vx0 vy0 vx1 vy1]""",
+        "killed",
+    ),
+    (
+        "R50",
+        "lint 的 kind 专属字段表漏掉 font_size 一格（rect 上的字号成死数据）",
+        "agent/ops.mbt",
+        r"""    {
+      field: "font_size",
+      reader: "text 层",
+      kinds: ["text"],""",
+        r"""    {
+      field: "font_size",
+      reader: "unknown",
+      kinds: ["font_size-never"],""",
+        "killed",
+    ),
+    (
+        "R51",
+        "lint 的 kind 专属字段表漏掉 adjust 一格",
+        "agent/ops.mbt",
+        r"""      field: "adjust",
+      reader: "adjust 层",
+      kinds: ["adjust"],""",
+        r"""      field: "adjust",
+      reader: "unknown",
+      kinds: ["adjust-never"],""",
+        "killed",
+    ),
+    (
+        "R52",
+        "lint 的 kind 专属字段表漏掉 dabs / children / asset_hash",
+        "agent/ops.mbt",
+        r"""      field: "asset_hash",
+      reader: "image 层",
+      kinds: ["image"],
+      dead: fn(l) { if l.asset_hash != "" { "asset 引用" } else { "" } },
+    },
+    {
+      field: "dabs",
+      reader: "raster 层",
+      kinds: ["raster"],
+      dead: fn(l) {
+        if l.dabs.length() > 0 { "\{l.dabs.length()} 个笔触" } else { "" }
+      },
+    },
+    {
+      field: "children",
+      reader: "group",
+      kinds: ["group"],
+      dead: fn(l) {
+        if l.children.length() > 0 { "\{l.children.length()} 个子层" } else { "" }
+      },
+    },""",
+        r"""      field: "asset_hash",
+      reader: "image 层",
+      kinds: ["image"],
+      dead: fn(l) { if l.asset_hash != "" { "asset 引用" } else { "" } },
+    },""",
         "killed",
     ),
     (

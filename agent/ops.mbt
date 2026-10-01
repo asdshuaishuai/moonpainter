@@ -516,6 +516,105 @@ pub fn build_shape_layer(
 }
 
 ///|
+///|
+/// 「某 kind 才有意义」的字段：**一行一个**。
+///
+/// 判定 = 「值非空/非默认」且「kind 不在允许集合」→ 该层带着死数据：
+/// 它会被写进 canonical JSON、**改变指纹**，渲染器却根本不读它——于是
+/// "改成功了吗"的三个信号自相矛盾（指纹说变了、query-layer 报出来了、
+/// 画面逐位没变）。
+///
+/// **为什么是一张表**：这类字段每加一个，天真的做法是在 lint 里再加一条
+/// `if`。本仓库栽过好几次"只会变长的表"，所以这里做成一行一个字段：
+/// 新增 kind 专属字段只需加一行，而且漏没漏能一眼数出来。
+///
+/// 每行的 `reader` 必须与 `render/scene.mbt` 的实际读点一致——渲染器只在
+/// 它自己的 kind 分支里读这些字段（Group→children / Adjust→adjust /
+/// Text→text+font_size / Raster→dabs / Image→asset_hash /
+/// Rect→corner_radius / Polygon·Line→points）。
+priv struct KindOnly {
+  field : String // 诊断里怎么称呼这个字段
+  reader : String // 渲染器在哪种 kind 下读它（写给人看）
+  kinds : Array[String] // 允许携带它的 kind（`kind_str` 的词）
+  dead : (@core.Layer) -> String // 返回非空 = 带着死数据（内容是值的描述）
+}
+
+///|
+fn kind_only_fields() -> Array[KindOnly] {
+  [
+    {
+      field: "text",
+      reader: "text 层",
+      kinds: ["text"],
+      dead: fn(l) { if l.text != "" { "text 字段" } else { "" } },
+    },
+    {
+      field: "font_size",
+      reader: "text 层",
+      kinds: ["text"],
+      dead: fn(l) {
+        if l.font_size != 16.0 {
+          "font_size=\{@core.fmt_num(l.font_size)}"
+        } else {
+          ""
+        }
+      },
+    },
+    {
+      field: "corner_radius",
+      reader: "rect",
+      kinds: ["rect"],
+      dead: fn(l) {
+        if l.corner_radius != 0.0 {
+          "radius=\{@core.fmt_num(l.corner_radius)}"
+        } else {
+          ""
+        }
+      },
+    },
+    {
+      field: "points",
+      reader: "polygon/line",
+      kinds: ["polygon", "line"],
+      dead: fn(l) {
+        if l.points.length() > 0 {
+          "\{l.points.length()} 个顶点"
+        } else {
+          ""
+        }
+      },
+    },
+    {
+      field: "adjust",
+      reader: "adjust 层",
+      kinds: ["adjust"],
+      dead: fn(l) { if l.adjust is Some(_) { "adjust 字段" } else { "" } },
+    },
+    {
+      field: "asset_hash",
+      reader: "image 层",
+      kinds: ["image"],
+      dead: fn(l) { if l.asset_hash != "" { "asset 引用" } else { "" } },
+    },
+    {
+      field: "dabs",
+      reader: "raster 层",
+      kinds: ["raster"],
+      dead: fn(l) {
+        if l.dabs.length() > 0 { "\{l.dabs.length()} 个笔触" } else { "" }
+      },
+    },
+    {
+      field: "children",
+      reader: "group",
+      kinds: ["group"],
+      dead: fn(l) {
+        if l.children.length() > 0 { "\{l.children.length()} 个子层" } else { "" }
+      },
+    },
+  ]
+}
+
 /// 收集重复 id / 越界 / 非法值等 P0–P2 违规（lint 命令）。
 pub fn lint_doc(doc : @core.Document) -> Array[String] {
   let v : Array[String] = []
@@ -547,22 +646,14 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
     if l.opacity < 0.0 || l.opacity > 1.0 {
       v.push("P2 style 层 \{l.id} opacity 越界")
     }
-    // 非矩形层的 `corner_radius` 同上：入口（add-*/set-style）已拒绝，
-    // 这里兜住手改 design.json 的容器——它会被写进 canonical JSON、
-    // 改变指纹，而渲染器只在 Rect 分支读它。
-    // 同 radius：非 polygon/line 层上的 `points` 是死数据（渲染器只在
-    // `in_polygon` 与折线描边距离测试里读顶点）。
-    if !(l.kind is @core.ShapeKind::Polygon) && !(l.kind is @core.ShapeKind::Line) {
-      if l.points.length() > 0 {
+    // 所有「某 kind 才有意义」的字段走同一张表。此前这里只有三条手写 if
+    // （text / radius / points），而同类字段还有五个（font_size / adjust /
+    // asset_hash / dabs / children）——**特例化的检查一定漏**。
+    for c in kind_only_fields() {
+      let why = (c.dead)(l)
+      if why != "" && !c.kinds.contains(kind_str(l.kind)) {
         v.push(
-          "P2 noop 层 \{l.id} 是 \{kind_str(l.kind)} 却带着 \{l.points.length()} 个顶点（渲染器只对 polygon/line 读 points，纯粹改变指纹）",
-        )
-      }
-    }
-    if !(l.kind is @core.ShapeKind::Rect) {
-      if l.corner_radius != 0.0 {
-        v.push(
-          "P2 noop 层 \{l.id} 是 \{kind_str(l.kind)} 却带着 radius=\{@core.fmt_num(l.corner_radius)}（渲染器只对 rect 读圆角，纯粹改变指纹）",
+          "P2 noop 层 \{l.id} 是 \{kind_str(l.kind)} 却带着 \{why}（渲染器只对 \{c.reader} 读 \{c.field}，纯粹改变指纹）",
         )
       }
     }
@@ -591,11 +682,6 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
       if l.text == "" {
         v.push("P2 noop 文本层 \{l.id} 内容为空（渲染不出任何字形）")
       }
-    } else if l.text != "" {
-      // `set-text` 已在入口拒绝非文本层，这里兜住**手改 design.json /
-      // 外部构造的容器**（与渐变端点同一条纪律：入口拒绝 + lint 兜底）。
-      // 这个字段会被写进 canonical JSON、**改变指纹**，渲染器却根本不读它。
-      v.push("P2 noop 层 \{l.id} 是 \{kind_str(l.kind)} 却带着 text 字段（渲染器不读，纯粹改变指纹）")
     }
     // P1 引用
     if l.kind is @core.ShapeKind::Image {

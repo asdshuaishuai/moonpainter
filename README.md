@@ -144,6 +144,16 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   但实现里没有那条分支 —— `add-rect … tag=background` 一直**被静默忽略**
   （不报错、`tags` 为空），而两条既有测试都用着它、谁也没断言它真的落上。
   现在 `tag=` 可用（与 `tag` 命令共用 `@core.layer_with_tag`，追加去重）。
+- **「某 kind 才有意义」的字段有了完整矩阵**：`text`/`font_size`（只 text 层读）、
+  `radius`（只 rect）、`points`（只 polygon/line）、`adjust`（只 adjust 层）、
+  `asset`（只 image）、`dabs`（只 raster）、`children`（只 group）——**8 个**。
+  在错的 kind 上带着它们 = 死数据：写进 canonical JSON、**改变指纹**，渲染器
+  根本不读，于是"改成功了吗"三个信号自相矛盾。此前 lint 只查了 3 个（另 5 个
+  谁都没查），而且写成三条手写 `if`；现在是**一行一个字段**的表
+  （`kind_only_fields`），漏没漏能一眼数出来。实测这三条通路都有人守：
+  入口有 kind 守卫（`set-adjust l1`（rect）报「不是调整层」、`brush layer=l1`
+  报「不是画笔层」），容器侧 open 会做**指纹对账**（手改 design.json 直接
+  「指纹对账失败」开不了），lint 是第三道。
   第二批挂上时又抓到：`add-mask radus=5` 静默给出硬边直角蒙版、
   `add-adjust value` 拼成 `vlaue` 静默按 0 建一个"没效果"的调整层、
   `brush rr=4` 静默用默认半径。`session-open` 不接受 kv 校验（它认位置参数
