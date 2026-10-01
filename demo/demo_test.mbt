@@ -347,3 +347,22 @@ test "元参数工具接得上引擎（含带空格的名字必须加引号）" 
   )
   assert_eq(rp, "remove-param \"主 色\"")
 }
+
+///|
+test "调整层要能改值：set_adjust 原地改、不丢层序" {
+  // 此前只有 `add-adjust`（工具面的 `apply_filter`）：想"把亮度再调高一点"
+  // 只能删了重加，而重加会把它推到**栈顶**——调整层作用于其下全部可见层，
+  // 于是"只改了个数值"变成"连作用范围也变了"。
+  let p = @demo.tool_line(
+    "set_adjust",
+    @demo.parse_json_safe("{\"id\":\"l2\",\"value\":\"-0.5\"}"),
+  )
+  assert_eq(p, "set-adjust l2 value=-0.5")
+  let p2 = @demo.tool_line("set_adjust", @demo.parse_json_safe("{\"id\":\"l2\"}"))
+  assert_eq(p2, "set-adjust l2")
+  let p3 = @demo.tool_line(
+    "set_adjust",
+    @demo.parse_json_safe("{\"id\":\"l2\",\"op\":\"contrast\",\"value\":\"0.2\"}"),
+  )
+  assert_eq(p3, "set-adjust l2 op=contrast value=0.2")
+}

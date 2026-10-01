@@ -114,6 +114,7 @@ fn tool_cmd(name : String) -> String? {
     "paint_stroke" => Some("brush")
     "erase_stroke" => Some("erase")
     "apply_filter" => Some("add-adjust")
+    "set_adjust" => Some("set-adjust")
     "crop_canvas" => Some("crop")
     "sample_color" => Some("sample")
     "undo" => Some("undo")
@@ -377,6 +378,15 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
       [
         ("op", "string:req:算子名"),
         ("value", "number:req:强度 -1..1（0..1 为单向操作）"),
+      ],
+    ),
+    make_tool(
+      "set_adjust",
+      "改一个已有调整层的算子/数值（**原地改，层序不变**）。要微调刚才那个滤镜时用它——删了重加会把调整层推到栈顶，作用范围跟着变。",
+      [
+        ("id", "string:req:调整层 id（list_layers 里 kind=adjust 的那个）"),
+        ("op", "string:算子名（不给则沿用原算子）"),
+        ("value", "number:新强度 -1..1（不给则沿用原值）"),
       ],
     ),
     make_tool(
@@ -686,6 +696,21 @@ pub fn tool_line(name : String, args : Json) -> String {
     }
     "apply_filter" =>
       "add-adjust op=\{arg_of(args, "op")} value=\{opt_of(args, "value", "0.5")}"
+    "set_adjust" => {
+      // `arg_of` 对缺键返回空串；op/value 都不可能是合法的空串，
+      // 所以"空=没给"（没给就让引擎沿用原值）。
+      let id = arg_of(args, "id")
+      let op = arg_of(args, "op")
+      let val = arg_of(args, "value")
+      let mut cmd = "set-adjust \{id}"
+      if op != "" {
+        cmd = cmd + " op=\{op}"
+      }
+      if val != "" {
+        cmd = cmd + " value=\{val}"
+      }
+      cmd
+    }
     "crop_canvas" => "crop \{arg_of(args, "x")} \{arg_of(args, "y")} \{arg_of(args, "w")} \{arg_of(args, "h")}"
     "sample_color" => "sample \{arg_of(args, "x")} \{arg_of(args, "y")}"
     "set_style" => {

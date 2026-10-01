@@ -163,6 +163,27 @@ pub(all) enum AdjustOp {
 }
 
 ///|
+/// 算子名（canonical JSON 的 `op` 值 / 命令面 `op=` 的取值，**单一实现**）。
+/// 这名字此前只写在 `core/json.mbt` 的 `adjust_json` 里（私有），而
+/// `query-layer` 又要报同一个名字——两处各写一遍就是把"故意不一致"的
+/// 温床。提到这里，三处共用。
+pub fn adjust_op_name(op : AdjustOp) -> String {
+  match op {
+    Brightness => "brightness"
+    Contrast => "contrast"
+    Saturation => "saturation"
+    Invert => "invert"
+    Grayscale => "grayscale"
+    Blur => "blur"
+    Sharpen => "sharpen"
+    Smooth => "smooth"
+    Whiten => "whiten"
+    Warm => "warm"
+    Vignette => "vignette"
+  }
+}
+
+///|
 /// 笔触落点（Raster 层内容原子）：局部坐标圆斑。
 pub(all) struct Dab {
   x : Double

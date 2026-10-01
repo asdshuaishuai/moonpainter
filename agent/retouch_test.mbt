@@ -147,3 +147,41 @@ test "画笔坐标是画布坐标：层被 move 后落笔仍落在点击处" {
   let q = run(s, "query-layer l1")
   assert_true(q.contains("\"x\":50"), msg=q)
 }
+
+///|
+test "set-adjust：原地改值不丢层序，且调整层必须报得出 op/value" {
+  // 调整层**整个层就由 op+value 定义**，此前 query-layer/list-layers 两者
+  // 都不报——两个不同的调整层长得一模一样，调用方无法回读。
+  // 而且只有 add-adjust：想微调只能删了重加，重加会推到栈顶，
+  // 于是"只改数值"变成"连作用范围也变了"（调整层作用于其下全部可见层）。
+  let s = scene("set-adjust")
+  let _ = run(s, "add-adjust op=brightness value=1.3")
+  let q0 = run(s, "query-layer l2")
+  assert_true(q0.contains("brightness"), msg="调整层要报出算子：\{q0}")
+  assert_true(q0.contains("1.3"), msg="调整层要报出数值：\{q0}")
+  // 在它上面再压一层，制造"层序会被破坏"的场景
+  let _ = run(s, "add-rect x=0 y=0 w=8 h=8 fill=#FF0000FF name=top")
+  let before = run(s, "list-layers")
+  assert_true(before.contains("l2"), msg=before)
+  // 原地改值
+  let r = run(s, "set-adjust l2 value=-0.5")
+  assert_true(!r.contains("error"), msg=r)
+  let q1 = run(s, "query-layer l2")
+  assert_true(q1.contains("-0.5"), msg="值要改掉：\{q1}")
+  assert_true(q1.contains("brightness"), msg="没给 op 时要沿用原算子：\{q1}")
+  // 只给 op 时 value 保留
+  let _ = run(s, "set-adjust l2 op=contrast")
+  let q2 = run(s, "query-layer l2")
+  assert_true(q2.contains("contrast"), msg="算子要改掉：\{q2}")
+  assert_true(q2.contains("-0.5"), msg="没给 value 时要沿用原值：\{q2}")
+  // **层序不变**：l2 仍在 l3 之前（删除重加会把它挪到末尾）
+  let after = run(s, "list-layers")
+  let i2 = after.find("l2").unwrap_or(-1)
+  let i3 = after.find("l3").unwrap_or(-1)
+  assert_true(i2 >= 0 && i3 >= 0, msg=after)
+  assert_true(i2 < i3, msg="调整层必须留在原位（删除重加会挪到栈顶）：\{after}")
+  // 边界：什么都不给 / 非调整层 / 不存在
+  assert_true(run(s, "set-adjust l2").contains("至少要给"), msg="空参数要拒绝")
+  assert_true(run(s, "set-adjust l1 value=0.5").contains("不是调整层"), msg="非调整层要拒绝")
+  assert_true(run(s, "set-adjust l1").contains("不是调整层"), msg="非调整层要拒绝")
+}

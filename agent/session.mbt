@@ -184,6 +184,7 @@ pub fn exec(s : Session, line : String) -> String {
     "crop" => cmd_crop(s, tokens)
     "sample" => cmd_sample(s, tokens)
     "add-adjust" => cmd_add_adjust(s, tokens)
+    "set-adjust" => cmd_set_adjust(s, tokens)
     "add-mask" => cmd_add_mask(s, tokens)
     "set-mask" => cmd_set_mask(s, tokens)
     "remove-mask" => cmd_remove_mask(s, tokens)
@@ -370,6 +371,16 @@ fn layer_summary(l : @core.Layer) -> String {
       sb.write_string("\"\{@core.json_escape(t)}\"")
     }
     sb.write_string("]")
+  }
+  // 调整层**整个层就由 op+value 定义**，此前两者都不报——于是两个不同的
+  // 调整层在 list/query 里长得一模一样，调用方无法回读"我装的是哪个算子、
+  // 调了多少"。（与 radius/flip 同一条：能设不能读。）
+  match l.adjust {
+    Some(adj) =>
+      sb.write_string(
+        ",\"adjust\":{\"op\":\"\{@core.adjust_op_name(adj.op)}\",\"value\":\{@core.fmt_num(adj.value)}}",
+      )
+    None => ()
   }
   match l.mask {
     Some(m) =>
@@ -847,6 +858,49 @@ fn cmd_add_adjust(s : Session, tokens : Array[String]) -> String {
   snapshot(s, doc, "add adjust \{id}")
   doc.layers.push(l2)
   "{\"ok\":true,\"op\":\"add-adjust\",\"id\":\"\{id}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+}
+
+///|
+/// 改调整层的算子/数值，**原地改、不动层序**。
+///
+/// 此前只有 `add-adjust`，想"把亮度再调高一点"只能 delete + 重新 add——而
+/// 重新添加会把它推到**栈顶**，于是"只改了个数值"变成了"连作用范围也变了"
+/// （调整层作用于其下全部可见层）。`set-mask` 是 `add-mask` 的对偶，这里同理。
+fn cmd_set_adjust(s : Session, tokens : Array[String]) -> String {
+  if tokens.length() < 2 {
+    return err("用法：set-adjust <id> [op=<算子>] [value=<数>]（原地改，层序不变；op 见 add-adjust）")
+  }
+  let doc = match require_doc(s) {
+    Ok(d) => d
+    Err(e) => return err(e)
+  }
+  let id = tokens[1]
+  let target = match @core.find_layer(doc.layers, id) {
+    Some(l) => l
+    None => return err("层不存在：\{id}")
+  }
+  let cur = match target.adjust {
+    Some(a) => a
+    None =>
+      return err(
+        "层 \{id} 是 \{kind_str(target.kind)} 不是调整层（改画面用 set-style；要加调整层用 add-adjust）",
+      )
+  }
+  let m = kv_args(tokens, 2)
+  if m.length() == 0 {
+    return err("set-adjust 至少要给 op= 或 value=（都没给就什么都没改）")
+  }
+  // 只给了 value 就沿用原算子（反之亦然）
+  let merged : Map[String, String] = Map([])
+  merged.set("op", m.get("op").unwrap_or(@core.adjust_op_name(cur.op)))
+  merged.set("value", m.get("value").unwrap_or(@core.fmt_num(cur.value)))
+  let adj = match parse_adjust(merged) {
+    Ok(a) => a
+    Err(e) => return err(e)
+  }
+  snapshot(s, doc, "set-adjust \{id}")
+  let _ = update_layer(doc.layers, id, fn(l) { { ..l, adjust: Some(adj) } })
+  "{\"ok\":true,\"op\":\"set-adjust\",\"id\":\"\{id}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
 }
 
 ///|

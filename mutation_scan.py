@@ -336,6 +336,44 @@ MUTS = [
         "killed",
     ),
     (
+        "R29",
+        "set-adjust 不查层 kind（把 adjust 写进 rect，又是死数据）",
+        "agent/session.mbt",
+        r"""  let cur = match target.adjust {
+    Some(a) => a
+    None =>
+      return err(""",
+        r"""  let cur = match target.adjust {
+    Some(a) => a
+    None =>
+      if true { return err(""",
+        "killed",
+    ),
+    (
+        "R30",
+        "layer_summary 不报 adjust（调整层的 op/value 读不回来）",
+        "agent/session.mbt",
+        r"""  match l.adjust {""",
+        r"""  match (None : @core.Adjust?) {""",
+        "killed",
+    ),
+    (
+        "R31",
+        "set-adjust 不沿用原值（只给 op 时把 value 清零）",
+        "agent/session.mbt",
+        r"""  merged.set("value", m.get("value").unwrap_or(@core.fmt_num(cur.value)))""",
+        r"""  merged.set("value", m.get("value").unwrap_or("0"))""",
+        "killed",
+    ),
+    (
+        "R32",
+        "adjust_op_name 把 brightness 的名字写错（报告与 canonical 不一致）",
+        "core/document.mbt",
+        r"""brightness""",
+        r"""bright""",
+        "killed",
+    ),
+    (
         "R18",
         "蒙版羽化解析恒 0（软边蒙版重开后变硬边）",
         "core/json.mbt",

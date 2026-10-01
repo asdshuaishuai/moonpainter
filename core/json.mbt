@@ -525,19 +525,7 @@ fn adjust_json(a : Adjust?) -> String {
   match a {
     None => "null"
     Some(adj) => {
-      let op = match adj.op {
-        Brightness => "brightness"
-        Contrast => "contrast"
-        Saturation => "saturation"
-        Invert => "invert"
-        Grayscale => "grayscale"
-        Blur => "blur"
-        Sharpen => "sharpen"
-        Smooth => "smooth"
-        Whiten => "whiten"
-        Warm => "warm"
-        Vignette => "vignette"
-      }
+      let op = adjust_op_name(adj.op)
       "{\"op\":\"\{op}\",\"value\":\{fmt_num(adj.value)}}"
     }
   }

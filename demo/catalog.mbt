@@ -121,6 +121,10 @@ pub fn paint_system_prompt() -> String {
     "   图形命令。开场先 list_params 看一眼有没有既有规范（有就照着它配色，别自己",
     "   另立一套）；用户说了新的设计约定就用 set_param 记下来。写错名字用",
     "   remove_param 删掉，**别用 set_param x \"\" 清空**——那只是把值改成空串，条目还在。",
+    "9. 微调滤镜要**原地改**：加过的调整层用 set_adjust（list_layers 里 kind=adjust，",
+    "   回包里带 adjust:{op,value}）改 op/value。**不要 delete 再 apply_filter**——",
+    "   调整层作用于其下全部可见层，删了重加会把它推到栈顶，于是\"只改了个数值\"",
+    "   变成\"连作用范围也变了\"。",
   ]
   join_lines(lines)
 }

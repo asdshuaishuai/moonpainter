@@ -50,6 +50,11 @@
    报告字段的断言要**咬住数值**（`contains("radius=7")`）而不是措辞
    （`contains("却带着 radius")`）——后者被"报了字段名不报值"满足，
    变异门实测存活过。
+   **还要问第三件事：改得动吗？** 实测调整层只报了 kind=adjust——它的
+   `op`/`value` 既不报、也没有任何命令能改，于是"把亮度再调高一点"只能
+   删了重加，而重加把它推到栈顶（调整层作用于其下全部可见层），
+   "只改数值"变成"连作用范围也变了"。加了 `set-adjust` 原地改（对偶于
+   `add-adjust`，同 `set-mask` 之于 `add-mask`）。
 7. **确定性**：pack/canonical 序列化/渲染 sha256 必须可复现；禁止把时间戳、
    随机数、哈希表迭代序混进任何落盘字节。
    **三个指纹别混**：`fingerprint`（design.json，编辑表变了它不变）/
@@ -123,7 +128,7 @@ python3 mutation_scan.py        # 变异门：注入语义 bug 看测试能否�
 python3 mutation_scan.py --check-anchors   # 只校验锚点唯一命中（秒级，已进 verify.sh）
 python3 mutation_scan.py R3 R4  # 按 id 只跑指定的变异（改完测试想快速复验）
 # 锚点失效 → INVALID → **退出码 1**（不再被静默排除在统计之外）
-moon run --target native cli    # stdin 行协议；help 查看全部 58 个命令
+moon run --target native cli    # stdin 行协议；help 查看全部 59 个命令
 ```
 
 ## demo/agent 层附加纪律（demo 包不适用"零第三方依赖"铁律）
@@ -142,7 +147,7 @@ moon run --target native cli    # stdin 行协议；help 查看全部 58 个命�
   **但引擎从未实现还原**，于是用户输入 "Hello World"，存进去和渲染出来的
   都是 `Hello_World`。现在 `_` 保持**字面下划线**（历史行为完全不变），
   含空格靠引号。新增自由文本参数时，走 `quote_arg`（demo/main.mbt）拼串。
-- demo 工具面是 agent 命令面的**手写子集**（当前 51 个）：引擎新增命令后，
+- demo 工具面是 agent 命令面的**手写子集**（当前 52 个）：引擎新增命令后，
   要用到就该同步加进 `paint_tools.mbt` 的 `paint_tool_defs` + `tool_cmd` +
   `catalog.mbt` 的 system prompt，否则"引擎有能力"不等于"产品里的 AI 用得上"。
   模型侧只写 JSON，base64 由 SDK 的 `b64_text` 转。

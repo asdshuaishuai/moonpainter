@@ -208,7 +208,7 @@ manifest 的 `mvsl` 版本块 pin 住四个独立版本号（`render_contract` /
 会话：`session-open` `list-tools` `help`；文档：`new` `set-canvas` `list-layers` `query-layer` `lint`；
 绘制：`add-rect/ellipse/polygon/line` `add-image`（b64）`set-style` `move` `resize` `rotate` `rename` `tag` `delete` `visible` `reorder` `group` `ungroup`；
 元参数：`list-params` `set-param` `remove-param`；视觉：`render` `pick` `stats` `census` `probe`；
-修图：`add-paint` `brush` `erase` `crop` `sample` `add-adjust` `add-mask` `set-mask` `remove-mask`；
+修图：`add-paint` `brush` `erase` `crop` `sample` `add-adjust` `set-adjust` `add-mask` `set-mask` `remove-mask`；
 MVSL：`mvsl-set` `mvsl-show` `mvsl-clear` `select-preview` `mvsl-impact` `mvsl-assert`；
 历史/容器：`fingerprint` `inspect` `edits` `undo` `redo` `save-mpd-b64` `open-mpd-b64`；
 cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
