@@ -56,6 +56,27 @@ fn err(msg : String) -> String {
 }
 
 ///|
+/// 标签数组 → JSON 数组字面量（**一处实现**）。
+///
+/// `query-layer` 与 `untag` 都要回吐标签列表：两处各写一遍就是两份转义/分隔
+/// 逻辑，谁先改谁先烂（外层 `[]`、逗号、`json_escape` 都有翻车余地）。
+fn tags_json(tags : Array[String]) -> String {
+  let sb = StringBuilder()
+  sb.write_string("[")
+  let mut f = true
+  for t in tags {
+    if f {
+      f = false
+    } else {
+      sb.write_string(",")
+    }
+    sb.write_string("\"\{@core.json_escape(t)}\"")
+  }
+  sb.write_string("]")
+  sb.to_string()
+}
+
+///|
 /// 命令行分词：按空白切分，**双引号包裹的片段整体算一个 token**（引号内的
 /// 空格不参与切分）；`\"` 表示字面引号。引号可以出现在 token 中间，所以
 /// `text="Hello World"` 与 `name="My Layer"` 都按预期工作。
@@ -171,6 +192,7 @@ pub fn exec(s : Session, line : String) -> String {
     "flip" => cmd_flip(s, tokens)
     "rename" => cmd_rename(s, tokens)
     "tag" => cmd_tag(s, tokens)
+    "untag" => cmd_untag(s, tokens)
     "delete" => cmd_delete(s, tokens)
     "visible" => cmd_visible(s, tokens)
     "reorder" => cmd_reorder(s, tokens)
@@ -388,17 +410,7 @@ fn layer_summary(l : @core.Layer) -> String {
     sb.write_string(",\"asset\":\"\{l.asset_hash}\"")
   }
   if l.tags.length() > 0 {
-    sb.write_string(",\"tags\":[")
-    let mut f = true
-    for t in l.tags {
-      if f {
-        f = false
-      } else {
-        sb.write_string(",")
-      }
-      sb.write_string("\"\{@core.json_escape(t)}\"")
-    }
-    sb.write_string("]")
+    sb.write_string(",\"tags\":\{tags_json(l.tags)}")
   }
   // 调整层**整个层就由 op+value 定义**，此前两者都不报——于是两个不同的
   // 调整层在 list/query 里长得一模一样，调用方无法回读"我装的是哪个算子、
@@ -1322,6 +1334,17 @@ fn cmd_remove_mask(s : Session, tokens : Array[String]) -> String {
     Err(e) => return err(e)
   }
   let id = tokens[1]
+  // 与 `remove-param` 同一条纪律：**删不存在的东西不许静默成功**。
+  // 此前这里既不查层也不查蒙版——`remove-mask typo-id` 回 ok、指纹不变，
+  // 调用方以为删掉了。（`remove-param` 早就写着"静默成功会让调用方以为删掉了"，
+  // 而它的兄弟漏了。）
+  let l = match @core.find_layer(doc.layers, id) {
+    Some(l) => l
+    None => return err("层不存在：\{id}")
+  }
+  if l.mask is None {
+    return err("层 \{id} 本来就没有蒙版，remove-mask 没东西可删（add-mask 添加）")
+  }
   snapshot(s, doc, "remove-mask \{id}")
   let _ = update_layer(doc.layers, id, fn(l) { { ..l, mask: None } })
   "{\"ok\":true,\"op\":\"remove-mask\",\"id\":\"\{id}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
@@ -1351,7 +1374,7 @@ fn cmd_rename(s : Session, tokens : Array[String]) -> String {
 ///|
 fn cmd_tag(s : Session, tokens : Array[String]) -> String {
   if tokens.length() < 3 {
-    return err("用法：tag <id> <tag>")
+    return err("用法：tag <id> <tag>（摘标签用 untag <id> <tag|*>）")
   }
   let doc = match require_doc(s) {
     Ok(d) => d
@@ -1359,12 +1382,71 @@ fn cmd_tag(s : Session, tokens : Array[String]) -> String {
   }
   let id = tokens[1]
   let tag = tokens[2]
-  if @core.find_layer(doc.layers, id) is None {
-    return err("层不存在：\{id}")
+  // 空标签与 `*` 是"打得上却摘不掉"的名字：前者在 query-layer 里只是一对
+  // 空引号（回读时分不清"打了空标签"与"解析出岔子"）、在 JSON 里白占一个
+  // 字节串并改指纹；后者与 `untag <id> *` 的清空语义撞车，打上就再没有
+  // 单独摘掉它的写法。**能打上的名字，都必须能摘下**，所以这两种入口就拒。
+  if tag == "" {
+    return err("标签不能是空串（空串在 query-layer 里回读成一对空引号、还白占指纹，且没法单独摘）")
   }
+  if tag == "*" {
+    return err("标签不能是 `*`（它保留给 untag <id> * 的清空语义；换个名字）")
+  }
+  let l = match @core.find_layer(doc.layers, id) {
+    Some(l) => l
+    None => return err("层不存在：\{id}")
+  }
+  let added = !@core.layer_has_tag(l, tag)
   snapshot(s, doc, "tag \{id} \{tag}")
   let _ = update_layer(doc.layers, id, fn(l) { @core.layer_with_tag(l, tag) })
-  "{\"ok\":true,\"op\":\"tag\",\"id\":\"\{id}\",\"tag\":\"\{tag}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+  // `added` 是"这一步真的做了事吗"的直答：重复打同一个标签是幂等的（状态就是
+  // 调用方要的那个），但不该让调用方自己去比指纹才发现什么都没变。
+  "{\"ok\":true,\"op\":\"tag\",\"id\":\"\{id}\",\"tag\":\"\{tag}\",\"added\":\{added},\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+}
+
+///|
+fn cmd_untag(s : Session, tokens : Array[String]) -> String {
+  if tokens.length() < 3 {
+    return err("用法：untag <id> <tag|*>（* = 清空全部标签）")
+  }
+  let doc = match require_doc(s) {
+    Ok(d) => d
+    Err(e) => return err(e)
+  }
+  let id = tokens[1]
+  let tag = tokens[2]
+  let l = match @core.find_layer(doc.layers, id) {
+    Some(l) => l
+    None => return err("层不存在：\{id}")
+  }
+  if l.tags.length() == 0 {
+    return err("层 \{id} 没有任何标签，untag 没东西可摘（tag <id> <tag> 可以打标签）")
+  }
+  if tag == "" {
+    return err("标签不能是空串（空标签摘不到，也不会被 tag 收下）")
+  }
+  if tag != "*" && !@core.layer_has_tag(l, tag) {
+    return err("层 \{id} 没有标签 \{tag}（现有：\{l.tags.join("、")}；query-layer 也能看）")
+  }
+  snapshot(s, doc, "untag \{id} \{tag}")
+  // `*` 的"清空"就是对每个现有标签各摘一次：与"摘一个"共用**同一个纯函数**，
+  // 于是两条路径不可能分叉（清空不是另一份手写的 `tags: []`）。同一个 `apply`
+  // 既算回包里的 `removed`，又交给 update_layer —— 判断只有一处。
+  let apply : (@core.Layer) -> @core.Layer = fn(x) {
+    if tag == "*" {
+      let mut cur = x
+      for t in x.tags {
+        cur = @core.layer_without_tag(cur, t)
+      }
+      cur
+    } else {
+      @core.layer_without_tag(x, tag)
+    }
+  }
+  let next = apply(l)
+  let removed = l.tags.length() - next.tags.length()
+  let _ = update_layer(doc.layers, id, apply)
+  "{\"ok\":true,\"op\":\"untag\",\"id\":\"\{id}\",\"tag\":\"\{tag}\",\"removed\":\{removed},\"tags\":\{tags_json(next.tags)},\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
 }
 
 ///|

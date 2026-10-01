@@ -110,6 +110,7 @@ fn tool_cmd(name : String) -> String? {
     "group" => Some("group")
     "ungroup" => Some("ungroup")
     "tag" => Some("tag")
+    "untag" => Some("untag")
     "add_paint_layer" => Some("add-paint")
     "paint_stroke" => Some("brush")
     "erase_stroke" => Some("erase")
@@ -265,7 +266,8 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
       [("gid", "string:req:新组 id"), ("ids", "string:req:成员 id 列表，逗号分隔")],
     ),
     make_tool("ungroup", "解组", [("gid", "string:req:组 id")]),
-    make_tool("tag", "给图层打语义标签（如 hero/background/logo）", [("id", "string:req:图层 id"), ("tag", "string:req:标签")]),
+    make_tool("tag", "给图层打语义标签（如 hero/background/logo）。标签是容器里的元数据（进指纹、可回读），当前不参与渲染与选择子", [("id", "string:req:图层 id"), ("tag", "string:req:标签")]),
+    make_tool("untag", "摘掉图层标签；tag 参数给 * 则清空该层全部标签。摘不存在/空的标签会报错，不会静默成功", [("id", "string:req:图层 id"), ("tag", "string:req:要摘的标签，* = 清空全部")]),
     make_tool(
       "list_params",
       "读命名元参数（如品牌主色、网点密度这类设计系统元数据）。它是**纯元数据**，不影响渲染——改画面要走 MVSL/图形命令，这里只读写「设计说明」。",
@@ -673,6 +675,7 @@ pub fn tool_line(name : String, args : Json) -> String {
       "ungroup \{gid}"
     }
     "tag" => "tag \{arg_of(args, "id")} \{arg_of(args, "tag")}"
+    "untag" => "untag \{arg_of(args, "id")} \{arg_of(args, "tag")}"
     "list_params" => "list-params"
     "set_param" => {
       let name = quote_arg(arg_of(args, "name"))

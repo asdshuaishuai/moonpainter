@@ -171,14 +171,41 @@ pub(all) enum AdjustOp {
 /// `tags` 为空），而两条既有测试都用着它、又都没断言它真的落上。
 pub fn layer_with_tag(l : Layer, tag : String) -> Layer {
   let tags = l.tags.copy()
-  let mut dup = false
-  for t in tags {
+  if !layer_has_tag(l, tag) {
+    tags.push(tag)
+  }
+  { ..l, tags }
+}
+
+///|
+/// 层是否带着这个标签（"打/摘"两侧共用的**唯一**成员判断）。
+///
+/// 写成一处是因为它本来要出现在至少三处：`tag` 报 `added`、`untag` 判断
+/// "有没有这个标签可摘"、`layer_with_tag` 判重复。三份手写循环就是三处会
+/// 各自烂掉的判断。
+pub fn layer_has_tag(l : Layer, tag : String) -> Bool {
+  for t in l.tags {
     if t == tag {
-      dup = true
+      return true
     }
   }
-  if !dup {
-    tags.push(tag)
+  false
+}
+
+///|
+/// 摘掉层上**所有**等于 `tag` 的标签（`layer_with_tag` 的对偶）。
+///
+/// 这是"摘标签"的**单一实现**：`untag <id> <tag>` 命令走它，`untag <id> *`
+/// 的"清空"也走它（对每个现有标签各叫一次）——于是"摘一个"与"清空"不可能
+/// 分叉成两份判断。只增不减的字段是坑：标签进 canonical JSON 与指纹、被
+/// `query-layer` 回读，而此前 `tag=`/`tag` 都只会追加 —— 打错一个标签只能
+/// 删层重加（层被推到栈顶，蒙版/翻转/透明度/层序/id 引用全丢）。
+pub fn layer_without_tag(l : Layer, tag : String) -> Layer {
+  let tags : Array[String] = []
+  for t in l.tags {
+    if t != tag {
+      tags.push(t)
+    }
   }
   { ..l, tags }
 }

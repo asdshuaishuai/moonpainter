@@ -35,7 +35,7 @@
 | 图层蒙版 | 几何蒙版（矩形/椭圆 + **圆角 `radius`（仅矩形，超过半边长按半边长夹住）** + **边缘羽化 `feather`（按到边界的真实内距线性过渡，`0`=硬边）** + `invert` 反选，**蒙版外不渲染**）：人类前端可拖拽创建（工具条 ▭/◯），拖拽前用工具条上的滑块设**圆角**（仅矩形）与**羽化**，另有「蒙版反选 / 去蒙版」按钮，AI 可走 `add_mask` / `set_mask` / `remove_mask` 工具；`query-layer` / `list-layers` 报告 `mask` 状态（否则加了蒙版看不出来） |
 | 渲染 | 2×2 子采样 AA、取景渲染（归一化 viewport + 目标宽）、**overlay=1（层 bbox 序号线框 + 3×5 数字标注，像素↔结构对位辅助）**、pick 像素→层 id、直方图/覆盖统计、渲染确定性（golden sha256 锁定） |
 | 容器 | pack/unpack 全环、确定性 pack（两次打包字节一致）、原子落盘（tmp+rename）、八类拒绝路径全测试 |
-| 会话 | 59 个命令（字典 = agent/tools.mbt）、vision 闸、undo/redo（快照栈 ≤64）、编辑历史、P0–P2 lint |
+| 会话 | 60 个命令（字典 = agent/tools.mbt）、vision 闸、undo/redo（快照栈 ≤64）、编辑历史、P0–P2 lint、语义标签 `tag`/`untag`（可打可摘；**纯元数据**，见下） |
 | MVSL 编辑表 | 确定性声明式编辑 IR：**图层级作用域 `layer=<id>`**（算子只作用于指定层——该层先单独栅格化到透明底，选择子在**这一层自己的像素**上求值，再合成回去；**这同时是 `recolor` 边界去污染的正确做法**：半透明边缘的颜色是前景与背景的混合，在合成图上变换会连背景一起偏移，在层栅格上则只作用于纯前景色）+ 谓词选择子（OKLCh 色相环/彩度/OKLab 亮度/几何/渐变/种子连通域/外部 mask 资产，全部输出 [0,1] 软权重场，可 Union/And/Diff 组合）+ 有序算子程序（recolor/temperature/relight，`out=lerp(in,op(in),w)` 软权重过渡）+ 选区精修（grow/shrink/feather/fill_holes/keep_largest/guided filter）+ 保护断言；**是渲染的最终一遍**（`最终图 = apply(编辑表, 层合成底图)`，`render`/`previews/`/`mvsl-impact` 三条出口同一张图）；canonical JSON 往返幂等、旧引擎遇未知算子/更高版本一律拒绝、前视 `stage:` 与带 `stage:` 基准的断言在校验期拦下 |
 | MVSL 闭环 affordance | `select-preview`（选择子→overlay PNG + 覆盖率/bbox/连通域事实，"AI 选 ID 不报坐标"）、`mvsl-impact`（逐算子 diff 证书：改动像素数/ΔE/选区外泄漏率 + 结果 PNG；泄漏率判据是**选择子支撑集**，软过渡带不算泄漏——`out=lerp(in,op(in),w)` 保证支撑集外逐位不变，所以它是不变量/安全网）、`mvsl-assert`（保护区约束违反则命令信封直接 fail，"别动人物"变成机器可验证约束）、`census`（hue×sat 12×3 桶普查 + OKLab L 与 HSV V 均值对照，`within=` 可收窄到某条选择子）、`probe`（邻域统计 + 边缘置信度 + 当前编辑表每个算子/断言在该点的 membership 与连通域 id；**支持 `points=x1,y1;x2,y2;…` 一次探 64 点**，返回数组且每点字段与单点模式逐字段一致——探九宫格不用往返 9 次）、`sel-schema`（选择子/算子语法自证清单：canonical 示例由写出器产出、由同一解析器验回，附量纲与"数值该取哪个字段"）；**lint 也查编辑表**（空操作/断言被违反/空断言/白装算子）；预览**先全分辨率生成再盒平均降采样**，防发丝级软边界被抹掉误判 |
 | wasm SDK | `wasm/` 包：经典 wasm 零 import（默认会话面 `mp_version/mp_reset/mp_exec_in` + in 槽；多会话句柄面 `mp_open/mp_close/mp_exec_h`），Node/浏览器双宿主冒烟 + 合同测试；JS 宿主胶水 `npm/moonpainter-sdk/`（.d.ts 类型化门面） |
@@ -43,7 +43,7 @@
 
 **诚实边界**：`params`（命名元参数，`set-param`/`list-params`/`remove-param`）是**纯元数据，
 没有 live 绑定**——它会被存进容器、被 `list-params` 报出来、随 `inspect` 一起
-显示，但**不影响渲染**，改它不会改任何像素。这是声明过的边界，不是待办埋伏；
+显示，但**不影响渲染**，改它不会改任何像素。这是声明过的边界，不是待办埋伏；**语义标签（`tag`/`untag`/`tag=`）同样是纯元数据**：打得上也摘得下、进 canonical JSON 与指纹、被 `query-layer`/`list-layers` 回读，但**今天没有任何东西按标签筛选**——`AtomSel` 的六种原子（色相/亮度/几何/渐变/连通域/外部资产）里没有"按标签"，工具字典里那句"元参数↔视觉互链钩子"是**边界而不是能力**。要按标签选，得先有图层级作用域那条路（选择子必须在层自己的栅格上求值，压平的合成底图里没有层身份）；
 蒙版只有**几何**的（矩形/椭圆 + 圆角 + 羽化 + 反选）——栅格蒙版（画笔涂抹）、live mask（引用下层 alpha）都未做；调整层是叠加式像素算子（算子与强度**可用 `set-adjust` 原地改、层序不变**；此前只能删了重加，而重加会把它推到栈顶、连作用范围一起变。但它仍是"叠加式"的——不能限定作用范围到单个层，也没有调整层蒙版/剪贴）；文本层只有 ASCII 点阵字形（无 CJK、无字体文件，见 `demo` 的字形表）；其余未做：贝塞尔、图层样式 fx、PSD/AI 等外部格式兼容（远期，见 DESIGN 远期章节）、16/32-bit、CMYK、自由笔刷。线段层占位矩形 w/h 必须为正（水平线请给 h≥描边宽）。
 
 （这一行原先写着"文本层、蒙版、调整层不做"——那三项**后来都做了**却没人回来改，属于少报能力；顺手纠正。）
@@ -106,7 +106,7 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
 - **视觉闭环**：`render` / `select_preview` / `mvsl_impact` 三个图像类工具把 PNG 以附件
   （`SuccessWithAttachments`）回传给多模态模型，AI 真的看图确认效果再继续
   （试选不看图 = 闭眼改色；影响证书不看图 = 发现不了选区跑偏）；
-- **52 个工具，MVSL 闭环可达**：`sel_schema`（先看语法：字段名/量纲/示例自证）/
+- **53 个工具，MVSL 闭环可达**：`sel_schema`（先看语法：字段名/量纲/示例自证）/
   `census`（先普查再选色）/`probe`（这个点选中没有）/
   `select_preview`（试选 + 连通域事实）/`mvsl_set`（装编辑表）/`mvsl_impact`
   （影响证书）/`mvsl_assert`（保护断言）/`mvsl_show`/`mvsl_clear`。模型只写 **JSON**
@@ -116,7 +116,7 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   `build_demo.sh#doc-tools` 会机械核对下面这块，同时保证**工具面不许指向一条
   引擎里不存在的命令**。要新增可达能力时改这里，而不是默默改数：
   <!-- unreachable:begin -->
-  引擎 59 条命令里，demo 的 AI 够不着 7 条：`session-open` `open-mpd-b64`
+  引擎 60 条命令里，demo 的 AI 够不着 7 条：`session-open` `open-mpd-b64`
   `help` `list-tools` `fingerprint` `add-image` `inspect`
   <!-- unreachable:end -->
   各自原因——`session-open`/`open-mpd-b64`：会话与开门由前端管，不该让模型
@@ -269,7 +269,7 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
 - **P3 manifest 的 `counts` 无人校验**：把 `layers` 和 `assets` 计数互换全部测试通过——
   而 `counts` 正是工具/审阅者据以判断"容器里有什么"的对外事实。
 
-当前 110 个变异中 109 个被抓住，唯一存活的 M2 是**已确认的等价变异**。
+当前 116 个变异中 115 个被抓住，唯一存活的 M2 是**已确认的等价变异**。
 变异门自己也有一个静默失效模式：锚点文本被重构改掉或变得不唯一，那个变异就
 **再也没跑过**，而汇总里的「N 个变异全部通过」照旧好看（实测踩过：两个变异
 静静失效了一轮）。所以 `verify.sh#anchors` 用 `--check-anchors` 秒级校验

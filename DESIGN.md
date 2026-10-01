@@ -47,7 +47,7 @@ macOS 原生类 Photoshop 编辑器。对本工程最有价值的三块遗产：
 
 ```
 宿主    cli（native 行协议 + 文件 FFI + 原子落盘）
-交互    agent（59 命令 · vision 闸 · undo/redo · P0–P2 lint · MVSL 闭环 · 工具字典）
+交互    agent（60 命令 · vision 闸 · undo/redo · P0–P2 lint · MVSL 闭环 · 工具字典）
 容器    mpd（pack/unpack · manifest/params/agent/mvsl · 指纹对账 · 限额 · 预览生成）
 渲染    render（RGBA 画布 · 2×2 子采样 AA · W3C 混合 · 旋转 · 取景 · pick · stats）
 核心    core（IR 层树 · canonical JSON 双向 · 指纹 · 层定位原语 · MVSL 编辑表 IR）
@@ -228,7 +228,7 @@ manifest 的 `mvsl` 版本块 pin 住四个独立版本号（`render_contract` /
   **空断言**即保护断言的选择子零命中（P1——恒真，比"被违反"更坏，因为它给的是虚假的安心）。
   空编辑表是合法状态，不报条目——lint 不该对「我还没改任何东西」报警。
 
-## 6. 命令集（58 个；字典 = agent/tools.mbt 单一事实源）
+## 6. 命令集（60 个；字典 = agent/tools.mbt 单一事实源）
 
 会话：`session-open` `list-tools` `help`；文档：`new` `set-canvas` `list-layers` `query-layer` `lint`；
 绘制：`add-rect/ellipse/polygon/line` `add-image`（b64）`set-style` `move` `resize` `rotate` `rename` `tag` `delete` `visible` `reorder` `group` `ungroup`；
@@ -265,6 +265,14 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
   （本行与 §容器树的 `params.json` 注释）。声明"文档写过了"而不去核对文档，
   和代码里"字段存下来了"而不去核对有没有人读，是同一种错。现已补进 README
   的「诚实边界」段；
+- **标签（`tag` / `untag` / `tag=`）是纯元数据，且目前没有任何消费者**：进
+  canonical JSON 与指纹、被 `query-layer`/`list-layers` 回读、可打可摘，但
+  **没有选择子/筛选/渲染按它取数**——`AtomSel` 只有色相/亮度/几何/渐变/
+  连通域/外部资产六种原子。工具字典里的"元参数↔视觉互链钩子"是**边界而不是
+  能力**（本轮实测：字典里曾写着"选择子按标签命中的就是它"，核对 `AtomSel`
+  后当场证伪并改掉——**描述能力的那句话必须能被消费端证据支持**）。按标签筛选
+  在架构上归 `layer=<id>` 那条图层级作用域（选择子必须在**层自己的栅格**上
+  求值，压平的合成底图里没有层身份），不是"顺手加个字段"能做的；
 - MVSL 编辑表是**文档级的最终一遍**，不是图层：能改整张合成图，但还不能
   "只作用于某几个图层"或参与图层内部的混合序。要那种粒度得先有把图层
   单独栅格化的中间缓冲（`stage:` 基准目前只切到"算子序号"，不切图层）；

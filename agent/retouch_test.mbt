@@ -528,3 +528,106 @@ test "顶点数不足 = 什么都不画：入口拒 + lint 兜（判据的空集
   let j6 = (@agent.lint_doc(mk([], @core.ShapeKind::Rect))).join(" | ")
   assert_true(!j6.contains("个顶点才画得出东西"), msg="矩形不该被顶点规则误报：\{j6}")
 }
+
+test "标签下得来：untag 摘一个/清空，画面与别的状态逐位不动（改得动吗·标签面）" {
+  // 此前标签**只增不减**：`tag=` 与 `tag` 都只会追加，`set-style tags=` 不认，
+  // 也没有 untag。打错一个标签只能删层重加 —— 层被推到栈顶，蒙版/翻转/
+  // 透明度/层序/id 引用全丢（同 set-adjust / set-text / set-style points 那条）。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 60 60")
+  let _ = run(s, "add-rect x=0 y=0 w=60 h=60 fill=#000000FF id=bg")
+  let _ = run(s, "add-rect x=0 y=0 w=20 h=20 fill=#FF0000FF id=a tag=sky")
+  // 挂上"重加就会丢"的东西：蒙版（带 invert，好逐字比对）+ 翻转 + 非默认透明度
+  let _ = run(s, "add-mask a kind=ellipse x=0 y=0 w=16 h=16 invert=true")
+  let _ = run(s, "flip a h")
+  let _ = run(s, "set-style a opacity=0.5")
+  // 打标签：幂等要**直答**（`added`），不许让调用方靠比指纹才发现什么都没变
+  let t1 = run(s, "tag a hero")
+  assert_true(t1.contains("\"added\":true"), msg="第一次要报 added:true：\{t1}")
+  let t2 = run(s, "tag a hero")
+  assert_true(t2.contains("\"added\":false"), msg="重复打要报 added:false：\{t2}")
+  let q1 = run(s, "query-layer a")
+  assert_true(q1.contains("\"tags\":[\"sky\",\"hero\"]"), msg="两个标签都要在：\{q1}")
+  let px1 = run(s, "render 60")
+  // ① 摘一个：回包说清摘掉几个、还剩什么
+  let u1 = run(s, "untag a hero")
+  assert_true(u1.contains("\"op\":\"untag\""), msg=u1)
+  assert_true(u1.contains("\"removed\":1"), msg="removed 要咬住数值：\{u1}")
+  assert_true(u1.contains("\"tags\":[\"sky\"]"), msg="回包要报剩下的标签：\{u1}")
+  let q2 = run(s, "query-layer a")
+  assert_true(q2.contains("\"tags\":[\"sky\"]"), msg="标签要真的少一个：\{q2}")
+  assert_true(q2.contains("\"flip_h\":true"), msg="翻转不能丢：\{q2}")
+  assert_true(q2.contains("\"opacity\":0.5"), msg="透明度不能丢：\{q2}")
+  assert_true(q2.contains("invert"), msg="蒙版不能丢：\{q2}")
+  let ls = run(s, "list-layers")
+  // 用 `"id":"…"` 精确锚，别用裸层名：`ls.find("a")` 会先命中 JSON 里的 "layers"
+  let ib = ls.find("\"id\":\"bg\"").unwrap_or(-1)
+  let ia = ls.find("\"id\":\"a\"").unwrap_or(-1)
+  assert_true(ib >= 0 && ia > ib, msg="层序不能变：\{ls}")
+  // 标签是**元数据**：摘掉它画面逐位不动（与"改顶点/改文字"那条刚好相反，
+  // 这也是"标签当前不参与渲染、也不参与选择子"的机器证据）。
+  // 比的是 `render_sha256`（像素），**不是整个回包**——回包里的 fingerprint
+  // 按定义就该变（标签进 canonical JSON）。第一版直接比整串，红得对。
+  let px2 = run(s, "render 60")
+  assert_true(
+    jfield(px1, "render_sha256") == jfield(px2, "render_sha256"),
+    msg="摘标签不该动画面：\{jfield(px1, "render_sha256")} vs \{jfield(px2, "render_sha256")}",
+  )
+  assert_true(
+    jfield(px1, "fingerprint") != jfield(px2, "fingerprint"),
+    msg="标签进 canonical JSON，指纹按定义要变（否则说明摘标签什么都没做）",
+  )
+  // ② 清空：`*` 一次摘光，removed 说得准
+  let u2 = run(s, "untag a *")
+  assert_true(u2.contains("\"removed\":1"), msg=u2)
+  assert_true(u2.contains("\"tags\":[]"), msg=u2)
+  let q3 = run(s, "query-layer a")
+  assert_true(!q3.contains("\"tags\""), msg="清空后不该再报 tags：\{q3}")
+  // ③ 没得摘就不许静默成功（同 remove-param 那条纪律：静默成功会让调用方以为摘掉了）
+  let e1 = run(s, "untag a sky")
+  assert_true(e1.contains("没有任何标签"), msg=e1)
+  let _ = run(s, "tag a hero")
+  let e2 = run(s, "untag a sky")
+  assert_true(e2.contains("没有标签 sky"), msg=e2)
+  assert_true(e2.contains("现有：hero"), msg="报错要说清现在有什么：\{e2}")
+  // ④ 层不存在 / 用法下界 / 空标签 / `*` 不是合法的标签名
+  let e3 = run(s, "untag nosuch sky")
+  assert_true(e3.contains("层不存在"), msg=e3)
+  let e4 = run(s, "untag a")
+  assert_true(e4.contains("用法：untag"), msg=e4)
+  let e5 = run(s, "tag a \"\"")
+  assert_true(e5.contains("不能是空串"), msg="空标签打不上：\{e5}")
+  let e6 = run(s, "tag a *")
+  assert_true(e6.contains("保留给 untag"), msg="`*` 不许当标签名：\{e6}")
+  let e7 = run(s, "untag a \"\"")
+  assert_true(e7.contains("不能是空串"), msg=e7)
+  // **正控**：普通名字（点/下划线/横线）打得上也摘得下 —— "能打上的名字都必须能摘下"
+  let _ = run(s, "tag a bg.sky_layer-2")
+  assert_true(run(s, "query-layer a").contains("bg.sky_layer-2"), msg="正控：普通名字要打得上")
+  let u3 = run(s, "untag a bg.sky_layer-2")
+  assert_true(u3.contains("\"removed\":1"), msg=u3)
+  assert_true(run(s, "query-layer a").contains("\"tags\":[\"hero\"]"), msg="正控：摘完只剩 hero")
+}
+
+test "remove-mask：层不存在 / 没有蒙版都要报错（remove-* 家族不许静默成功）" {
+  // `remove-param` 早就写着"不存在就明确报错，不静默成功——静默成功会让调用方
+  // 以为删掉了"，而它的兄弟 `remove-mask` 既不查层也不查蒙版：`remove-mask typo`
+  // 回 ok、指纹不变。同一个家族一条纪律。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 40 40")
+  let _ = run(s, "add-rect x=0 y=0 w=40 h=40 id=r")
+  let e1 = run(s, "remove-mask r")
+  assert_true(e1.contains("本来就没有蒙版"), msg=e1)
+  let e2 = run(s, "remove-mask nosuch")
+  assert_true(e2.contains("层不存在"), msg=e2)
+  let e3 = run(s, "remove-mask")
+  assert_true(e3.contains("用法：remove-mask"), msg=e3)
+  // 正控：加了蒙版就删得掉，删完再删又是"没有蒙版"
+  let _ = run(s, "add-mask r kind=rect x=0 y=0 w=10 h=10")
+  let ok = run(s, "remove-mask r")
+  assert_true(ok.contains("\"op\":\"remove-mask\""), msg=ok)
+  let e4 = run(s, "remove-mask r")
+  assert_true(e4.contains("本来就没有蒙版"), msg=e4)
+}

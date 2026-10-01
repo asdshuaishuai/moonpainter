@@ -973,10 +973,10 @@ MUTS = [
         "agent/ops.mbt",
         """      if !(nl.kind is @core.ShapeKind::Polygon) && !(nl.kind is @core.ShapeKind::Line) {
         return Err(
-          "points 只对 polygon/line 有意义：这层是 \{kind_str(nl.kind)}""",
+          "points 只对 polygon/line 有意义：这层是 \\{kind_str(nl.kind)}""",
         """      if !(nl.kind is @core.ShapeKind::Polygon) && !(nl.kind is @core.ShapeKind::Line) && false {
         return Err(
-          "points 只对 polygon/line 有意义：这层是 \{kind_str(nl.kind)}""",
+          "points 只对 polygon/line 有意义：这层是 \\{kind_str(nl.kind)}""",
         "killed",
     ),
     (
@@ -995,11 +995,11 @@ MUTS = [
         "agent/ops.mbt",
         """      let e = points_count_error(l.kind, l.points.length())
       if e != "" {
-        v.push("P2 geom 层 \{l.id}：\{e}")
+        v.push("P2 geom 层 \\{l.id}：\\{e}")
       }""",
         """      let e = points_count_error(l.kind, l.points.length())
       if e != "" && false {
-        v.push("P2 geom 层 \{l.id}：\{e}")
+        v.push("P2 geom 层 \\{l.id}：\\{e}")
       }""",
         "killed",
     ),
@@ -1204,6 +1204,67 @@ MUTS = [
         "agent/ops.mbt",
         """          } else if a.value == 0.0 {""",
         """          } else if a.value == -12345.0 {""",
+        "killed",
+    ),
+    # ── T 组：标签面（打/摘）与 remove-* 的"没东西可删"（本轮新增）──
+    # 每个"入口拒绝/报错"的判据都要有一条变异证明它真的在咬：这些分支的共同
+    # 失败模式是**静默成功**（回 ok、指纹变/不变，而调用方以为做成了）。
+    (
+        "T1",
+        "untag 摘标签变成「只留被摘的那个」（!= 写成 ==）",
+        "core/document.mbt",
+        """    if t != tag {""",
+        """    if t == tag {""",
+        "killed",
+    ),
+    (
+        "T2",
+        "层上的标签判断恒为假（layer_has_tag 永远说没有）",
+        "core/document.mbt",
+        """    if t == tag {
+      return true
+    }""",
+        """    if t == tag {
+      return false
+    }""",
+        "killed",
+    ),
+    (
+        "T3",
+        "untag 不再检查「这个标签真的在不在」（摘不存在的标签静默成功）",
+        "agent/session.mbt",
+        """  if tag != "*" && !@core.layer_has_tag(l, tag) {""",
+        """  if tag != "*" && l.tags.length() < 0 {""",
+        "killed",
+    ),
+    (
+        "T4",
+        "tag 不再拒空标签（空串被打进容器、改指纹）",
+        "agent/session.mbt",
+        """  if tag == "" {
+    return err("标签不能是空串（空串在 query-layer 里回读成一对空引号、还白占指纹，且没法单独摘）")""",
+        """  if tag == "__never__" {
+    return err("标签不能是空串（空串在 query-layer 里回读成一对空引号、还白占指纹，且没法单独摘）")""",
+        "killed",
+    ),
+    (
+        "T5",
+        "tag 不再拒 `*`（打上一个永远摘不掉的标签名）",
+        "agent/session.mbt",
+        """  if tag == "*" {
+    return err("标签不能是 `*`（它保留给 untag <id> * 的清空语义；换个名字）")""",
+        """  if tag == "__star__" {
+    return err("标签不能是 `*`（它保留给 untag <id> * 的清空语义；换个名字）")""",
+        "killed",
+    ),
+    (
+        "T6",
+        "remove-mask 不再查「本来有没有蒙版」（删不存在的蒙版静默成功）",
+        "agent/session.mbt",
+        """  if l.mask is None {
+    return err("层 \\{id} 本来就没有蒙版，remove-mask 没东西可删（add-mask 添加）")""",
+        """  if l.mask is Some(_) {
+    return err("层 \\{id} 本来就没有蒙版，remove-mask 没东西可删（add-mask 添加）")""",
         "killed",
     ),
 ]

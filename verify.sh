@@ -514,12 +514,32 @@ else:
         bad.append('README 的验证门清单列了 %d 项，而 verify.sh 有 %d 步' % (len(items), scripts['verify.sh'][0]))
 
 for path in DOCS:
+    # 自动维护的进度区块（deepgit）**不是承诺**：里面有时间戳、提交标题、乃至
+    # 「命令数 56→57」这种历史记录。与 PLAN.md 同一条理由（实施历史不审），
+    # 但这里没有独立文件可跳过，所以按标记块跳过。
+    SKIP_A, SKIP_B = '<!-- deepgit:begin progress -->', '<!-- deepgit:end progress -->'
+    skipping = False
     for i, line in enumerate(open(path, encoding='utf-8'), 1):
-        # ① 命令条数
-        # 负向后视 `(?<![/\d])`：步骤编号「8/12 命令字典…」里的 12 不是命令条数
+        if SKIP_A in line:
+            skipping = True
+        if skipping:
+            if SKIP_B in line:
+                skipping = False
+            continue
+        # ① 命令条数：**两种语序都要认**
+        # 数字在前：`59 个命令` / `59 条命令`。负向后视 `(?<![/\d])` 把步骤编号
+        # 「8/12 命令字典…」里的 12 排除掉。
         for m in re.finditer(r'(?<![/\d])(\d+)\s*(?:条)?\s*(?:个)?命令', line):
             if int(m.group(1)) != n:
                 bad.append('%s:%d 写「%s 条命令」，实际 %d' % (path, i, m.group(1), n))
+        # 数字在后：`命令集（58 个` / `命令数 60`。实测 DESIGN §6 的标题
+        # 「命令集（58 个；…」就是这么漏过去的——判据只认作者当时写的那一种
+        # 语序，于是同一个数字在第三份文档里烂着而门禁全绿。**判据要认得出
+        # 所有写法**；`命令` 后面必须是 集/数/总数，否则「这个命令 3 个参数」
+        # 这种正常句子会被误判（负控）。
+        for m in re.finditer(r'命令(?:集|数|总数)\s*(?:[（(：:]\s*)?(\d+)\s*(?:个|条)?', line):
+            if int(m.group(1)) != n:
+                bad.append('%s:%d 写「命令集/命令数 %s」，实际 %d' % (path, i, m.group(1), n))
         # ② 步骤引用只许走 slug，而且 slug 必须真实存在
         for m in re.finditer(r'(verify\.sh|build_demo\.sh)#([A-Za-z0-9_-]+)', line):
             if m.group(2) not in scripts[m.group(1)][1].values():

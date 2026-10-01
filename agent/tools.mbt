@@ -65,7 +65,16 @@ pub fn list_tools() -> Array[AgentTool] {
   add("rotate", "rotate <id> <deg>（绕层中心，顺时针）", "meta")
   add("flip", "flip <id> h|v|both|none（翻转；先翻转后旋转）", "meta")
   add("rename", "rename <id> <new-name>", "meta")
-  add("tag", "tag <id> <tag>：语义标签（元参数↔视觉互链钩子）", "both")
+  add(
+    "tag",
+    "tag <id> <tag>：给层打语义标签。**标签当前只是容器里的元数据**：进 canonical JSON 与指纹、被 query-layer/list-layers 回读——**没有任何东西按标签筛选**（选择子还不认标签，见 DESIGN §8 边界）。重复打是幂等的（回包 `added:false`），空标签与 `*` 被拒；要摘用 untag",
+    "both",
+  )
+  add(
+    "untag",
+    "untag <id> <tag|*>：摘掉标签（* = 清空全部）；没得摘就报错（不静默成功）——此前标签只增不减，打错一个只能删层重加（蒙版/调整/层序/id 引用全丢）",
+    "both",
+  )
   add("delete", "delete <id>", "meta")
   add("visible", "visible <id> <true|false>", "meta")
   add("reorder", "reorder <id> front|back|up|down", "meta")
@@ -95,7 +104,7 @@ pub fn list_tools() -> Array[AgentTool] {
     "set-mask <id> true|false：**只改蒙版的 invert**（几何 x/y/w/h/radius 不可改，要改用 remove-mask + add-mask）",
     "meta",
   )
-  add("remove-mask", "remove-mask <id>", "meta")
+  add("remove-mask", "remove-mask <id>：移除蒙版（层不存在、或本来没有蒙版 → 报错，不静默成功）", "meta")
   // 修图操作
   add(
     "add-paint",
