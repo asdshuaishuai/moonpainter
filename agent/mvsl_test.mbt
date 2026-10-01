@@ -566,3 +566,120 @@ test "不回吐 PNG 的命令别用「某张图的 sha」这种名字" {
     msg="没有 PNG 就别用 result_sha256 这个名字：\{j}",
   )
 }
+
+///|
+test "layer=@tag：标签当作用域（与具体层 id 同一张图；入口拒落空的标签）" {
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 16 8")
+  let _ = run(s, "add-rect x=0 y=0 w=8 h=8 fill=#FF0000FF id=l1")
+  let _ = run(s, "add-rect x=8 y=0 w=8 h=8 fill=#0000FFFF id=l2")
+  // 落不到任何层 → 入口拒绝（否则这条算子在表里、跑得通、什么都不改）
+  let bad = run(s, "mvsl-set \{b64_of(@core.program_to_json(scope_prog("@hero")))}")
+  assert_true(bad.contains("\"error\""), msg=bad)
+  assert_true(bad.contains("hero"), msg="报错应点出标签名：\{bad}")
+  assert_true(bad.contains("静默"), msg="报错应说明后果：\{bad}")
+  // 裸 @ 也要报
+  let bare = run(s, "mvsl-set \{b64_of(@core.program_to_json(scope_prog("@")))}")
+  assert_true(bare.contains("没有标签名"), msg=bare)
+  // 打了个标签之后装得进，并且**渲染结果与写具体层 id 逐位相同**
+  let _ = run(s, "tag l1 hero")
+  let ok = run(s, "mvsl-set \{b64_of(@core.program_to_json(scope_prog("@hero")))}")
+  assert_true(ok.contains("\"ok\":true"), msg=ok)
+  let r1 = jfield(run(s, "render"), "render_sha256")
+  let ok2 = run(s, "mvsl-set \{b64_of(@core.program_to_json(scope_prog("l1")))}")
+  assert_true(ok2.contains("\"ok\":true"), msg=ok2)
+  let r2 = jfield(run(s, "render"), "render_sha256")
+  assert_eq(r1, r2, msg="layer=@hero 与 layer=l1 必须渲染出同一张图")
+  // impact 走的是"在合成底图上跑整张表"的近似路径，同样要能接受标签作用域
+  let imp = run(s, "mvsl-impact")
+  assert_true(imp.contains("\"ok\":true"), msg=imp)
+}
+
+///|
+test "layer=@tag 是活绑定：事后摘掉标签 → render/impact 都拒绝，lint 报 P4" {
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 16 8")
+  let _ = run(s, "add-rect x=0 y=0 w=8 h=8 fill=#FF0000FF id=l1")
+  let _ = run(s, "tag l1 hero")
+  let _ = run(s, "mvsl-set \{b64_of(@core.program_to_json(scope_prog("@hero")))}")
+  let before = jfield(run(s, "render"), "render_sha256")
+  // 摘标签（**没有**重新装表）：作用范围当场变空
+  let un = run(s, "untag l1 hero")
+  assert_true(un.contains("\"ok\":true"), msg=un)
+  let e = run(s, "render")
+  assert_true(e.contains("\"error\""), msg="标签摘掉后 render 必须报错，而不是回一张没改的图：\{e}")
+  assert_true(e.contains("hero"), msg="报错应点出标签：\{e}")
+  // render 报错时 impact 不许还给证书（render ≡ impact 这条不变量）
+  let ei = run(s, "mvsl-impact")
+  assert_true(ei.contains("\"error\""), msg="render 拒绝时 impact 也必须拒绝：\{ei}")
+  let ea = run(s, "mvsl-assert")
+  assert_true(ea.contains("\"error\""), msg="assert 同规：\{ea}")
+  // lint 要说出"这条算子现在什么都不改"
+  let lint = run(s, "lint")
+  assert_true(lint.contains("P4"), msg="lint 必须报 P4：\{lint}")
+  assert_true(lint.contains("hero"), msg="lint 的 P4 应点出标签：\{lint}")
+  // 重新打上标签 → 立刻回到原样（活绑定，两个方向都要动）
+  let _ = run(s, "tag l1 hero")
+  let after = jfield(run(s, "render"), "render_sha256")
+  assert_eq(after, before, msg="重新打上标签后应当逐位回到原来的图")
+}
+
+///|
+test "层 id 命名空间：@ 开头的 id 在五个 add-* 入口全被拒（同一个字符串不许两种读法）" {
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 16 8")
+  let cmds = [
+    "add-rect x=0 y=0 w=4 h=4 fill=#FF0000FF id=@bad",
+    "add-ellipse x=0 y=0 w=4 h=4 fill=#FF0000FF id=@bad",
+    "add-text x=0 y=0 text=hi id=@bad",
+    "add-adjust op=brightness value=0.5 id=@bad",
+    "add-paint id=@bad",
+  ]
+  for c in cmds {
+    let r = run(s, c)
+    assert_true(r.contains("\"error\""), msg="\{c} 应当被拒：\{r}")
+    assert_true(r.contains("layer=@tag"), msg="\{c} 的报错应点明 @ 保留给标签作用域：\{r}")
+  }
+  // 正控：正常 id 照样建得出来（判据两头都要咬）
+  let ok = run(s, "add-rect x=0 y=0 w=4 h=4 fill=#FF0000FF id=good")
+  assert_true(ok.contains("\"ok\":true"), msg=ok)
+}
+
+///|
+test "lint 兜底：手改容器里 @ 开头的层 id 会被报出来（命令面进不来，旧容器进得来）" {
+  let doc = @core.new_document("u-at-id", 8, 4)
+  doc.layers.push(@core.default_layer("@hero", "sneaky", 0.0, 0.0, 8.0, 4.0))
+  let v = @agent.lint_doc(doc)
+  let mut hit = false
+  for item in v {
+    if item.contains("ns") && item.contains("@hero") {
+      hit = true
+    }
+  }
+  assert_true(hit, msg="lint 必须报出 @ 开头的层 id（否则 layer=@hero 会有两种读法）：\{v.join("、")}")
+  // 正控：正常 id 一个字都不该报（误报也是 bug）
+  let doc2 = @core.new_document("u-ok-id", 8, 4)
+  doc2.layers.push(@core.default_layer("hero", "ok", 0.0, 0.0, 8.0, 4.0))
+  let v2 = @agent.lint_doc(doc2)
+  assert_eq(v2.length(), 0, msg="正常 id 不该被报：\{v2.join("、")}")
+}
+
+///|
+test "mvsl-set 的报错回显收到的载荷（手搓 base64 漏字段时能自己看出来）" {
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 16 8")
+  // 缺 version 的载荷：报错必须带上**原文**，否则调用方在几千字符的 base64 里找不到北
+  let payload = "{\"ops\":[],\"guards\":[]}"
+  let r = run(s, "mvsl-set \{b64_of(payload)}")
+  assert_true(r.contains("缺 version"), msg=r)
+  assert_true(r.contains("收到的载荷"), msg="报错应回显载荷：\{r}")
+  assert_true(r.contains("ops"), msg="回显里应能看到实际收到的字段：\{r}")
+  // 正控：带 version 的同一张表装得进（判据咬的是载荷，不是"只要非空就报错"）
+  let payload_ok = "{\"version\":1,\"ops\":[],\"guards\":[]}"
+  let ok = run(s, "mvsl-set \{b64_of(payload_ok)}")
+  assert_true(ok.contains("\"ok\":true"), msg=ok)
+}

@@ -225,6 +225,24 @@ fn cmd_sel_schema(s : Session, _tokens : Array[String]) -> String {
   }
   sb.write_string(",\"program_example\":\{prog_text}")
   sb.write_string(",\"program_example_json\":\"\{@core.json_escape(prog_text)}\"")
+  // `layer` 字段的三种写法（作用域）。写进 schema 是因为"标签也能当作用域"
+  // 这件事模型必须知道，而它只读 schema、不读 README。
+  sb.write_string(",\"scopes\":[")
+  let scopes : Array[String] = [
+    "{\"form\":\"layer=\\\"\\\"\",\"doc\":\"文档级（默认）：作用于整幅合成图（层已经乘在一起，选择子看到的是混合色）\"}",
+    "{\"form\":\"layer=<层 id>\",\"doc\":\"只作用于该层：这层单独栅格化，选择子在这层自己的像素上求值\"}",
+    "{\"form\":\"layer=@<标签>\",\"doc\":\"标签作用域：作用于**带该标签的全部层**（先用 tag <id> <标签>）。活绑定——打/摘标签即改作用范围；落不到任何层会被拒绝，事后摘了标签由 lint 报 P4\"}",
+  ]
+  f = true
+  for sc in scopes {
+    if f {
+      f = false
+    } else {
+      sb.write_string(",")
+    }
+    sb.write_string(sc)
+  }
+  sb.write_string("]")
   sb.write_string(
     ",\"field_notes\":{\"amount\":\"0..1 总强度（选择子软权重之外的第二个乘子）\",\"refine\":\"数组：grow/shrink/feather/fill_holes/keep_largest/guided，在算子求值前作用于选择子软场\",\"guards\":\"保护断言：max_de 与 max_changed_ratio 是该区域内允许的最大 ΔE 与改动像素比例；用 mvsl-assert 验证\"}",
   )

@@ -561,7 +561,11 @@ MUTS = [
     Ok(b) => b
     Err(e) => return err(e)
   }
-  let (out, stages) = match @pixel.run_program(base, s.mvsl) {""",
+  let prog = match mvsl_resolved(s, doc) {
+    Ok(p) => p
+    Err(e) => return err(e)
+  }
+  let (out, stages) = match @pixel.run_program(base, prog) {""",
         r"""      if v > 0 {
         max_side = v
       }
@@ -571,7 +575,11 @@ MUTS = [
     Ok(b) => b
     Err(e) => return err(e)
   }
-  let (out, stages) = match @pixel.run_program(base, s.mvsl) {""",
+  let prog = match mvsl_resolved(s, doc) {
+    Ok(p) => p
+    Err(e) => return err(e)
+  }
+  let (out, stages) = match @pixel.run_program(base, prog) {""",
         "killed",
     ),
     (
@@ -1265,6 +1273,89 @@ MUTS = [
     return err("层 \\{id} 本来就没有蒙版，remove-mask 没东西可删（add-mask 添加）")""",
         """  if l.mask is Some(_) {
     return err("层 \\{id} 本来就没有蒙版，remove-mask 没东西可删（add-mask 添加）")""",
+        "killed",
+    ),
+    # ------------------------------------------------------------------
+    # U 组：标签作用域 `layer=@tag`（标签当活选层器）
+    # ------------------------------------------------------------------
+    (
+        "U1",
+        "标签作用域语法失认（@ 前缀再也不算标签作用域）",
+        "core/mvsl.mbt",
+        """  if scope.has_prefix("@") {
+    Some(scope[1:].to_owned())""",
+        """  if scope.has_prefix("!") {
+    Some(scope[1:].to_owned())""",
+        "killed",
+    ),
+    (
+        "U2",
+        "展开时按层 id 匹配而不是按标签（标签作用域退化成层 id）",
+        "core/mvsl.mbt",
+        """        for l in doc.layers {
+          if layer_has_tag(l, tag) {
+            ops.push({ ..op, layer: l.id })
+            hit = true
+          }
+        }""",
+        """        for l in doc.layers {
+          if l.id == tag {
+            ops.push({ ..op, layer: l.id })
+            hit = true
+          }
+        }""",
+        "killed",
+    ),
+    (
+        "U3",
+        "标签作用域只落到第一个匹配的层（「一层集合」变成「一层」）",
+        "core/mvsl.mbt",
+        """        for l in doc.layers {
+          if layer_has_tag(l, tag) {
+            ops.push({ ..op, layer: l.id })
+            hit = true
+          }
+        }""",
+        """        for l in doc.layers {
+          if layer_has_tag(l, tag) && l.id == doc.layers[0].id {
+            ops.push({ ..op, layer: l.id })
+            hit = true
+          }
+        }""",
+        "killed",
+    ),
+    (
+        "U4",
+        "落不到任何层的标签作用域不再被拒（算子静默不生效）",
+        "core/mvsl.mbt",
+        """        if n == 0 {
+          return Some(
+            "算子 \\{op.id} 的 layer=@\\{tag} 落不到任何层""",
+        """        if n < 0 {
+          return Some(
+            "算子 \\{op.id} 的 layer=@\\{tag} 落不到任何层""",
+        "killed",
+    ),
+    (
+        "U5",
+        "层 id 命名空间规则失效（@ 开头的 id 放行，同一个字符串两种读法）",
+        "core/mvsl.mbt",
+        """  if id.has_prefix("@") {
+    Some("层 id 不许以 `@` 开头""",
+        """  if id.has_prefix("@@") {
+    Some("层 id 不许以 `@` 开头""",
+        "killed",
+    ),
+    (
+        "U6",
+        "匹配不到的标签作用域被静默丢掉（不是原样留给下游客拒绝）",
+        "core/mvsl.mbt",
+        """        if !hit {
+          ops.push(op)
+        }""",
+        """        if !hit {
+          let _ = op
+        }""",
         "killed",
     ),
 ]

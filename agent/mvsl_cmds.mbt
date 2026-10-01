@@ -70,7 +70,18 @@ fn mvsl_decode(tok : String) -> Result[@core.EditProgram, String] {
   }
   let prog = match @core.program_from_json(text) {
     Ok(p) => p
-    Err(e) => return Err(e)
+    // 回显收到的 JSON：`mvsl-set` 的载荷是**手搓的 base64**（模型/脚本自己拼），
+    // 而"编辑表缺 version"这种话不带上原文，调用方根本看不出自己漏了哪个字段
+    // ——实测我自己手搓的载荷就漏了 version，看到"缺 version"却在几千字符的
+    // base64 里找不到北（同 session-open 那条"报错要回显收到的参数"）。
+    Err(e) => {
+      let shown = if text.length() > 400 {
+        "\{text[0:400].to_owned()}…（共 \{text.length()} 字符）"
+      } else {
+        text
+      }
+      return Err("\{e}；收到的载荷：\{shown}")
+    }
   }
   match @core.validate_program(prog) {
     Ok(_) => Ok(prog)
@@ -81,13 +92,23 @@ fn mvsl_decode(tok : String) -> Result[@core.EditProgram, String] {
 ///|
 /// 图层级算子的入口校验（共享给 mvsl-set 与 lint）。
 ///
-/// 两类静默失败必须在这里拦掉：
-///   * 引用了**不存在的层** —— `program_for_layer` 永远匹配不上，算子在表里、
-///     跑得通、什么都不改；
+/// 三类静默失败必须在这里拦掉：
+///   * `layer=@tag` **落不到任何层** —— 展开后一个算子都不剩，算子在表里、
+///     跑得通、什么都不改（判据在 core 里只有一份，render 侧同用）；
+///   * 引用了**不存在的层** —— `program_for_layer` 永远匹配不上，同上；
 ///   * `layer=` 与 `STAGE` 基准组合 —— 两段式分段执行后 STAGE 序号不再连续，
 ///     放行会取到错的中间缓冲（render 侧另有兜底）。
 fn layer_scope_check(doc : @core.Document, prog : @core.EditProgram) -> String? {
+  match @core.tag_scope_error(prog, doc) {
+    Some(e) => return Some(e)
+    None => ()
+  }
   for id in @core.program_layer_ids(prog) {
+    // `@tag` 已由上面那条判据负责：这里再看 `find_layer` 只会说出"层不存在：
+    // @hero"这种把人往错方向带的话。
+    if @core.layer_scope_tag(id) is Some(_) {
+      continue
+    }
     if @core.find_layer(doc.layers, id) is None {
       let known = StringBuilder()
       let mut n = 0
@@ -269,7 +290,11 @@ fn cmd_mvsl_impact(s : Session, tokens : Array[String]) -> String {
     Ok(b) => b
     Err(e) => return err(e)
   }
-  let (out, stages) = match @pixel.run_program(base, s.mvsl) {
+  let prog = match mvsl_resolved(s, doc) {
+    Ok(p) => p
+    Err(e) => return err(e)
+  }
+  let (out, stages) = match @pixel.run_program(base, prog) {
     Ok(r) => r
     Err(e) => return err(e)
   }
@@ -333,11 +358,20 @@ fn cmd_mvsl_impact(s : Session, tokens : Array[String]) -> String {
 /// 「别动人物」从自然语言愿望变成机器可验证约束：这里的失败不是警告，
 /// 是拒绝——agent 必须回去改编辑表，而不是带着违规结果交付。
 fn cmd_mvsl_assert(s : Session) -> String {
+  // 展开 `layer=@tag` 需要看容器里谁带标签，所以先取文档（同 impact）。
+  let doc = match require_doc(s) {
+    Ok(d) => d
+    Err(e) => return err(e)
+  }
   let base = match mvsl_base(s) {
     Ok(b) => b
     Err(e) => return err(e)
   }
-  let (out, _) = match @pixel.run_program(base, s.mvsl) {
+  let prog = match mvsl_resolved(s, doc) {
+    Ok(p) => p
+    Err(e) => return err(e)
+  }
+  let (out, _) = match @pixel.run_program(base, prog) {
     Ok(r) => r
     Err(e) => return err(e)
   }

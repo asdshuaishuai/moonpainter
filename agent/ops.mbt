@@ -709,6 +709,13 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
       v.push("P1 dup 层 id 重复：\{l.id}")
     }
     seen.set(l.id, true)
+    // P1 ns 层 id 与 MVSL 的 `layer=@tag` 命名空间冲突：命令面已拒（`@` 开头的
+    // id 建不出来），这里兜住手改的旧容器——`layer=@hero` 到底是"那个叫 @hero
+    // 的层"还是"带 hero 标签的全部层"会按容器内容有两种读法，而读错的那边不报错。
+    match @core.layer_id_error(l.id) {
+      Some(e) => v.push("P1 ns 层 \{l.id}：\{e}")
+      None => ()
+    }
     // P2 几何
     if l.w <= 0.0 || l.h <= 0.0 {
       v.push("P2 geom 层 \{l.id} 尺寸非正（\{l.w}x\{l.h}）")

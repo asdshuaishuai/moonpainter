@@ -77,6 +77,55 @@ fn tags_json(tags : Array[String]) -> String {
 }
 
 ///|
+/// 执行前的**唯一入口**（agent 侧）：先拒坏作用域，再把 `layer=@tag` 展开成
+/// 具体层 id。
+///
+/// 与 render 侧共用 core 的同一对判据（`tag_scope_error` + `expand_layer_scopes`）：
+/// 标签是**活的**——给层打上标签它立刻进入作用范围，摘掉立刻退出，所以展开必须
+/// 在**执行时**做，不能在 `mvsl-set` 时把表烤成当时的层 id。
+///
+/// 为什么"拒"也在这里：`mvsl-impact`/`mvsl-assert` 走的是"在合成底图上跑整张
+/// 表"这条近似路径，而 `run_program` 根本不看 `layer`。表里留着一条落空的
+/// `@tag` 时，render 会报错、impact 却照样给出一张"改了 N 个像素"的证书——
+/// "render ≡ impact" 这条不变量当场破掉。所以执行侧统一在这里拒绝。
+fn mvsl_resolved(
+  s : Session,
+  doc : @core.Document,
+) -> Result[@core.EditProgram, String] {
+  match @core.tag_scope_error(s.mvsl, doc) {
+    Some(e) => Err(e)
+    None => Ok(@core.expand_layer_scopes(s.mvsl, doc))
+  }
+}
+
+///|
+/// 新建层时决定它的 id：`id=` 给了就用，没给就自动分配 —— **唯一实现**。
+///
+/// 五处 `add-*` 各抄过一遍这四行（其中 `add-image` 还漏了"id 已存在"那一步，
+/// 于是它能造出两个同 id 的层，而 `layer=` 作用域、`query-layer`、`pick`
+/// 全都按"id 唯一"在找层）。顺手落实一条命名空间规则：**层 id 不许以 `@`
+/// 开头**（`@` 保留给 MVSL 的 `layer=@tag`），否则同一个 `layer` 字符串会按
+/// 容器内容有两种读法，而读错的那边不报错。
+fn user_layer_id(
+  doc : @core.Document,
+  m : Map[String, String],
+  owner : String,
+) -> Result[String, String] {
+  let id = match m.get("id") {
+    Some(i) => i
+    None => @core.alloc_layer_id(doc)
+  }
+  match @core.layer_id_error(id) {
+    Some(e) => return Err("\{owner}：\{e}")
+    None => ()
+  }
+  if @core.find_layer(doc.layers, id) is Some(_) {
+    return Err("层 id 已存在：\{id}")
+  }
+  Ok(id)
+}
+
+///|
 /// 命令行分词：按空白切分，**双引号包裹的片段整体算一个 token**（引号内的
 /// 空格不参与切分）；`\"` 表示字面引号。引号可以出现在 token 中间，所以
 /// `text="Hello World"` 与 `name="My Layer"` 都按预期工作。
@@ -530,12 +579,9 @@ fn cmd_add_shape(
     Err(e) => return err(e)
   }
   let m = kv_args(tokens, 1)
-  let id = match m.get("id") {
-    Some(i) => i
-    None => @core.alloc_layer_id(doc)
-  }
-  if @core.find_layer(doc.layers, id) is Some(_) {
-    return err("层 id 已存在：\{id}")
+  let id = match user_layer_id(doc, m, name) {
+    Ok(id) => id
+    Err(e) => return err(e)
   }
   let layer = match build_shape_layer(id, kind, m) {
     Ok(l) => l
@@ -588,9 +634,9 @@ fn cmd_add_image(s : Session, tokens : Array[String]) -> String {
   if !doc_has {
     doc.assets.push({ hash, width: img.width, height: img.height })
   }
-  let id = match m.get("id") {
-    Some(i) => i
-    None => @core.alloc_layer_id(doc)
+  let id = match user_layer_id(doc, m, "add-image") {
+    Ok(id) => id
+    Err(e) => return err(e)
   }
   let layer = match build_shape_layer(id, @core.ShapeKind::Image, m) {
     Ok(l) => l
@@ -948,12 +994,9 @@ fn cmd_add_text(s : Session, tokens : Array[String]) -> String {
     Some(t) => t
     None => return err("add-text 需要 text=<内容>（含空格用双引号包起来：text=\"Hello World\"）")
   }
-  let id = match m.get("id") {
-    Some(i) => i
-    None => @core.alloc_layer_id(doc)
-  }
-  if @core.find_layer(doc.layers, id) is Some(_) {
-    return err("层 id 已存在：\{id}")
+  let id = match user_layer_id(doc, m, "add-text") {
+    Ok(id) => id
+    Err(e) => return err(e)
   }
   // 数值一律走 `arg_d`：它把"给了但根本不是数"变成错误。此前这五处是
   // `match to_d(...) { Some(v) => v, None => 默认 }` —— `w=abc`/`font_size=abc`
@@ -1118,12 +1161,9 @@ fn cmd_add_adjust(s : Session, tokens : Array[String]) -> String {
     Ok(a) => a
     Err(e) => return err(e)
   }
-  let id = match m.get("id") {
-    Some(i) => i
-    None => @core.alloc_layer_id(doc)
-  }
-  if @core.find_layer(doc.layers, id) is Some(_) {
-    return err("层 id 已存在：\{id}")
+  let id = match user_layer_id(doc, m, "add-adjust") {
+    Ok(id) => id
+    Err(e) => return err(e)
   }
   // 调整层置于栈顶（PSD 语义：作用于其下全部可见层）
   let l = @core.default_layer(id, m.get("name").unwrap_or(id), 0.0, 0.0, doc.width.to_double(), doc.height.to_double())
@@ -1947,10 +1987,22 @@ fn cmd_lint(s : Session) -> String {
   // 编辑表也要 lint：装了表却什么都没改、断言被违反、某条算子白装——
   // 这些状态每个命令都返回 ok，只有 lint 会说出来。
   if s.mvsl.ops.length() > 0 || s.mvsl.guards.length() > 0 {
+    // `layer=@tag` 落不到任何层 —— **入口**（mvsl-set）会拒，但标签是活的：
+    // 表装好之后有人 `untag` 掉了那个标签，这条算子就变成"在表里、跑得通、
+    // 什么都不改"。入口拒绝管不了事后，所以这里用同一个 core 判据兜底。
+    match @core.tag_scope_error(s.mvsl, doc) {
+      Some(e) => v.push("P4 \{e}")
+      None => ()
+    }
     match mvsl_base(s) {
-      Ok(base) => for item in lint_mvsl(base, s.mvsl) {
-        v.push(item)
-      }
+      Ok(base) =>
+        match mvsl_resolved(s, doc) {
+          // 坏作用域已经作为 P4 报过，别再拿一张解释不了的表算一遍数字
+          Err(_) => ()
+          Ok(prog) => for item in lint_mvsl(base, prog) {
+            v.push(item)
+          }
+        }
       Err(e) => v.push("P0 mvsl 草稿无法光栅化：\{e}")
     }
   }
@@ -2200,12 +2252,9 @@ fn cmd_add_paint(s : Session, tokens : Array[String]) -> String {
     Err(e) => return err(e)
   }
   let m = kv_args(tokens, 1)
-  let id = match m.get("id") {
-    Some(i) => i
-    None => @core.alloc_layer_id(doc)
-  }
-  if @core.find_layer(doc.layers, id) is Some(_) {
-    return err("层 id 已存在：\{id}")
+  let id = match user_layer_id(doc, m, "add-paint") {
+    Ok(id) => id
+    Err(e) => return err(e)
   }
   let name = m.get("name").unwrap_or("画笔层")
   let l = @core.default_layer(id, name, 0.0, 0.0, doc.width.to_double(), doc.height.to_double())

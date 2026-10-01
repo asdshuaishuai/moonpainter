@@ -965,6 +965,14 @@ fn render_doc_with_layer_scope(
     Some(e) => return Err(e)
     None => ()
   }
+  // `layer=@tag` 的标签作用域：先静态校验（落不到任何层 → 拒绝，不许静默不生效），
+  // 再**展开**成具体层 id。展开与 agent 侧的分析命令共用 core 的同一个实现，
+  // 于是"这条算子改哪些层"只有一处判断（标签是活的：打/摘标签即改作用范围）。
+  match @core.tag_scope_error(prog, doc) {
+    Some(e) => return Err(e)
+    None => ()
+  }
+  let prog = @core.expand_layer_scopes(prog, doc)
   // 引用了不存在的层：`program_for_layer` 永远匹配不上，那个算子会**静默失效**
   // （表里有、跑得通、什么都不改）。这里兜底拒绝，agent 入口另有更早的友好报错。
   for id in @core.program_layer_ids(prog) {

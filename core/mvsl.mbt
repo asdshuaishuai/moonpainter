@@ -289,6 +289,113 @@ pub fn layer_scope_error(p : EditProgram) -> String? {
 }
 
 // ---------------------------------------------------------------------------
+// 标签作用域（`layer=@tag`）：把语义标签当**活选层器**
+// ---------------------------------------------------------------------------
+
+///|
+/// `layer` 作用域里的**标签作用域**语法：`@hero` → `Some("hero")`；
+/// 其余（具体层 id）→ `None`。
+///
+/// 为什么复用 `layer` 字段、而不是新加一个 `layer_tag` 字段：新字段要升
+/// `MVSL_IR_VERSION`，而**旧引擎会静默忽略**它——算子落到整幅合成图上，那是
+/// "只该改一层的编辑扩散到全图"级别的静默失败。前缀写法在旧引擎上会走
+/// **已有**的拒绝路径（`layer=@hero` 找不到同名的层 → 报"引用了不存在的
+/// 图层"）：失败得响。
+pub fn layer_scope_tag(scope : String) -> String? {
+  if scope.has_prefix("@") {
+    Some(scope[1:].to_owned())
+  } else {
+    None
+  }
+}
+
+///|
+/// 层 id 的命名空间规则（与 `layer_scope_tag` 是同一条规则的两面）：
+/// **层 id 不许以 `@` 开头**——`@` 保留给 `layer=@tag`。
+///
+/// 放行一个 `@hero` 这样的层 id，同一个 `layer` 字符串就会按容器内容有两种
+/// 读法（具体层？标签作用域？），而读错的那一边**不会报错**。所以入口拒绝，
+/// `lint` 对旧容器兜底（同一个判据，同一句话）。
+pub fn layer_id_error(id : String) -> String? {
+  if id.has_prefix("@") {
+    Some("层 id 不许以 `@` 开头（`@` 保留给 MVSL 的 layer=@tag 标签作用域；去掉 `@` 即可）")
+  } else {
+    None
+  }
+}
+
+///|
+/// 标签作用域的静态校验：`layer=@tag` 必须真的落到**至少一个层**上。
+///
+/// 落不到任何层 = 这条算子在表里、跑得通、什么都不改（本仓库最贵的一类
+/// 失败）。入口（`mvsl-set`）、lint（手改容器 / 事后摘了标签）与渲染三处
+/// **共用这一个判据**，与 `layer_scope_error` 同形。
+pub fn tag_scope_error(p : EditProgram, doc : Document) -> String? {
+  for op in p.ops {
+    match layer_scope_tag(op.layer) {
+      None => ()
+      Some(tag) => {
+        if tag == "" {
+          return Some(
+            "算子 \{op.id} 的 layer=\"@\" 后面没有标签名：写成 layer=@hero 才是「作用于带 hero 标签的全部层」",
+          )
+        }
+        let mut n = 0
+        for l in doc.layers {
+          if layer_has_tag(l, tag) {
+            n = n + 1
+          }
+        }
+        if n == 0 {
+          return Some(
+            "算子 \{op.id} 的 layer=@\{tag} 落不到任何层：没有任何层带 \{tag} 标签，这条算子会静默不生效（先 `tag <id> \{tag}` 再装表；标签被摘掉也会变成这样）",
+          )
+        }
+      }
+    }
+  }
+  None
+}
+
+///|
+/// 把 `layer=@tag` 展开成**带该标签的每个层各一份**算子（层序即
+/// `doc.layers` 顺序，确定性）。
+///
+/// 这是"标签当活选层器"的**唯一实现**：渲染、`mvsl-impact`、`mvsl-assert`、
+/// `lint` 在执行前各叫它一次，于是"这条算子到底改哪些层"只有一处判断。
+/// 展开只依赖容器里已有的层与标签——没有隐式状态：
+///
+/// * **活的**：给一个层打上标签，它立刻进入作用范围；摘掉标签，立刻退出。
+///   这正是"元参数↔视觉互链钩子"从承诺变成能力的地方（此前标签没有任何
+///   消费者，见 README 的诚实边界）；
+/// * `program_sha256` 仍按**未展开**的表算（程序身份稳定），而 `fingerprint`
+///   覆盖标签（改标签即改指纹）——所以宿主缓存键仍是
+///   `(fingerprint, program_sha256)`，标签变了指纹就变；
+/// * 匹配不到的 `@tag` **原样留下**（绝不静默丢掉）：`tag_scope_error` 先给出
+///   准话，render 侧还有"引用了不存在的图层"兜底。
+pub fn expand_layer_scopes(p : EditProgram, doc : Document) -> EditProgram {
+  let ops : Array[EditOp] = []
+  for op in p.ops {
+    match layer_scope_tag(op.layer) {
+      None => ops.push(op)
+      Some(tag) => {
+        let mut hit = false
+        for l in doc.layers {
+          if layer_has_tag(l, tag) {
+            ops.push({ ..op, layer: l.id })
+            hit = true
+          }
+        }
+        if !hit {
+          ops.push(op)
+        }
+      }
+    }
+  }
+  { ops, guards: p.guards }
+}
+
+// ---------------------------------------------------------------------------
 // 校验（AgentGate 零容忍：坏输入在入口拒绝）
 // ---------------------------------------------------------------------------
 

@@ -392,3 +392,146 @@ test "recolor 边界去污染：图层级作用在纯前景色上，文档级作
     msg="层内像素必须真的被改了",
   )
 }
+
+///|
+/// 给某一层打上标签（返回新文档；不改原文档）。
+fn tag_only(doc : @core.Document, id : String, tag : String) -> @core.Document {
+  let layers : Array[@core.Layer] = []
+  for l in doc.layers {
+    if l.id == id {
+      layers.push(@core.layer_with_tag(l, tag))
+    } else {
+      layers.push(l)
+    }
+  }
+  { ..doc, layers }
+}
+
+///|
+/// 把某一层的某个标签摘掉（返回新文档）。
+fn untag_only(doc : @core.Document, id : String, tag : String) -> @core.Document {
+  let layers : Array[@core.Layer] = []
+  for l in doc.layers {
+    if l.id == id {
+      layers.push(@core.layer_without_tag(l, tag))
+    } else {
+      layers.push(l)
+    }
+  }
+  { ..doc, layers }
+}
+
+///|
+fn whole16() -> @core.SelSpec {
+  let g : @core.GeoWindow = { x: 0.0, y: 0.0, w: 16.0, h: 8.0, feather: 0.0 }
+  { basis: @core.Base, expr: @core.Atom(@core.Geo(g, "rect")) }
+}
+
+///|
+test "layer=@tag：只改带该标签的层，且与 layer=<id> 逐位等价" {
+  let env = @render.RenderEnv::new()
+  let doc = two_tone_doc() // l1 左半红、l2 右半蓝
+  let tagged = tag_only(doc, "l1", "hero")
+  let base = @render.render_doc(tagged, env)
+  // 标签作用域 vs 具体层 id：同一张图的两种写法，必须逐位相同
+  let by_tag = must_render(tagged, env, rprog_layer(whole16(), 120.0, "@hero"))
+  let by_id = must_render(tagged, env, rprog_layer(whole16(), 120.0, "l1"))
+  let total = base.width * base.height
+  let mut i = 0
+  while i < total {
+    assert_eq(
+      by_tag.pixels[i],
+      by_id.pixels[i],
+      msg="layer=@hero 与 layer=l1 应当逐位相同 @\{i}",
+    )
+    i = i + 1
+  }
+  // 没带标签的那一层（右半蓝）必须逐位不动
+  let mut y = 0
+  while y < base.height {
+    let mut x = 8
+    while x < base.width {
+      assert_eq(
+        @codec.rgba_get(by_tag, x, y),
+        @codec.rgba_get(base, x, y),
+        msg="没带 hero 标签的层不该被改 (\{x},\{y})",
+      )
+      x = x + 1
+    }
+    y = y + 1
+  }
+  // 带标签的那一层必须真的被改了（否则上面全是在比"都没动"）
+  assert_true(
+    @codec.rgba_get(by_tag, 2, 4) != @codec.rgba_get(base, 2, 4),
+    msg="带 hero 标签的层必须真的被改",
+  )
+}
+
+///|
+test "layer=@tag 是**一层集合**：两个层都带标签时两份都改，与两条显式算子逐位等价" {
+  let env = @render.RenderEnv::new()
+  let doc = two_tone_doc()
+  let both = tag_only(tag_only(doc, "l1", "hero"), "l2", "hero")
+  // 一条 @hero 展开成两条（每层一条）
+  let by_tag = must_render(both, env, rprog_layer(whole16(), 120.0, "@hero"))
+  // 显式写成两条算子（顺序：层序 l1 → l2）
+  let op1 = rprog_layer(whole16(), 120.0, "l1").ops[0]
+  let op2 = rprog_layer(whole16(), 120.0, "l2").ops[0]
+  let by_two : @core.EditProgram = { ops: [op1, op2], guards: [] }
+  let by_two_out = must_render(both, env, by_two)
+  let total = by_tag.width * by_tag.height
+  let mut i = 0
+  while i < total {
+    assert_eq(
+      by_tag.pixels[i],
+      by_two_out.pixels[i],
+      msg="一条 @hero 应当等价于「每层各一条算子」 @\{i}",
+    )
+    i = i + 1
+  }
+  // 两层都变了：左右各取一点与底图比
+  let base = @render.render_doc(both, env)
+  assert_true(
+    @codec.rgba_get(by_tag, 2, 4) != @codec.rgba_get(base, 2, 4),
+    msg="左层（带标签）应被改",
+  )
+  assert_true(
+    @codec.rgba_get(by_tag, 12, 4) != @codec.rgba_get(base, 12, 4),
+    msg="右层（带标签）也应被改——只改第一层就是 bug",
+  )
+}
+
+///|
+test "layer=@tag 的活绑定：标签摘掉之后，同一条表在渲染期被拒（不是静默不生效）" {
+  let env = @render.RenderEnv::new()
+  let doc = two_tone_doc()
+  let tagged = tag_only(doc, "l1", "hero")
+  let prog = rprog_layer(whole16(), 120.0, "@hero")
+  // 正控：打得上的时候渲染得出来
+  let _ = must_render(tagged, env, prog)
+  // 摘掉标签（**没有**重新装表）：同一条表必须报错，而不是回一张没改的图
+  let stripped = untag_only(tagged, "l1", "hero")
+  match @render.render_doc_with(stripped, env, prog) {
+    Ok(_) =>
+      abort("标签摘掉后 layer=@hero 落不到任何层，渲染必须报错而不是静默不生效")
+    Err(e) => {
+      assert_true(e.contains("hero"), msg="报错应点出是哪个标签：\{e}")
+      assert_true(e.contains("静默"), msg="报错应说明后果：\{e}")
+    }
+  }
+}
+
+///|
+test "layer=@tag 的坏写法：裸 @ 与落不到任何层都报错" {
+  let env = @render.RenderEnv::new()
+  let doc = two_tone_doc()
+  match @render.render_doc_with(doc, env, rprog_layer(whole16(), 120.0, "@")) {
+    Ok(_) => abort("layer=@ 必须报错")
+    Err(e) => assert_true(e.contains("没有标签名"), msg="裸 @ 的报错不对：\{e}")
+  }
+  match @render.render_doc_with(doc, env, rprog_layer(whole16(), 120.0, "@nobody")) {
+    Ok(_) => abort("layer=@nobody 必须报错")
+    Err(e) =>
+      assert_true(e.contains("nobody"), msg="落不到任何层的报错应点出标签：\{e}")
+  }
+}
