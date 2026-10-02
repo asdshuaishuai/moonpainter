@@ -410,15 +410,12 @@ fn refresh_layers_light() -> Unit {
   js_status_bar("🖌 \{json_get_str(fp_j, "fingerprint")[0:12].to_owned()}…")
 }
 
-fn refresh_ui() -> Unit {
-  let j = eng("list-layers")
-  if !eng_ok(j) {
-    return
-  }
-  let layers = match json_get(j, "layers") {
-    Some(Json::Array(a)) => a
-    _ => []
-  }
+
+///|
+/// 图层列表的 HTML：**纯函数**（输入 `list-layers` 的根级数组 + 当前选中 id），
+/// 原先它长在 `refresh_ui` 里、只有浏览器点开才生成，测试拿不到——同
+/// `tool_line` 那次提取的理由：能测的那半要测得到。
+fn layers_html(layers : Array[Json], sel : String) -> String {
   let count = layers.length()
   let sb = StringBuilder()
   let mut i = count - 1
@@ -431,7 +428,7 @@ fn refresh_ui() -> Unit {
       Some(Json::True) => true
       _ => false
     }
-    let sel = if lid == g_sel.val { " sel" } else { "" }
+    let selc = if lid == sel { " sel" } else { "" }
     let eye = if vis { "👁" } else { "🚫" }
     let ico = match lkd {
       "text" => "T"
@@ -442,7 +439,7 @@ fn refresh_ui() -> Unit {
       _ => "□"
     }
     sb.write_string("<div class='li")
-    sb.write_string(sel)
+    sb.write_string(selc)
     sb.write_string("' onclick='globalThis.__sel(\"")
     sb.write_string(lid)
     sb.write_string("\")'><span class='eye' onclick='event.stopPropagation();globalThis.__vis(\"")
@@ -474,7 +471,20 @@ fn refresh_ui() -> Unit {
     sb.write_string("</div>")
     i = i - 1
   }
-  js_refresh_layers(sb.to_string())
+  sb.to_string()
+}
+
+fn refresh_ui() -> Unit {
+  let j = eng("list-layers")
+  if !eng_ok(j) {
+    return
+  }
+  let layers = match json_get(j, "layers") {
+    Some(Json::Array(a)) => a
+    _ => []
+  }
+  let count = layers.length()
+  js_refresh_layers(layers_html(layers, g_sel.val))
   let fp_j = eng("fingerprint")
   let fp = json_get_str(fp_j, "fingerprint")
   let doc_j = eng("inspect")
@@ -566,20 +576,13 @@ fn fresh_group_id(layers : Array[Json]) -> String {
   "g\{js_now_ms()}"
 }
 
-fn refresh_props() -> Unit {
-  let id = g_sel.val
-  if id == "" {
-    js_update_props("<div class='ns'>点击图层查看属性</div>")
-    return
-  }
-  let j = eng("query-layer \{id}")
-  if !eng_ok(j) {
-    return
-  }
-  let l = match json_get(j, "layer") {
-    Some(x) => x
-    None => parse_json_safe("null")
-  }
+///|
+/// 属性面板的 HTML：**纯函数**（输入 `query-layer` 的那一层 + `list-layers` 的根级数组）。
+/// 原先它长在 `refresh_props` 里、只有浏览器点开某个图层才生成，测试拿不到——
+/// 与 `layers_html` 同一次提取：能测的那半要测得到（`build_demo.sh#html-wiring`
+/// 那种源码级 grep 只能证明"写过"，证明不了"拼出来的 HTML 里有"）。
+fn props_html(l : Json, roots : Array[Json]) -> String {
+  let sb = StringBuilder()
   let gid = json_get_str(l, "id")
   let gname = json_get_str(l, "name")
   let gkind = json_get_str(l, "kind")
@@ -621,44 +624,41 @@ fn refresh_props() -> Unit {
   sb.write_string("</span></div>")
   // 不透明度滑杆（change 提交）
   sb.write_string("<div class='osl'><span class='pk'>α</span><input type='range' min='0' max='100' value='\{opacity_pct(gop)}' oninput='globalThis.__optip(\"")
-  sb.write_string(id)
+  sb.write_string(gid)
   sb.write_string("\",this.value)' onchange='globalThis.__op(\"")
-  sb.write_string(id)
+  sb.write_string(gid)
   sb.write_string("\",this.value)'/><span class='pv' id='opv'>")
   sb.write_string(gop)
   sb.write_string("</span></div>")
   sb.write_string("<div class='pact'><button onclick='globalThis.__del(\"")
-  sb.write_string(id)
+  sb.write_string(gid)
   sb.write_string("\")'>删除</button><button onclick='globalThis.__front(\"")
-  sb.write_string(id)
+  sb.write_string(gid)
   sb.write_string("\")'>置顶</button><button onclick='globalThis.__back(\"")
-  sb.write_string(id)
+  sb.write_string(gid)
   sb.write_string("\")'>置底</button><button onclick='globalThis.__mask_invert(\"")
-  sb.write_string(id)
+  sb.write_string(gid)
   sb.write_string("\")'>蒙版反选</button><button class='ghost' onclick='globalThis.__mask_clear(\"")
-  sb.write_string(id)
+  sb.write_string(gid)
   sb.write_string("\")'>去蒙版</button>")
   // 分组：人类侧的入口。组 → 「解组」；非组 → 「编组」+「父级」下拉
   // （根级 / 各根级组，覆盖 group-add 与 group-remove 两个方向）。
-  let lst = eng("list-layers")
-  let roots = match json_get(lst, "layers") {
-    Some(Json::Array(a)) => a
-    _ => []
-  }
+  // `roots` 是**参数**（调用方取一次 `list-layers` 就够）——纯函数里不许再调
+  // 引擎：那会让这一段重新变成"只有浏览器里点得动"的代码，测试一跑就 panic。
   let parent = match parent_group_of(roots, gid, "") {
     Some(p) => p
     None => ""
   }
   if gkind == "group" {
     sb.write_string("<button class='ghost' onclick='globalThis.__ungroup_sel(\"")
-    sb.write_string(id)
+    sb.write_string(gid)
     sb.write_string("\")'>解组</button>")
   } else {
     sb.write_string("<button class='ghost' onclick='globalThis.__group_sel(\"")
-    sb.write_string(id)
+    sb.write_string(gid)
     sb.write_string("\")'>编组</button>")
     sb.write_string("<select title='父级：根级或某个组' onchange='globalThis.__reparent(\"")
-    sb.write_string(id)
+    sb.write_string(gid)
     sb.write_string("\",this.value)'>")
     sb.write_string("<option value=''")
     if parent == "" {
@@ -697,7 +697,30 @@ fn refresh_props() -> Unit {
     sb.write_string("</select>")
   }
   sb.write_string("</div>")
-  js_update_props(sb.to_string())
+  sb.to_string()
+}
+
+fn refresh_props() -> Unit {
+  let id = g_sel.val
+  if id == "" {
+    js_update_props("<div class='ns'>点击图层查看属性</div>")
+    return
+  }
+  let j = eng("query-layer \{id}")
+  if !eng_ok(j) {
+    return
+  }
+  let l = match json_get(j, "layer") {
+    Some(x) => x
+    None => parse_json_safe("null")
+  }
+  // 「父级」下拉的候选：只列**根级**组（`group-add` 拒非根级组）
+  let lst = eng("list-layers")
+  let roots = match json_get(lst, "layers") {
+    Some(Json::Array(a)) => a
+    _ => []
+  }
+  js_update_props(props_html(l, roots))
 }
 
 ///|

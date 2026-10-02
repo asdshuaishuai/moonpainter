@@ -144,6 +144,8 @@
    "把一个已有层加进**已有**组"做不到（只能 `ungroup`+`group` 整体重组，组的
    name/opacity/blend/tags/mask 全丢）——补了 `group-add`/`group-remove`。
    粒度缺口只能靠**问一遍常见动作**（"把 A 放进 B"、"换掉内容"）找出来。
+   **同一条也适用于界面**：拼 HTML 的代码提成**纯函数**（`layers_html`/
+   `props_html`），否则"只有浏览器点开才生成"的那半只能靠源码 grep 证明"写过"。
    **补完能力还要问"两侧都有入口吗"**：引擎四条分组命令当时只有 AI 走得到，
    而 README 里我写的"人类前端可直接用"是**编的**（前端连一个分组按钮都没有）
    ——名单/数字有门禁，名单旁边的理由没有；新写的散文要当代码审。
@@ -417,9 +419,12 @@
                                 # （含 save→open 往返）+ 页面接线源码核对 + demo 测试
                                 # （工具面与 MVSL 闭环可达，需 Node；
                                 # 含 undispatched_tools 工具面自检、HTML 接线自检）
-                                # **页面接线的两层**：demo_test 拿真的拼出来的
-                                # HTML 查 globalThis 处理器与 id；build_demo.sh
-                                # build_demo.sh#html-wiring 额外罩住动态拼出来的图层列表/属性面板。
+                                # **页面接线的三层**：demo_test 拿真的拼出来的
+                                # 骨架 HTML 查处理器与 id；`panel_html_wbtest` 直接调
+                                # `layers_html`/`props_html`（这两段已提成**纯函数**）
+                                # 断言动态拼出来的列表/面板里有该出现的按钮与选中态
+                                # ——纯函数里**不许再调引擎**，一调测试就 panic；
+                                # build_demo.sh#html-wiring 兜另一半（名字都已注册）。
                                 # build_demo.sh#doc-tools 文档工具数 + 边界自洽：README 与 AGENTS 里
                                 # 写的工具数必须与 paint_tool_defs 一致；README
                                 # 里 unreachable 标记之间那份"AI 够不着"的名单
