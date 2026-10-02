@@ -162,6 +162,23 @@ fn inside_fill(l : @core.Layer, lx : Double, ly : Double) -> Bool {
 }
 
 ///|
+/// 圆角半径的**夹取**：`r` 先跟半宽比、再跟半高比（这个顺序是历史语义，
+/// 不是 `min(r, w/2, h/2)`——两者在 `r > w/2 > h/2` 时不同）。
+/// 渲染器（`in_rounded_rect`）与快速路径（`solid_rect_interior` 的内接盒）
+/// **必须同一把尺子**：判宽一个像素就是静默改画面。
+fn clamped_radius(w : Double, h : Double, r : Double) -> Double {
+  if r <= 0.0 {
+    0.0
+  } else if r > w / 2.0 {
+    w / 2.0
+  } else if r > h / 2.0 {
+    h / 2.0
+  } else {
+    r
+  }
+}
+
+///|
 /// 圆角矩形内点测试。
 fn in_rounded_rect(
   x : Double,
@@ -176,13 +193,7 @@ fn in_rounded_rect(
   if r <= 0.0 {
     return true
   }
-  let rr = if r > w / 2.0 {
-    w / 2.0
-  } else if r > h / 2.0 {
-    h / 2.0
-  } else {
-    r
-  }
+  let rr = clamped_radius(w, h, r)
   // 四角区域内的，做圆距测试
   let nx = if x < rr { rr - x } else if x > w - rr { x - (w - rr) } else { 0.0 }
   let ny = if y < rr { rr - y } else if y > h - rr { y - (h - rr) } else { 0.0 }
@@ -412,17 +423,25 @@ fn solid_rect_interior(
   if !(l.kind is @core.ShapeKind::Rect) {
     return None
   }
-  if l.rotation_deg != 0.0 || l.flip_h || l.flip_v || l.corner_radius > 0.0 {
+  if l.rotation_deg != 0.0 || l.flip_h || l.flip_v {
     return None
   }
   if l.stroke.width > 0.0 {
     return None
   }
   // 4 个样本全在内 ⇔ px + 0.25 - l.x ≥ 0 且 px + 0.75 - l.x < w（半开上界）。
-  let ix0 = clamp_int((l.x - 0.25 + INTERIOR_EPS).ceil(), px0, px1)
-  let ix1 = clamp_int((l.x + l.w - 0.75 - INTERIOR_EPS).ceil(), px0, px1)
-  let iy0 = clamp_int((l.y - 0.25 + INTERIOR_EPS).ceil(), py0, py1)
-  let iy1 = clamp_int((l.y + l.h - 0.75 - INTERIOR_EPS).ceil(), py0, py1)
+  //
+  // 圆角那一支：`in_rounded_rect` 的判据是 `nx == 0 || ny == 0 || nx²+ny² ≤ rr²`
+  // ——**前两支是个 OR**，所以"x 落在那条竖向直边带里（nx == 0）"或者"y 落在
+  // 横向直边带里（ny == 0）"**任一条**就够覆盖恒为 1。两条带的交集（= 各边内缩
+  // `rr`）当然也够，而且是个矩形；代价是比单取一条带小（慢一点），换来的是
+  // 一处不用分类讨论的保守盒。⚠️ 判宽一个像素就是静默改画面：
+  // 圆弧内侧那圈像素**不在**这个盒里（它们靠通用路径画），这是有意的。
+  let rr = clamped_radius(l.w, l.h, l.corner_radius)
+  let ix0 = clamp_int((l.x + rr - 0.25 + INTERIOR_EPS).ceil(), px0, px1)
+  let ix1 = clamp_int((l.x + l.w - rr - 0.75 - INTERIOR_EPS).ceil(), px0, px1)
+  let iy0 = clamp_int((l.y + rr - 0.25 + INTERIOR_EPS).ceil(), py0, py1)
+  let iy1 = clamp_int((l.y + l.h - rr - 0.75 - INTERIOR_EPS).ceil(), py0, py1)
   if ix1 <= ix0 || iy1 <= iy0 {
     return None
   }

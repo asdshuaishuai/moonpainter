@@ -1804,12 +1804,20 @@ MUTS = [
         "Q26",
         "实心矩形的快速内部判宽 1 像素（边界像素按全覆盖合成：画面多出一条硬边）",
         "render/scene.mbt",
-        """  let ix1 = clamp_int((l.x + l.w - 0.75 - INTERIOR_EPS).ceil(), px0, px1)
-  let iy0 = clamp_int((l.y - 0.25 + INTERIOR_EPS).ceil(), py0, py1)
-  let iy1 = clamp_int((l.y + l.h - 0.75 - INTERIOR_EPS).ceil(), py0, py1)""",
-        """  let ix1 = clamp_int((l.x + l.w - 0.75 - INTERIOR_EPS).ceil() + 1.0, px0, px1)
-  let iy0 = clamp_int((l.y - 0.25 + INTERIOR_EPS).ceil(), py0, py1)
-  let iy1 = clamp_int((l.y + l.h - 0.75 - INTERIOR_EPS).ceil() + 1.0, py0, py1)""",
+        """  let ix1 = clamp_int((l.x + l.w - rr - 0.75 - INTERIOR_EPS).ceil(), px0, px1)
+  let iy0 = clamp_int((l.y + rr - 0.25 + INTERIOR_EPS).ceil(), py0, py1)
+  let iy1 = clamp_int((l.y + l.h - rr - 0.75 - INTERIOR_EPS).ceil(), py0, py1)""",
+        """  let ix1 = clamp_int((l.x + l.w - rr - 0.75 - INTERIOR_EPS).ceil() + 1.0, px0, px1)
+  let iy0 = clamp_int((l.y + rr - 0.25 + INTERIOR_EPS).ceil(), py0, py1)
+  let iy1 = clamp_int((l.y + l.h - rr - 0.75 - INTERIOR_EPS).ceil() + 1.0, py0, py1)""",
+        "killed",
+    ),
+    (
+        "Q28",
+        "圆角矩形的快速内部不内缩半径（圆弧外那圈像素被按全覆盖合成：角上静默多一块）",
+        "render/scene.mbt",
+        "  let rr = clamped_radius(l.w, l.h, l.corner_radius)",
+        "  let rr = 0.0",
         "killed",
     ),
     (

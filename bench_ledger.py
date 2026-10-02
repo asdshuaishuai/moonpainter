@@ -26,11 +26,15 @@
      markdown 表格：每行第一格是**标签**（与账本标签逐字相同），该行**最后一个**
      `X.XX s` 是**当前实现**的值（历史对照列在左边），必须与账本一致（±15%）；
      行里若还有「成立/不成立」，它必须与 `值 < 2.0` 一致。
-  2. 派生结论（只在 m2 上）：`每层边际 ≈ X s` 与每一处 `约 N 层`（破线点）
-     必须与账本重算的一致（±25%）——m2 的每层边际是**两次测量之差再除 9**，
+  2. 派生结论（只在 m2 上）：`每层边际 ≈ X s`、每一处 `约 N 层`（破线点）、
+     以及带"软蒙版…边际"的那一行里**最后一个** `X s`（当前值；左边是历史值
+     `0.53 s → 0.07 s`）必须与账本重算的一致（±25%；软蒙版边际是两次测量之差，
+     绝对值小、噪声大，按 ±0.05 s 绝对容差）——m2 的每层边际是**两次测量之差再除 9**，
      噪声比单个中位大，所以放得宽一些；要抓的是量级腐烂（实测碰到过
      "约 3 层处就破"而真值是 19.6，以及"8.4 ms → 0.8 ms"）。
   3. **覆盖按具名清单核**：`REQUIRED_TABLE_EXPS` 里每个实验都必须有标记块，
+     **而且账本里该实验的每个标签都必须在表里出现**（漏掉一行 = 那个数没进
+     文档，而"表格对得上"照旧成立——实测就漏过"10 层 + 圆角"这一行），
      `每层边际` 与 `约 N 层` 各必须命中至少一次。**"至少有一个块"是不够的**：
      实测把 `<!-- bench-table: m4 -->` 的名字改坏（或整块删掉）时，"有一个块"
      照样成立，而 m4 那一整块数字已经没人对账了。判据找不到对象必须报错——
@@ -60,12 +64,16 @@ TABLE_OPEN_RE = re.compile(r"<!-- bench-table: \w+ -->")
 REQUIRED_TABLE_EXPS = ["m2", "m4"]
 VALUE_RE = re.compile(r"(\d+\.\d+)\s*s")
 MARGINAL_RE = re.compile(r"每层边际\s*[≈=]\s*(\d+\.\d+)\s*s")
+# 软蒙版边际：一行里可能出现历史值（`0.53 s → 0.07 s`），取**最后一个**数字。
+MASK_LINE_RE = re.compile(r"软蒙版[^\n]*边际|边际[^\n]*软蒙版")
+MASK_ABS_TOL = 0.05
 # 文档里每一处「约 N 层」都是在说 m2 的破线点（目前只有这一处会这么写）。
 BREAK_RE = re.compile(r"约\s*(\d+)\s*层")
 
 FAILS = []
-HITS = {"table": 0, "marginal": 0, "break": 0}
+HITS = {"table": 0, "marginal": 0, "break": 0, "mask": 0}
 SEEN_EXPS = set()
+SEEN_LABELS = {}
 
 
 def fail(msg):
@@ -115,6 +123,7 @@ def check_tables(ledger):
                     fail(f"{doc}：{exp} 表里「{label}」这一行没有任何 `X.XX s`")
                     continue
                 got = float(vals[-1])  # 最后一列 = 当前实现（左边是历史对照列）
+                SEEN_LABELS.setdefault(exp, set()).add(label)
                 if label not in ledger[exp]:
                     fail(f"{doc}：{exp} 表里的标签「{label}」在账本里没有"
                          f"（账本有：{'、'.join(sorted(ledger[exp]))}）——标签变了就要同步账本")
@@ -143,6 +152,24 @@ def check_derived(ledger):
             HITS["marginal"] += 1
             if not close(float(got), per, TOL_DERIVED):
                 fail(f"{doc}：写「每层边际 ≈ {got} s」，账本重算 {per:.2f} s")
+        for m in MASK_LINE_RE.finditer(text):
+            # 短语之后、到句号/左括号/换行为止的那一小段里找数字：README 那一行
+            # 后面还有一整串别的数字（9.89 s → 5.88 s…），取"整行最后一个"
+            # 会抓到它们（实测第一版就报"软蒙版边际 … 1.32 s"）。
+            tail = text[m.end() : m.end() + 120]
+            for stop in ("。", "\n", "（"):
+                i = tail.find(stop)
+                if i >= 0:
+                    tail = tail[:i]
+            vals = re.findall(r"\+?(\d+\.\d+)\s*s", tail)
+            if not vals:
+                continue
+            got = float(vals[-1])
+            HITS["mask"] += 1
+            want = float(m2["10 层 + 软蒙版"]) - float(m2["10 层"])
+            if abs(got - want) > MASK_ABS_TOL:
+                fail(f"{doc}：写「软蒙版边际 … {got:.2f} s」，账本重算 {want:+.2f} s"
+                     f"（±{MASK_ABS_TOL} s 之外；这一句也是两次测量之差，容易烂）")
         for got in BREAK_RE.findall(text):
             HITS["break"] += 1
             if brk is None:
@@ -160,7 +187,13 @@ def main():
         if exp not in SEEN_EXPS:
             fail(f"文档里没有实验 {exp} 的 `<!-- bench-table: {exp} -->` 标记块"
                  f"——这一整块性能数字没人对账了（删掉或改了名字都会走到这里）")
-    for kind, name in (("marginal", "每层边际结论"), ("break", "破线层数结论")):
+            continue
+        miss = sorted(set(ledger.get(exp, {})) - SEEN_LABELS.get(exp, set()))
+        if miss:
+            fail(f"{exp} 表里少了账本有的标签：{'、'.join(miss)}"
+                 "——量到了却没写进文档（只看现有的行对不对得上，看不出来少了行）")
+    for kind, name in (("marginal", "每层边际结论"), ("break", "破线层数结论"),
+                       ("mask", "软蒙版边际结论")):
         if HITS[kind] == 0:
             fail(f"{name}一处都没找到——判据找不到对象时必须报错，不许静默通过")
     if FAILS:
@@ -171,8 +204,8 @@ def main():
               "文档只许引用账本里的数）")
         return 1
     print(f"性能数字 OK（{HITS['table']} 个表标记块、"
-          f"{HITS['marginal']} 处每层边际、{HITS['break']} 处破线层数，"
-          f"全部对上 bench/ledger.json）")
+          f"{HITS['marginal']} 处每层边际、{HITS['break']} 处破线层数、"
+          f"{HITS['mask']} 处软蒙版边际，全部对上 bench/ledger.json）")
     return 0
 
 

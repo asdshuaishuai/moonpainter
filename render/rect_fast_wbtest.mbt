@@ -5,8 +5,9 @@
 /// ~0.5 s/层降到 0.09 s/层——顺带说明**它一旦判宽一个像素，画面就静默多/少
 /// 一块**，所以这里要钉三件事：
 ///
-///   * **前提缺一不可**（正控 + 六个负控）：旋转/翻转/圆角/蒙版/描边/渐变
-///     各自都要退出快速路径，否则"内部"不再是常量块；
+///   * **前提缺一不可**（正控 + 五个负控）：旋转/翻转/蒙版/描边/渐变
+///     各自都要退出快速路径，否则"内部"不再是常量块（圆角是**另一条专门的
+///     测试**：它不退出快速路径，而是把盒内缩半径——圆弧那一支单独钉）；
 ///   * **内部是极大集**：框内的每个像素 4 样本全在内（不判宽）；框外**紧邻
 ///     一圈**至少有一个样本在外（不判窄，判窄只是慢，但"内部"这个名字就骗人）；
 ///   * **与通用路径逐位一致**：翻转 `flip_h+flip_v` 的同一矩形**不走**快速路径
@@ -39,7 +40,7 @@ fn four_samples_inside(l : @core.Layer, px : Int, py : Int) -> Bool {
 }
 
 ///|
-test "实心矩形快速路径：前提齐了才有内部，六个负控一个都不能少" {
+test "实心矩形快速路径：前提齐了才有内部，五个负控一个都不能少" {
   let base = {
     ..@core.default_layer("r1", "r1", 10.3, 7.7, 20.25, 15.5),
     fill: @core.Fill::Solid(0xFF3366CC),
@@ -72,12 +73,12 @@ test "实心矩形快速路径：前提齐了才有内部，六个负控一个�
     )
   }
 
-  // 六个负控：每条前提各自单独破坏一次，都必须退出快速路径
+  // 五个负控：每条前提各自单独破坏一次，都必须退出快速路径
+  // （圆角不在这个名单里：它现在**进**快速路径，见下面那条测试。）
   let cases : Array[(String, @core.Layer)] = [
     ("旋转", { ..base, rotation_deg: 15.0 }),
     ("flip_h", { ..base, flip_h: true }),
     ("flip_v", { ..base, flip_v: true }),
-    ("圆角", { ..base, corner_radius: 3.0 }),
     ("蒙版取反（覆盖恒 1 的区域在形状外，无界）", { ..base, mask: Some(rect_mask(0.0, 0.0, 64.0, 64.0, 0.0, 0.0, true)) }),
     ("蒙版太小/羽化太大（根本没有覆盖恒 1 的像素）", { ..base, mask: Some(rect_mask(20.0, 20.0, 1.0, 1.0, 4.0, 0.0, false)) }),
     ("描边", { ..base, stroke: { ..base.stroke, width: 2.0 } }),
@@ -110,10 +111,14 @@ test "实心矩形快速路径：与通用路径逐位一致（翻转镜像当�
   while dx < 1.0 {
     let mut dw = 0.0
     while dw < 1.0 {
+      // 圆角 0 与 3 各跑一遍：圆角的"盒"比矩形小一圈，正好逼出"快速段与
+      // 通用段在同一张图上接缝"（角上那圈像素必须由通用路径画对）。
+      for cr in [0.0, 3.0] {
       let rect = {
         ..@core.default_layer("r1", "r1", 10.3 + dx, 7.7 + dw, 20.25 + dw, 15.5 + dx),
         fill: @core.Fill::Solid(0x803366CC),
         opacity: 0.5,
+        corner_radius: cr,
       }
       // 对照：同一矩形 + 双向翻转。填充域与其镜像同一块、Solid 颜色与位置无关，
       // 所以"该画成什么样"完全相同；而翻转这条前提让它**退出**快速路径。
@@ -148,8 +153,9 @@ test "实心矩形快速路径：与通用路径逐位一致（翻转镜像当�
       }
       assert_true(
         diff == 0,
-        msg="dx=\{dx} dw=\{dw}：快速路径与通用路径差了 \{diff} 个像素",
+        msg="dx=\{dx} dw=\{dw} 圆角=\{cr}：快速路径与通用路径差了 \{diff} 个像素",
       )
+      }
       dw = dw + 0.5
     }
     dx = dx + 0.5
@@ -177,6 +183,76 @@ fn rect_mask(
     feather,
     roughen,
     invert,
+  }
+}
+
+///|
+test "快速路径：圆角矩形的内接盒 —— 盒里每个像素的 4 个样本都真的在形内" {
+  let base = {
+    ..@core.default_layer("r1", "r1", 10.3, 7.7, 20.25, 15.5),
+    fill: @core.Fill::Solid(0xFF3366CC),
+    corner_radius: 3.0,
+  }
+  // 半径 3 ⇒ 每条边再内缩 3：10.3+3-0.25 ⇒ 14；10.3+20.25-3-0.75 ⇒ 27；
+  // 7.7+3-0.25 ⇒ 11；7.7+15.5-3-0.75 ⇒ 20。
+  assert_eq(
+    solid_rect_interior(base, base.fill, 0, 0, 64, 64),
+    Some((14, 11, 27, 20)),
+  )
+  // 对照：同一个盒子把半径改成 0 就必须回到矩形内部 —— 说明内缩真的发生了
+  // （否则"圆角也走快速路径"这句只是把矩形那条路又跑了一遍）。
+  let square = { ..base, corner_radius: 0.0 }
+  assert_eq(
+    solid_rect_interior(square, square.fill, 0, 0, 64, 64),
+    Some((11, 8, 30, 23)),
+  )
+
+  // **决定性判据**：盒里每个像素的 4 个样本都必须真的在形内。这里用的正是
+  // 渲染器算 cover 的那一个判据（`inside_fill`，笔宽 ≤ 0 时 cover = 命中数/4）
+  // ——快速路径的前提就是这句话，圆弧那一支判宽一个像素 = 角上静默多一块。
+  let cases : Array[(String, @core.Layer)] = [
+    ("半径 3", base),
+    ("半径 5", { ..base, corner_radius: 5.0 }),
+    ("半径 7（逼近半高 7.75）", { ..base, corner_radius: 7.0 }),
+    ("圆角 + 蒙版右边界切进来", { ..base, mask: Some(rect_mask(0.0, 0.0, 25.0, 64.0, 4.0, 0.0, false)) }),
+  ]
+  let mut fast_px = 0
+  for c in cases {
+    match solid_rect_interior(c.1, c.1.fill, 0, 0, 64, 64) {
+      None => fail("「\{c.0}」该能走快速路径（否则这条断言是空的）")
+      Some((ix0, iy0, ix1, iy1)) => {
+        let mut y = iy0
+        while y < iy1 {
+          let mut x = ix0
+          while x < ix1 {
+            for s in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
+              let lx = x.to_double() + s.0 - c.1.x
+              let ly = y.to_double() + s.1 - c.1.y
+              assert_true(
+                inside_fill(c.1, lx, ly),
+                msg="「\{c.0}」的盒里 (\{x},\{y}) 样本 (\{s.0},\{s.1}) 在形外 —— 快速路径会静默多画一块",
+              )
+            }
+            fast_px = fast_px + 1
+            x = x + 1
+          }
+          y = y + 1
+        }
+      }
+    }
+  }
+  assert_true(fast_px > 0, msg="一条圆角用例都没落进快速路径")
+
+  // 负控：半径大到直边带退化 ⇒ 没有盒子（不是空盒，是 None）
+  //   r = h/2 = 7.75 ⇒ y 带 [15.2, 14.7) 空；药丸 r = 30 ⇒ x 带空。
+  for pill in [
+    ("半径 = 半高", { ..base, corner_radius: 7.75 }),
+    ("半径 > 半宽（药丸）", { ..base, corner_radius: 30.0 }),
+  ] {
+    assert_true(
+      solid_rect_interior(pill.1, pill.1.fill, 0, 0, 64, 64) is None,
+      msg="「\{pill.0}」的直边带已经退化成线，不该再给出盒子",
+    )
   }
 }
 
@@ -271,12 +347,16 @@ test "实心矩形快速路径 + 蒙版：与通用路径逐位一致（翻转�
       ..@core.default_layer("r1", "r1", 10.3 + dx, 7.7, 20.25, 15.5),
       fill: @core.Fill::Solid(0x803366CC),
       opacity: 0.5,
+      // 半径 3（不是更大值）：它与下面那个"切进层里"的蒙版取交之后必须**还剩
+      // 一块**——否则快速段消失，这条对拍会变成"通用路径跟自己比"（实测 r=4
+      // 时交叠就是空的，测试当场红）。
+      corner_radius: 3.0,
     }
     // 大软蒙版（覆盖恒 1 的区域盖住层内部 ⇒ 走快速路径）+ 一个**切进层里**的
     // 蒙版（一部分走快速路径、一部分走通用路径，两段必须在同一张图上接得严丝合缝）
     for m in [
       rect_mask(0.0, 0.0, 64.0, 64.0, 7.0, 0.0, false),
-      rect_mask(0.0, 0.0, 22.0, 64.0, 5.0, 2.0, false),
+      rect_mask(0.0, 0.0, 24.0, 64.0, 3.0, 1.0, false),
     ] {
       let masked = { ..rect, mask: Some(m) }
       let mirrored = { ..masked, flip_h: true, flip_v: true }

@@ -224,6 +224,13 @@ def m2(reps=3):
             s += f"add-mask l0 x=0 y=0 w={W} h={H} feather=64\n"
         return s
 
+    def build_rounded(nl):
+        s = f"session-open full_image\nnew {W} {H}\n"
+        for i in range(nl):
+            s += (f"add-rect id=l{i} x=0 y=0 w={W} h={H} "
+                  f"fill=#FF0000 opacity=0.5 radius=32\n")
+        return s
+
     print(f"实验二：12MP 证伪线（{W}×{H} = {W*H/1e6:.1f}MP、{reps} 次取中位）")
     print("  出口用 `render 4000`（全分辨率 + PNG 编码）；"
           "⚠️ 裸 `render` 是 1024 预览，量不到 12MP")
@@ -231,6 +238,10 @@ def m2(reps=3):
     r4, _ = bench(lambda: build(4, False), "render 4000\n", "4 层", reps, "m2")
     r10, _ = bench(lambda: build(10, False), "render 4000\n", "10 层", reps, "m2")
     r10m, _ = bench(lambda: build(10, True), "render 4000\n", "10 层 + 软蒙版", reps, "m2")
+    # 圆角矩形（radius=32）：它是**同一类**实心整幅层，只是四条边被圆角切掉；
+    # 快速路径的内接盒各边内缩 rr 之后仍然只差角上那一圈 ⇒ 代价应当与"10 层"
+    # 同量级。这一条是"圆角也进了快速路径"的机器对账对象（见 bench_ledger.py）。
+    r10r, _ = bench(lambda: build_rounded(10), "render 4000\n", "10 层 + 圆角", reps, "m2")
 
     print("\n  结论（只报量到的，不外推）：")
     print("    口径：上面的层都是**整幅画布**的层。几何层已按 paint_window 裁窗，")
@@ -243,9 +254,9 @@ def m2(reps=3):
         if per_layer > 0 and break_at is not None:
             print(f"    每层边际 ≈ {per_layer:.2f}s ⇒ 该线在约 "
                   f"{break_at:.1f} 层处就破了")
-    if r10 and r10m:
-        print(f"    10 层的蒙版边际 = {r10m - r10:+.2f}s"
-              f" ⇒ **蒙版不是瓶颈，逐层合成才是**")
+    if r10 and r10r:
+        print(f"    10 层圆角（radius=32）= {r10r:.2f}s（矩形 10 层 = {r10:.2f}s）"
+              f" ⇒ 圆角{'也进了快速路径' if r10r < r10 * 1.25 else '**没进**快速路径'}")
 
 
 # ---------------------------------------------------------------------------
