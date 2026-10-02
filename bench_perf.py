@@ -27,6 +27,7 @@
 """
 import base64
 import json
+import os
 import re
 import statistics
 import struct
@@ -53,7 +54,54 @@ def run_cli(cmds, label):
     return dt, r.stdout
 
 
-def bench(build, tail, label, reps):
+# 账本：本次运行量到的（实验 → 标签 → 中位秒数字符串）。**只收信得过的**
+# （离散度 > 25% 的那次不写进去——"别把脏数字写进文档"这条纪律现在由脚本执行）。
+# 落地文件 `bench/ledger.json` 是 DESIGN/README 里**当前**性能表的对账依据
+# （`bench_ledger.py`，进 `verify.sh#catalog`）。
+LEDGER = {}
+LEDGER_PATH = "bench/ledger.json"
+
+
+def record(exp, label, med, trustworthy):
+    if med is None or not trustworthy:
+        return
+    LEDGER.setdefault(exp, {})[label] = "%.2f" % med
+
+
+def write_ledger():
+    """合并本次量到的值写回账本（按实验/标签排序、固定缩进 ⇒ 字节可复现）。
+
+    ⚠️ 别手改这个文件：它唯一的产出方式是**跑一次标定**。手改就等于把"数字能
+    指回一次测量"这个前提删掉，而门禁只对账"文档 == 账本"，看不出来。
+    """
+    merged = {}
+    if os.path.exists(LEDGER_PATH):
+        with open(LEDGER_PATH, encoding="utf-8") as f:
+            merged = json.load(f)
+    for exp, labels in LEDGER.items():
+        merged.setdefault(exp, {}).update(labels)
+    out = {e: dict(sorted(v.items())) for e, v in sorted(merged.items())}
+    os.makedirs(os.path.dirname(LEDGER_PATH), exist_ok=True)
+    with open(LEDGER_PATH, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=1, sort_keys=True)
+        f.write("\n")
+    print(f"  ⇒ 账本已更新 {LEDGER_PATH}："
+          f"DESIGN/README 里的**当前**性能表必须对上它（`verify.sh#catalog` 会核）")
+
+
+def m2_derived(r1, r10):
+    """由「1 层」「10 层」两个中位推出**每层边际**与「<2 s」的**破线层数**。
+
+    两处引用（脚本自己打印结论 + `bench_ledger.py` 对账文档里的那句结论）共用
+    这一个实现——"同一个判断写两遍就必然有一处先烂"。
+    """
+    per_layer = (r10 - r1) / 9.0
+    if per_layer <= 0:
+        return per_layer, None
+    return per_layer, (2.0 - r1) / per_layer + 1.0
+
+
+def bench(build, tail, label, reps, exp="?"):
     """**丢弃一轮预热**后重复 reps 次，返回中位秒数与原始样本。
 
     为什么必须有预热轮：`moon run` 第一次会把构建缓存检查/装载的代价算进去，
@@ -75,6 +123,7 @@ def bench(build, tail, label, reps):
     if spread > 0.25:
         note = f"  ⚠️ 离散度 {spread * 100:.0f}%（这次测量不可信，别写进文档）"
     print(f"  {label:34s} {['%.2f' % x for x in ts]}  中位 {med:.2f}s{note}")
+    record(exp, label, med, spread <= 0.25)
     return med, ts
 
 
@@ -119,13 +168,13 @@ def m1(reps=3):
 
     print(f"实验一：编辑表代价模型（{W}×{W} = {W*W/1e6:.2f}MP、"
           f"{n_ops} 条整幅 recolor、{reps} 次取中位）")
-    geo, _ = bench(build, "mvsl-impact max=8\n", "geo 选择子命中全图", reps)
+    geo, _ = bench(build, "mvsl-impact max=8\n", "geo 选择子命中全图", reps, "m1")
     empty_sel = (
         f"session-open full_image\nnew {W} {W}\n"
         f"add-rect id=l1 x=0 y=0 w={W} h={W} fill=#FF0000\n"
         f"mvsl-set {_prog_offscreen(W, n_ops)}\n"
     )
-    off, _ = bench(lambda: empty_sel, "mvsl-impact max=8\n", "geo 选择子命中空集", reps)
+    off, _ = bench(lambda: empty_sel, "mvsl-impact max=8\n", "geo 选择子命中空集", reps, "m1")
 
     px_ops = W * W * n_ops
     if geo:
@@ -178,10 +227,10 @@ def m2(reps=3):
     print(f"实验二：12MP 证伪线（{W}×{H} = {W*H/1e6:.1f}MP、{reps} 次取中位）")
     print("  出口用 `render 4000`（全分辨率 + PNG 编码）；"
           "⚠️ 裸 `render` 是 1024 预览，量不到 12MP")
-    r1, _ = bench(lambda: build(1, False), "render 4000\n", "1 层", reps)
-    r4, _ = bench(lambda: build(4, False), "render 4000\n", "4 层", reps)
-    r10, _ = bench(lambda: build(10, False), "render 4000\n", "10 层", reps)
-    r10m, _ = bench(lambda: build(10, True), "render 4000\n", "10 层 + 软蒙版", reps)
+    r1, _ = bench(lambda: build(1, False), "render 4000\n", "1 层", reps, "m2")
+    r4, _ = bench(lambda: build(4, False), "render 4000\n", "4 层", reps, "m2")
+    r10, _ = bench(lambda: build(10, False), "render 4000\n", "10 层", reps, "m2")
+    r10m, _ = bench(lambda: build(10, True), "render 4000\n", "10 层 + 软蒙版", reps, "m2")
 
     print("\n  结论（只报量到的，不外推）：")
     print("    口径：上面的层都是**整幅画布**的层。几何层已按 paint_window 裁窗，")
@@ -190,10 +239,10 @@ def m2(reps=3):
         print(f"    1 层 = {r1:.2f}s ⇒ 「12MP 软 mask <2s」在**单层**下"
               f"{'成立' if r1 < 2.0 else '不成立'}")
     if r1 and r10:
-        per_layer = (r10 - r1) / 9
-        if per_layer > 0:
+        per_layer, break_at = m2_derived(r1, r10)
+        if per_layer > 0 and break_at is not None:
             print(f"    每层边际 ≈ {per_layer:.2f}s ⇒ 该线在约 "
-                  f"{(2.0 - r1) / per_layer + 1:.1f} 层处就破了")
+                  f"{break_at:.1f} 层处就破了")
     if r10 and r10m:
         print(f"    10 层的蒙版边际 = {r10m - r10:+.2f}s"
               f" ⇒ **蒙版不是瓶颈，逐层合成才是**")
@@ -356,9 +405,9 @@ def m4(reps=3):
         return s
 
     print(f"实验四：12MP 画布 + 画笔层（{W}×{H}，每层一笔、覆盖约 100×100 像素）")
-    r1, _ = bench(lambda: build_n(1), "render 4000\n", "1 个画笔层", reps)
-    r10, _ = bench(lambda: build_n(10), "render 4000\n", "10 个画笔层", reps)
-    r50, _ = bench(lambda: build_n(50), "render 4000\n", "50 个画笔层", reps)
+    r1, _ = bench(lambda: build_n(1), "render 4000\n", "1 个画笔层", reps, "m4")
+    r10, _ = bench(lambda: build_n(10), "render 4000\n", "10 个画笔层", reps, "m4")
+    r50, _ = bench(lambda: build_n(50), "render 4000\n", "50 个画笔层", reps, "m4")
     if r1 and r10 and r50:
         print(f"  每层边际：1→10 层 ≈ {(r10 - r1) / 9 * 1000:.1f}ms，"
               f"10→50 层 ≈ {(r50 - r10) / 40 * 1000:.1f}ms")
@@ -385,3 +434,6 @@ if __name__ == "__main__":
         print()
     if which in ("all", "m4"):
         m4()
+    if LEDGER:
+        print()
+        write_ledger()

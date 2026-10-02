@@ -747,6 +747,15 @@ print('文档数字 OK（命令 %d；verify.sh %d 步 / build_demo.sh %d 步，�
          muts_total, muts_killed, agents_bytes, AGENTS_BUDGET))
 PYD
 
+# 性能数字是**唯一一处**此前只靠人自觉的承诺：`bench_perf.py` 量的是墙钟时间，
+# 不许进门禁（换机器就红），于是"文档里的性能数字"没有任何东西对账——实测一句
+# **连数字都没有**的边界结论（"12MP <2s 对任何多一点层数都不成立"）在 perf 三轮
+# 之后仍然是错的。办法是把"测量"与"引用"分开：数字只能由 `bench_perf.py` 产出并
+# 写进 `bench/ledger.json`（账本），文档只能引用账本里的数。
+# 判别力已注入验证：抄错一个表格单元 / 把「不成立」写成「成立」/ 把每层边际或
+# 破线层数改掉 / 删掉一个标记块，四种都会红（见 PLAN 四十）。
+python3 bench_ledger.py
+
 echo "== 9/13 命令参数下界自检（读 tokens[N] 之前必须先卡住 N） =="
 # 每个命令开头的 `if tokens.length() < K` 是唯一的越界防线。K 写小了，
 # 命令**不报用法错、而是越界 panic**：进程从 cmd_* 里直接崩掉，用户看到调用栈
