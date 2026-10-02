@@ -27,6 +27,7 @@
 """
 import base64
 import json
+import re
 import statistics
 import struct
 import subprocess
@@ -34,6 +35,10 @@ import sys
 import time
 
 MOON = ["moon", "run", "--target", "native", "cli", "--release"]
+
+# 量内存时必须绕开 `moon run` 的 driver，直接跑编译产物（driver 自己的 RSS
+# 会把信号淹掉）。跑过一次 `moon build --target native --release` 才会存在。
+CLI_BIN = "_build/native/release/build/cli/cli.exe"
 
 
 def run_cli(cmds, label):
@@ -212,6 +217,107 @@ def selfcheck():
           f"（硬边蒙版与层完全同位，逐位相同才是对的：{s_none == s_hard}）")
 
 
+# ---------------------------------------------------------------------------
+# 实验三：内存模型 —— 峰值 RSS ≈ 斜率 × (画布像素数 × 算子数)
+#
+# 为什么单独量它：`edit_cost_error` 的判据是**时间**（像素·算子 ≤ 2e8，
+# 按实测 2 µs 换算 ≈ 400 秒）。但内存与时间同源 —— 每条算子都留一个整幅
+# 中间缓冲（`run_program` 的 `stages`，STAGE(n) 要能回看），每个**不同**的
+# BASE 选择子还留一个整幅浮点场（`FieldCache`）。于是时间预算**隐含**了一个
+# 内存上限，而那个上限此前没有任何地方写出来（PLAN-MVSL 里那句
+# 「24MP ≈ 384MB」是错的：24MP 单个浮点场就是 192MB）。
+#
+# 布局（读代码：`codec/png.mbt` 的 RgbaBuf.pixels 是 FixedArray[Int]、
+# `pixel/edit.mbt` 的 Field.v 是 FixedArray[Double]）：
+#   4 B/px 每条算子的中间缓冲（保留） + 8 B/px 每个不同选择子的场（保留）
+#   = 12 B/px/算子；实测斜率见下（低 K 处略高，含瞬时场与分配器高水位）。
+# ---------------------------------------------------------------------------
+
+def _prog_distinct(W, k):
+    """k 条算子、**互不相同**的 BASE 选择子（最坏内存情形：场缓存不共享）。
+
+    选择子必须真的不同（这里让 geo 窗的 x 逐条平移）：全用同一个选择子的话
+    `FieldCache` 只留一份场，量出来的斜率会系统性偏小。
+    """
+    ops = [
+        {
+            "id": f"e{i}",
+            "kind": "recolor",
+            "sel": {
+                "basis": "base",
+                "expr": {
+                    "t": "geo",
+                    "shape": "rect",
+                    # 逐条平移 → canonical 文本不同 → 缓存各留一份
+                    "w": {"x": i, "y": 0, "w": W, "h": W, "feather": 0},
+                },
+            },
+            "amount": 0.5,
+            "hue_deg": 30.0,
+        }
+        for i in range(k)
+    ]
+    return base64.b64encode(
+        json.dumps({"version": 1, "ops": ops, "guards": []}).encode()
+    ).decode()
+
+
+def _peak_rss_mb(cmds):
+    """跑一条命令链，返回其峰值 RSS（MB）。用 /usr/bin/time -l 量**子进程树**。
+
+    ⚠️ 必须直接跑 `_build/native/release/build/cli/cli.exe`，不能跑 `moon run`：
+    后者的 driver 进程自己的 RSS 会把信号淹掉（同"测量前先验测量前提"）。
+    ⚠️ macOS 的 `/usr/bin/time -l` 输出是「数字在前」——`5996544  maximum
+    resident set size`，单位是字节。第一版照着「标签在前」写正则，直接崩了。
+    """
+    r = subprocess.run(
+        ["/usr/bin/time", "-l", CLI_BIN], input=cmds, capture_output=True, text=True,
+        timeout=3600,
+    )
+    m = re.search(r"(\d+)\s+maximum resident set size", r.stderr)
+    if m is None:
+        print("  !! 读不出峰值 RSS（/usr/bin/time -l 的输出格式变了？）")
+        return None
+    bad = [l for l in r.stdout.splitlines() if '"error"' in l]
+    if bad:
+        print(f"  !! 链条里有错误，这次测量作废：{bad[0][:200]}")
+        return None
+    return int(m.group(1)) / 1e6
+
+
+def m3():
+    W = 1024
+    px = W * W
+    base = (f"session-open full_image\nnew {W} {W}\n"
+            f"add-rect id=l1 x=0 y=0 w={W} h={W} fill=#FF0000\n")
+    print(f"内存标定：{W}×{W} 画布，算子数 ↑，选择子两两不同（最坏情形）")
+    b = _peak_rss_mb(base + "mvsl-impact max=8\n")
+    if b is None:
+        return None
+    print(f"  K=0（基线，含引擎常驻）      {b:7.1f} MB")
+    prev_k, prev = 0, b
+    for k in (2, 4, 8, 12, 16):
+        mb = _peak_rss_mb(base + f"mvsl-set {_prog_distinct(W, k)}\nmvsl-impact max=8\n")
+        if mb is None:
+            return None
+        # MB → 字节：1e6（不是 2^20；/usr/bin/time 报的是十进制字节数）
+        bpo = (mb - b) * 1e6 / k / px
+        slope = (mb - prev) * 1e6 / (k - prev_k) / px
+        print(f"  K={k:<3d} {mb:7.1f} MB  增量 {(mb - b):7.1f} MB"
+              f"  = {bpo:5.2f} B/像素·算子（区间斜率 {slope:5.2f}）")
+        prev_k, prev = k, mb
+    # 判据落在**声明过的布局**上：12 B/px/算子 = 4（保留缓冲）+ 8（缓存场）。
+    # 实测低 K 处 ~14.4（瞬时场与分配器高水位随 K 摊薄），K↑ 收敛到 ~12.3。
+    last = (prev - b) * 1e6 / prev_k / px
+    print(f"  收敛斜率 {last:.2f} B/像素·算子（声明布局 4+8=12；"
+          f"低 K 高水位把它抬到 ~14）")
+    # 时间预算隐含的内存上限：ops×px ≤ 2e8，取实测上界 14.4 B/px 为保守值。
+    for c in (12.0, 14.4):
+        print(f"    ⇒ 按 {c:4.1f} B/像素·算子 与 2e8 像素·算子预算，"
+              f"最坏峰值 ≈ {c * 2e8 / 1e9:.1f} GB（**与画布尺寸无关**）")
+    return last
+
+
 if __name__ == "__main__":
     which = sys.argv[1] if len(sys.argv) > 1 else "all"
     if which in ("all", "selfcheck"):
@@ -222,3 +328,6 @@ if __name__ == "__main__":
         print()
     if which in ("all", "m2"):
         m2()
+        print()
+    if which in ("all", "m3"):
+        m3()
