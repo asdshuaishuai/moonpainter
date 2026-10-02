@@ -231,6 +231,17 @@ def m2(reps=3):
                   f"fill=#FF0000 opacity=0.5 radius=32\n")
         return s
 
+    def build_small(nl, sw, sh):
+        """小层：按网格摆开（每个层有自己的窗口，不是叠在同一点上）。"""
+        s = f"session-open full_image\nnew {W} {H}\n"
+        ncol = 5
+        for i in range(nl):
+            x = (i % ncol) * (sw + 8)
+            y = (i // ncol) * (sh + 8)
+            s += (f"add-rect id=l{i} x={x} y={y} w={sw} h={sh} "
+                  f"fill=#FF0000 opacity=0.5\n")
+        return s
+
     print(f"实验二：12MP 证伪线（{W}×{H} = {W*H/1e6:.1f}MP、{reps} 次取中位）")
     print("  出口用 `render 4000`（全分辨率 + PNG 编码）；"
           "⚠️ 裸 `render` 是 1024 预览，量不到 12MP")
@@ -242,10 +253,22 @@ def m2(reps=3):
     # 快速路径的内接盒各边内缩 rr 之后仍然只差角上那一圈 ⇒ 代价应当与"10 层"
     # 同量级。这一条是"圆角也进了快速路径"的机器对账对象（见 bench_ledger.py）。
     r10r, _ = bench(lambda: build_rounded(10), "render 4000\n", "10 层 + 圆角", reps, "m2")
+    # 小层缩放：几何层按 `paint_window` 裁窗 ⇒ 代价该随**层覆盖面积**走，不随
+    # 画布走。文档里"小层远便宜"这句此前是**没实测的推断**（还写着"别外推"），
+    # 这三条把它变成量到的数：1/16 画布、1/360 画布、以及 50 个小层。
+    r10s16, _ = bench(lambda: build_small(10, 1000, 750), "render 4000\n",
+                      "10 层 + 小层 1000×750", reps, "m2")
+    r10s, _ = bench(lambda: build_small(10, 200, 200), "render 4000\n",
+                    "10 层 + 小层 200×200", reps, "m2")
+    r50s, _ = bench(lambda: build_small(50, 200, 200), "render 4000\n",
+                    "50 层 + 小层 200×200", reps, "m2")
 
     print("\n  结论（只报量到的，不外推）：")
-    print("    口径：上面的层都是**整幅画布**的层。几何层已按 paint_window 裁窗，")
-    print("    小层远便宜（未实测）；Text/Raster/Group/Adjust 不裁窗。")
+    print("    口径：除标了「小层」的那几条，其余层都是**整幅画布**的层。")
+    print("    每种层的真实代价口径：几何层按 `paint_window` 裁窗（下有小层用例）；")
+    print("    Raster 只扫落笔窗口 `dabs_window`；Text 只写字形像素（代价随字数，")
+    print("    不随画布）；Group 递归子层、各自裁窗；Adjust 天然全画布（它作用于")
+    print("    其下全部像素，裁窗反而是错的）。")
     if r1:
         print(f"    1 层 = {r1:.2f}s ⇒ 「12MP 软 mask <2s」在**单层**下"
               f"{'成立' if r1 < 2.0 else '不成立'}")
@@ -254,6 +277,12 @@ def m2(reps=3):
         if per_layer > 0 and break_at is not None:
             print(f"    每层边际 ≈ {per_layer:.2f}s ⇒ 该线在约 "
                   f"{break_at:.1f} 层处就破了")
+    if r10 and r10s:
+        print(f"    小层缩放：10 层整幅 = {r10:.2f}s / 10 层 1/16 画布"
+              f"（1000×750）= {r10s16:.2f}s / 10 层 200×200 = {r10s:.2f}s"
+              f" ⇒ 小层只差固定成本")
+        print(f"    50 层 200×200 = {r50s:.2f}s（层数是 10 层的 5 倍，代价乘 "
+              f"{r50s / r10s:.2f}）⇒ 每层边际 ≈ {(r50s - r10s) / 40 * 1000:.1f}ms")
     if r10 and r10r:
         print(f"    10 层圆角（radius=32）= {r10r:.2f}s（矩形 10 层 = {r10:.2f}s）"
               f" ⇒ 圆角{'也进了快速路径' if r10r < r10 * 1.25 else '**没进**快速路径'}")
