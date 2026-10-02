@@ -169,6 +169,13 @@ fn cmd_mvsl_set(s : Session, tokens : Array[String]) -> String {
     Some(e) => return err(e)
     None => ()
   }
+  // 规模护栏（判据在 @core.edit_cost_error，与渲染/lint 共用同一句）。
+  // 装表时画布已知，所以这里能挡住绝大多数"太贵"的表；装完之后画布还能被
+  // `resize` 改大，那条路由 render 侧的同一句判据兜住。
+  let cost = @core.edit_cost_error(prog, doc.width, doc.height)
+  if cost != "" {
+    return err(cost)
+  }
   s.mvsl = prog
   mvsl_reply(
     "mvsl-set",

@@ -960,6 +960,21 @@ pub(all) struct ImpactStage {
 /// 执行代码，于是"分析出口量的是真渲染那一步"是构造性成立的，而不是靠
 /// 两处各自小心（本仓库的旧账：同一个判断两处实现，先烂的一定是没人读的
 /// 那处）。
+///|
+/// 渲染侧的编辑表规模闸：把文档画布与表交给 `@core.edit_cost_error`。
+///
+/// 单独一个小函数是为了让"画布尺寸从哪里取"只有一处说法（`doc.width`/
+/// `doc.height`），而不是在渲染函数里散着算。
+fn edit_cost_refusal(doc : @core.Document, prog : @core.EditProgram) -> String? {
+  let e = @core.edit_cost_error(prog, doc.width, doc.height)
+  if e == "" {
+    None
+  } else {
+    Some(e)
+  }
+}
+
+///|
 pub fn render_doc_with(
   doc : @core.Document,
   env : RenderEnv,
@@ -999,6 +1014,13 @@ pub fn impact_stages(
   env : RenderEnv,
   prog : @core.EditProgram,
 ) -> Result[(Array[ImpactStage], @codec.RgbaBuf), String] {
+  // 规模护栏：**执行时再判一次**（画布以这里为准）。
+  // 入口 `mvsl-set` 已经判过一次，但表装好之后画布还能被 `resize` 改大——
+  // "装的时候合法、渲染时才变贵"只能在这里拦住。判据与入口/lint 同一句。
+  match edit_cost_refusal(doc, prog) {
+    Some(e) => return Err(e)
+    None => ()
+  }
   // 不含图层级算子 → 原来的单段路径，**逐位不变**。
   if !@core.program_has_layer_scope(prog) {
     let base = render_layers(doc, env)

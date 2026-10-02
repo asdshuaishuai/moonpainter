@@ -309,13 +309,29 @@ fn luma_field(lc : Double, lh : Double, feather : Double, ctx : SelCtx) -> Field
 /// 空间软窗（rect/ellipse，边缘 smoothstep）。
 fn geo_field(g : @core.GeoWindow, shape : String, ctx : SelCtx) -> Field {
   let f = field_new(ctx.base.width, ctx.base.height)
+  let w = ctx.base.width
+  let h = ctx.base.height
+  // ⚠️ **逐像素的最内层里不许有"解释型"的工作**：这里曾经把它写成
+  // `if shape == "ellipse" { … } else { … }` 放在循环体里，等于**每个像素做一次
+  // 字符串比较**。现在把判断提到循环外、宽度与下标收成局部量。
+  //
+  // ⚠️ **但别以为这能提速——实测在噪声内**（1024×1024、10 条整幅 recolor、
+  // native release、`mvsl-impact`，各 3 次取中位）：改前 19.86 s / 1.894
+  // µs/(像素·算子)，改后 20.05 s / 1.912 µs——**没有可分辨的差异**。
+  // 真正的开销是**逐像素色彩变换**（OKLab/OKLCh 互转，手写 `msqrt`/`mcbrt`
+  // 牛顿迭代），约 1.5 µs/像素；选择子求值只占约 0.4。保留这个写法的理由
+  // 不是速度，而是**不依赖优化器**把字符串比较提出循环（wasm-gc 上未必做得到），
+  // 而它的代价为零。白盒测试「geo_field 逐位对账 window_membership」钉住这次
+  // 改写**没有改任何数值**。详见 PLAN 补遗十七。
+  let is_ellipse = shape == "ellipse"
+  let mut i = 0
   let mut y = 0
-  while y < ctx.base.height {
+  while y < h {
     let mut x = 0
-    while x < ctx.base.width {
+    while x < w {
       let px = x.to_double() + 0.5
       let py = y.to_double() + 0.5
-      let d = if shape == "ellipse" {
+      let d = if is_ellipse {
         ellipse_dist(px, py, g)
       } else {
         rect_dist(px, py, g)
@@ -338,7 +354,8 @@ fn geo_field(g : @core.GeoWindow, shape : String, ctx : SelCtx) -> Field {
       } else {
         soft_cover((g.feather - d) / g.feather, Smooth)
       }
-      f.v[y * ctx.base.width + x] = cov
+      f.v[i] = cov
+      i = i + 1
       x = x + 1
     }
     y = y + 1

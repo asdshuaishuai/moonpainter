@@ -1089,3 +1089,76 @@ test "lint 的归因要准：层算子改了栅格但最终图看不见时，不
   let r2 = run(s, "lint")
   assert_true(r2.contains("选择子一个像素都没命中"), msg="正控：没命中时要说没命中：\{r2}")
 }
+
+///|
+/// 造一张 `n` 条 recolor 算子（+ `g` 条断言）的规范 JSON。
+/// 选择子固定为「左半边」，与几何无关，只用来把表的规模堆起来。
+fn bulk_program_json(n : Int, g : Int) -> String {
+  let ops = StringBuilder()
+  let mut i = 0
+  while i < n {
+    if i > 0 {
+      ops.write_string(",")
+    }
+    ops.write_string(
+      "{\"id\":\"e\{i}\",\"kind\":\"recolor\",\"sel\":{\"basis\":\"base\",\"expr\":{\"t\":\"geo\",\"shape\":\"rect\",\"w\":{\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"feather\":0}}},\"amount\":0.5,\"hue_deg\":30.0}",
+    )
+    i = i + 1
+  }
+  let gs = StringBuilder()
+  let mut k = 0
+  while k < g {
+    if k > 0 {
+      gs.write_string(",")
+    }
+    gs.write_string(
+      "{\"id\":\"g\{k}\",\"sel\":{\"basis\":\"base\",\"expr\":{\"t\":\"luma\",\"w\":{\"l_center\":0.5,\"l_half\":0.4,\"feather\":0.2}}},\"max_de\":0.5,\"max_changed_ratio\":0.2}",
+    )
+    k = k + 1
+  }
+  "{\"version\":1,\"ops\":[\{ops.to_string()}],\"guards\":[\{gs.to_string()}]}"
+}
+
+///|
+/// **编辑表规模护栏**：入口拒绝 + 边界值 + resize 之后的执行侧再判。
+///
+/// 这一条守的是 PLAN-MVSL §5 风险清单里"巨大编辑表 DoS → 限额护栏"那一格。
+/// 实测过：没有护栏时 2000 条算子 × 256×256 画布要跑 287 秒（native），
+/// 5000 条装表只要 0.3 秒——**装得进去、然后任何渲染都跑不完**，
+/// 调用方拿不到任何提示。
+test "MVSL：编辑表规模护栏（条数 / 断言数 / 代价三个限额）" {
+  let s = scene("mvsl-limit")
+  // ① 边界值：恰好在上限上必须**放行**（判据两头都要咬——写成 `>=` 就会
+  //    把 256 条误拒，这条断言是那个变异的正控）。
+  let at = run(s, "mvsl-set \{b64_of(bulk_program_json(256, 0))}")
+  assert_true(at.contains("\"ops\":256"), msg=at)
+  // ② 越一条就必须拒，且报错要**回显实收数与上限**（只写"太大了"没法自查）。
+  let over = run(s, "mvsl-set \{b64_of(bulk_program_json(257, 0))}")
+  assert_true(over.contains("算子过多"), msg=over)
+  assert_true(over.contains("257 条"), msg=over)
+  assert_true(over.contains("上限 256 条"), msg=over)
+  // ③ 断言数独立计数：64 放行、65 拒。
+  let gat = run(s, "mvsl-set \{b64_of(bulk_program_json(1, 64))}")
+  assert_true(gat.contains("\"guards\":64"), msg=gat)
+  let gover = run(s, "mvsl-set \{b64_of(bulk_program_json(1, 65))}")
+  assert_true(gover.contains("保护断言过多"), msg=gover)
+  assert_true(gover.contains("上限 64 条"), msg=gover)
+  // ④ **代价限额（条数没超、画布很大）**：320×240 上 200 条 → 1.5e7 像素·算子，
+  //    远在上限 2e8 之内，装得进（条数 200 也在 256 之内，所以两条判据都不拦）。
+  let cheap = run(s, "mvsl-set \{b64_of(bulk_program_json(200, 0))}")
+  assert_true(cheap.contains("\"ok\":true"), msg=cheap)
+  // ⑤ **装载时合法、之后 `set-canvas` 放大 → 执行时必须拒**。这一条是
+  //    "只判入口"那个写法的反例：入口判过的表会被留下来，代价却在画布变大
+  //    之后才超（200 条 × 2048² = 8.4e8 像素·算子，是上限的 4.2 倍）。
+  //    渲染/分析两条出口都要拦（它们共用 `impact_stages`）。
+  let _ = run(s, "set-canvas 2048 2048")
+  let rnd = run(s, "render")
+  assert_true(rnd.contains("代价超出预算"), msg=rnd)
+  assert_true(rnd.contains("像素·算子"), msg=rnd)
+  let imp = run(s, "mvsl-impact max=8")
+  assert_true(imp.contains("代价超出预算"), msg=imp)
+  // ⑥ 缩小画布之后同一条表必须**重新放行**（判据不是"一旦超了就永久拉黑"）。
+  let _ = run(s, "set-canvas 320 240")
+  let back = run(s, "render")
+  assert_true(back.contains("\"ok\":true"), msg=back)
+}

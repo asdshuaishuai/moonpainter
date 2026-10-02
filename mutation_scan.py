@@ -180,8 +180,8 @@ MUTS = [
     (
         "N8", "几何采样丢掉半像素中心偏移",
         "pixel/edit.mbt",
-        "      let px = x.to_double() + 0.5\n      let py = y.to_double() + 0.5\n      let d = if shape == \"ellipse\" {",
-        "      let px = x.to_double()\n      let py = y.to_double()\n      let d = if shape == \"ellipse\" {",
+        "      let px = x.to_double() + 0.5\n      let py = y.to_double() + 0.5\n      let d = if is_ellipse {",
+        "      let px = x.to_double()\n      let py = y.to_double()\n      let d = if is_ellipse {",
         "killed",
     ),
     (
@@ -1527,11 +1527,58 @@ MUTS = [
         """        let _ = @core.mask_param_error(mk)""",
         "killed",
     ),
-]
+    (
+        "W1",
+        "编辑表条数判据写成 >= （恰好 256 条被误拒）",
+        "core/mvsl.mbt",
+        "  if n > MAX_EDIT_OPS {",
+        "  if n >= MAX_EDIT_OPS {",
+        "killed",
+    ),
+    (
+        "W2",
+        "编辑表断言数判据失效（65 条断言被放行）",
+        "core/mvsl.mbt",
+        "  if g > MAX_EDIT_GUARDS {",
+        "  if g > MAX_EDIT_GUARDS + 1000000 {",
+        "killed",
+    ),
+    (
+        "W3",
+        "编辑表代价判据失效（巨幅画布被放行）",
+        "core/mvsl.mbt",
+        "  if pxops > MAX_EDIT_PIXEL_OPS {",
+        "  if pxops > MAX_EDIT_PIXEL_OPS * 1.0E9 {",
+        "killed",
+    ),
+    (
+        "W4",
+        "入口 mvsl-set 不判规模（越界的表装得进 session）",
+        "agent/mvsl_cmds.mbt",
+        """  let cost = @core.edit_cost_error(prog, doc.width, doc.height)
+  if cost != "" {
+    return err(cost)
+  }""",
+        """  let _ = @core.edit_cost_error(prog, doc.width, doc.height)""",
+        "killed",
+    ),
+    (
+        "W5",
+        "渲染执行时不判规模（装表后 set-canvas 放大的路没人拦）",
+        "render/scene.mbt",
+        """  match edit_cost_refusal(doc, prog) {
+    Some(e) => return Err(e)
+    None => ()
+  }
+""",
+        """  let _ = edit_cost_refusal(doc, prog)
+""",
+        "killed",
+    ),
+    ]
 
 
 TEST_TIMEOUT = 900  # 秒；正常一轮全量测试约 1–2 分钟
-
 
 def run_native_tests():
     """跑一轮全量 native 测试。
