@@ -1779,6 +1779,20 @@ MUTS = [
         "killed",
     ),
     (
+        "Q25",
+        "dab 盒去掉 ±1 松弛（落笔窗口太紧：笔触边缘被静默裁掉一列像素）",
+        "render/scene.mbt",
+        """  let x0 = (l.x + d.x - d.r).to_int() - 1
+  let y0 = (l.y + d.y - d.r).to_int() - 1
+  let x1 = (l.x + d.x + d.r).to_int() + 1
+  let y1 = (l.y + d.y + d.r).to_int() + 1""",
+        """  let x0 = (l.x + d.x - d.r).to_int()
+  let y0 = (l.y + d.y - d.r).to_int()
+  let x1 = (l.x + d.x + d.r).to_int()
+  let y1 = (l.y + d.y + d.r).to_int()""",
+        "killed",
+    ),
+    (
         "Z9",
         "set-image 从『原地换像素』退化成『重造该层』（蒙版/标签/层序一起丢）",
         "agent/session.mbt",

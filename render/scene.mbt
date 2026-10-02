@@ -485,19 +485,33 @@ fn paint_raster(
   }
   let _ = env
   let scratch = @codec.rgba_new(buf.width, buf.height)
-  // 透明底
-  let total = scratch.width * scratch.height
-  let mut i = 0
-  while i < total {
-    scratch.pixels[i] = 0
-    i = i + 1
+  // ⚠️ `rgba_new` 的初值是**不透明黑**（0xFF000000），所以"没写过的地方是 0"
+  // 是错的——**要读的每一格都必须先清成透明**。旧实现清整幅、扫整幅：12MP 上
+  // 一次渲染白扫 1200 万像素 ×2（一笔小笔触也一样）。现在只清/只扫
+  // `paint_dabs` 回报的那个窗口——窗外从来没被写过、旧代码也是靠 `sa > 0` 跳过，
+  // 所以输出**逐位相同**。
+  // 窗口必须**先**算出来：scratch 初值是不透明黑，得先把自己要读的那块清成
+  // 透明，再落笔（顺序反过来就是把刚画的笔迹擦掉——实测被 4 条测试当场抓住）。
+  let (wx0, wy0, wx1, wy1) = match dabs_window(l, buf.width, buf.height) {
+    None => return // 一个 dab 都没落下：整层透明，连清零都不必
+    Some(w) => w
+  }
+  let mut wy = wy0
+  while wy < wy1 {
+    let row = wy * scratch.width
+    let mut wx = wx0
+    while wx < wx1 {
+      scratch.pixels[row + wx] = 0
+      wx = wx + 1
+    }
+    wy = wy + 1
   }
   paint_dabs(l, scratch)
-  // 合成：src alpha ← dab alpha × 层透明度 × 蒙版
-  let mut y = 0
-  while y < buf.height {
-    let mut x = 0
-    while x < buf.width {
+  // 合成：src alpha ← dab alpha × 层透明度 × 蒙版（只扫落笔窗口）
+  let mut y = wy0
+  while y < wy1 {
+    let mut x = wx0
+    while x < wx1 {
       let sp = scratch.pixels[y * buf.width + x]
       let sa = (sp >> 24) & 0xFF
       if sa > 0 {
@@ -519,19 +533,85 @@ fn paint_raster(
 ///|
 /// 逐 dab 圆斑绘制到透明缓冲，2×2 子采样 AA；erase=true 按覆盖度乘减
 /// 缓冲 alpha（destination-out）。笔色 alpha 通道作为落点浓度。
+///|
+/// 单个 dab 的落笔盒（夹到画布；空盒 = None）。**dab 盒只有这一处实现**：
+/// `paint_dabs` 与 `dabs_window` 都调它。分开各算一遍的话，一旦漂移（比如以后
+/// 把松弛从 ±1 改成 ±2），少的那个方向就是**静默被裁**——画面少一块而没有
+/// 任何东西会红。⚠️ `.to_int()` 是截断（负数朝零），别改成 floor。
+fn dab_box(
+  l : @core.Layer,
+  d : @core.Dab,
+  w : Int,
+  h : Int,
+) -> (Int, Int, Int, Int)? {
+  if d.r <= 0.0 {
+    return None
+  }
+  let x0 = (l.x + d.x - d.r).to_int() - 1
+  let y0 = (l.y + d.y - d.r).to_int() - 1
+  let x1 = (l.x + d.x + d.r).to_int() + 1
+  let y1 = (l.y + d.y + d.r).to_int() + 1
+  let px0 = if x0 < 0 { 0 } else { x0 }
+  let py0 = if y0 < 0 { 0 } else { y0 }
+  let px1 = if x1 > w { w } else { x1 }
+  let py1 = if y1 > h { h } else { y1 }
+  if px1 <= px0 || py1 <= py0 {
+    return None
+  }
+  Some((px0, py0, px1, py1))
+}
+
+///|
+/// 全部 dab 的落笔窗口（非空盒的并）= **真正可能被写过的像素集合**。
+/// `paint_raster` 用它决定清哪块、扫哪块：窗外从来没有被写过，旧实现也是靠
+/// `sa > 0` 跳过，所以只扫这窗输出**逐位相同**。没有落笔 → None。
+fn dabs_window(l : @core.Layer, w : Int, h : Int) -> (Int, Int, Int, Int)? {
+  let mut touched = false
+  let mut wx0 = 0
+  let mut wy0 = 0
+  let mut wx1 = 0
+  let mut wy1 = 0
+  for d in l.dabs {
+    match dab_box(l, d, w, h) {
+      None => continue
+      Some((px0, py0, px1, py1)) => {
+        if touched {
+          if px0 < wx0 {
+            wx0 = px0
+          }
+          if py0 < wy0 {
+            wy0 = py0
+          }
+          if px1 > wx1 {
+            wx1 = px1
+          }
+          if py1 > wy1 {
+            wy1 = py1
+          }
+        } else {
+          touched = true
+          wx0 = px0
+          wy0 = py0
+          wx1 = px1
+          wy1 = py1
+        }
+      }
+    }
+  }
+  if touched {
+    Some((wx0, wy0, wx1, wy1))
+  } else {
+    None
+  }
+}
+
+///|
 fn paint_dabs(l : @core.Layer, scratch : @codec.RgbaBuf) -> Unit {
   for d in l.dabs {
-    if d.r <= 0.0 {
-      continue
+    let (px0, py0, px1, py1) = match dab_box(l, d, scratch.width, scratch.height) {
+      None => continue
+      Some(b) => b
     }
-    let x0 = (l.x + d.x - d.r).to_int() - 1
-    let y0 = (l.y + d.y - d.r).to_int() - 1
-    let x1 = (l.x + d.x + d.r).to_int() + 1
-    let y1 = (l.y + d.y + d.r).to_int() + 1
-    let px0 = if x0 < 0 { 0 } else { x0 }
-    let py0 = if y0 < 0 { 0 } else { y0 }
-    let px1 = if x1 > scratch.width { scratch.width } else { x1 }
-    let py1 = if y1 > scratch.height { scratch.height } else { y1 }
     let r2 = d.r * d.r
     // 橡皮擦不受笔色 alpha 影响（恒全强度）；画笔的 AA 通道=落点浓度
     let dalpha = if d.erase { 1.0 } else { ((d.color >> 24) & 0xFF).to_double() / 255.0 }

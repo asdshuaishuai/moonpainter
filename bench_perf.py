@@ -330,6 +330,45 @@ def m3():
     return last
 
 
+# ---------------------------------------------------------------------------
+# 实验四：12MP + 一笔笔触（Raster 层的落笔窗口）
+# ---------------------------------------------------------------------------
+
+def m4(reps=3):
+    """`paint_raster` 过去每次都清整幅、扫整幅（12MP 上就是 1200 万像素 ×2），
+    而现在只清/只扫 `paint_dabs` 真正落过笔的那一窗。这个实验量的是"一笔小笔触
+    在大画布上"的代价——`m2` 全是整幅层，照不到这条路径。"""
+    W, H = 4000, 3000
+
+    def build():
+        return (
+            f"session-open full_image\nnew {W} {H}\n"
+            f"add-paint id=r1\n"
+            f"brush layer=r1 pts=2000,1500;2060,1520 r=40 color=#FF000080\n"
+        )
+
+    def build_n(nl):
+        s = f"session-open full_image\nnew {W} {H}\n"
+        for i in range(nl):
+            s += f"add-paint id=r{i}\n"
+            s += (f"brush layer=r{i} pts={100 + i * 400},{1500 + i * 100};"
+                  f"{160 + i * 400},{1520 + i * 100} r=40 color=#FF000080\n")
+        return s
+
+    print(f"实验四：12MP 画布 + 画笔层（{W}×{H}，每层一笔、覆盖约 100×100 像素）")
+    r1, _ = bench(lambda: build_n(1), "render 4000\n", "1 个画笔层", reps)
+    r10, _ = bench(lambda: build_n(10), "render 4000\n", "10 个画笔层", reps)
+    r50, _ = bench(lambda: build_n(50), "render 4000\n", "50 个画笔层", reps)
+    if r1 and r10 and r50:
+        print(f"  每层边际：1→10 层 ≈ {(r10 - r1) / 9 * 1000:.1f}ms，"
+              f"10→50 层 ≈ {(r50 - r10) / 40 * 1000:.1f}ms")
+        print("  （每层含 48MB 离屏缓冲的分配 + 初值填充，那部分窗口化去不掉；"
+              "窗口化去掉的是「清整幅 + 扫整幅」）")
+    print("  口径：层是**全画布**的 raster 层，笔触只落在约 100×100 的一角。"
+          "\n  旧实现每层还要清整幅 + 扫整幅（12MP 上 1200 万像素 ×2），"
+          "现在只清/只扫落笔窗口。")
+
+
 if __name__ == "__main__":
     which = sys.argv[1] if len(sys.argv) > 1 else "all"
     if which in ("all", "selfcheck"):
@@ -343,3 +382,6 @@ if __name__ == "__main__":
         print()
     if which in ("all", "m3"):
         m3()
+        print()
+    if which in ("all", "m4"):
+        m4()

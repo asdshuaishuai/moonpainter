@@ -1,7 +1,7 @@
 # MoonPainter — Agent 驱动的图层绘制引擎
 
 > 状态：**0.1.0（.mpd 容器 v2 + 参数化绘制 + AI 修图 demo + MVSL 确定性编辑 IR 引擎已落地：
-> native 283 项 / wasm-gc 281 项测试全绿；`./verify.sh` 十三步验证门全过）**。
+> native 285 项 / wasm-gc 283 项测试全绿；`./verify.sh` 十三步验证门全过）**。
 > 设计书 [DESIGN.md](./DESIGN.md) · 方案与验收 [PLAN.md](./PLAN.md) ·
 > MVSL 规划与评审对照 [PLAN-MVSL.md](./PLAN-MVSL.md) · AI 修图 demo 见下节。
 
@@ -324,7 +324,7 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
 - **P3 manifest 的 `counts` 无人校验**：把 `layers` 和 `assets` 计数互换全部测试通过——
   而 `counts` 正是工具/审阅者据以判断"容器里有什么"的对外事实。
 
-当前 169 个变异中 168 个被抓住，唯一存活的 M2 是**已确认的等价变异**。
+当前 170 个变异中 169 个被抓住，唯一存活的 M2 是**已确认的等价变异**。
 变异门自己也有一个静默失效模式：锚点文本被重构改掉或变得不唯一，那个变异就
 **再也没跑过**，而汇总里的「N 个变异全部通过」照旧好看（实测踩过：两个变异
 静静失效了一轮）。所以 `verify.sh#anchors` 用 `--check-anchors` 秒级校验
