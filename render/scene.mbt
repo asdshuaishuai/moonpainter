@@ -2017,13 +2017,9 @@ fn mask_cover_at(l : @core.Layer, px : Double, py : Double) -> Double {
     // 毛边路径：内距（圆角矩形/椭圆都算）减去噪声偏移，再做软/硬阈值。
     let d = mask_inner_dist(mask, dx, dy) - mask_edge_offset(mask.roughen, px, py)
     let rough_cover = if mask.feather > 0.0 {
-      if d <= 0.0 {
-        0.0
-      } else if d >= mask.feather {
-        1.0
-      } else {
-        d / mask.feather
-      }
+      // 蒙版软覆盖 = 共享原语的「朝内 + 线性」预设：
+      // t 从"覆盖为 0 的那一端"（边界）量起，即 t = 内距 / feather。
+      @pixel.soft_cover(d / mask.feather, @pixel.Linear)
     } else if d > 0.0 {
       1.0
     } else {
@@ -2033,13 +2029,7 @@ fn mask_cover_at(l : @core.Layer, px : Double, py : Double) -> Double {
   }
   let cover = if mask.feather > 0.0 {
     let d = mask_inner_dist(mask, dx, dy)
-    if d <= 0.0 {
-      0.0
-    } else if d >= mask.feather {
-      1.0
-    } else {
-      d / mask.feather
-    }
+    @pixel.soft_cover(d / mask.feather, @pixel.Linear)
   } else {
     let inside = match mask.kind {
       @core.ShapeKind::Ellipse => {

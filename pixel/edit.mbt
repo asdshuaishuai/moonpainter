@@ -320,7 +320,25 @@ fn geo_field(g : @core.GeoWindow, shape : String, ctx : SelCtx) -> Field {
       } else {
         rect_dist(px, py, g)
       }
-      f.v[y * ctx.base.width + x] = window_membership(d, g.feather, 1.0)
+      // geo 选择子软覆盖 = 共享原语的「朝外 + smoothstep」预设。
+      // `GeoWindow.feather` 在这里是**从窗边界向外**衰减到 0 的距离
+      // （不是"窗内羽化宽度"，方向与蒙版的 feather 相反——实测见
+      // `mvsl_wbtest.mbt` 的「软覆盖的方向」）。
+      //
+      // ⚠️ 两条都必须照抄旧实现，别`顺手化简`：
+      // ①`t` 用 `(feather - d) / feather`，**不是** `1.0 - d / feather`——
+      //   两者数学等价但浮点舍入不同（feather=3,d=1 时分别是 …666 与 …667），
+      //   化简就等于悄悄改了每个软边像素；
+      // ②`feather <= 0` 必须单独走硬边。若照公式算 `t=(0-d)/0`，边界上恰好
+      //   `d=0` 会得到 `0/0 = NaN`（旧实现对 `d<=0` 给 1.0，这里照旧）。
+      //   注：`soft_cover` 现在也接住 NaN（全函数），所以漏掉本分支不会再
+      //   "挂死"，但仍会给出错的值——两道都要在。
+      let cov = if g.feather <= 0.0 {
+        if d <= 0.0 { 1.0 } else { 0.0 }
+      } else {
+        soft_cover((g.feather - d) / g.feather, Smooth)
+      }
+      f.v[y * ctx.base.width + x] = cov
       x = x + 1
     }
     y = y + 1

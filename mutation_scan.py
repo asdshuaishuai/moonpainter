@@ -173,8 +173,8 @@ MUTS = [
     (
         "N7", "几何选择子丢掉羽化（硬边）",
         "pixel/edit.mbt",
-        "      f.v[y * ctx.base.width + x] = window_membership(d, g.feather, 1.0)",
-        "      f.v[y * ctx.base.width + x] = window_membership(d, g.feather, 0.0)",
+        "      let cov = if g.feather <= 0.0 {\n        if d <= 0.0 { 1.0 } else { 0.0 }\n      } else {\n        soft_cover((g.feather - d) / g.feather, Smooth)\n      }",
+        "      let cov = if d <= 0.0 { 1.0 } else { 0.0 }",
         "killed",
     ),
     (
@@ -1439,11 +1439,63 @@ MUTS = [
         "killed",
     ),
     (
+        "U28",
+        "共享软覆盖原语不再是全函数（NaN 会原样漏出，重新埋下挂死的可能）",
+        "pixel/color.mbt",
+        """  if !(t > 0.0) {
+    return 0.0
+  }""",
+        """  if t <= 0.0 {
+    return 0.0
+  }""",
+        "killed",
+    ),
+    (
+        "U26",
+        "geo 选择子丢掉 feather<=0 的硬边分支（边界 d=0 处出 NaN）",
+        "pixel/edit.mbt",
+        """      let cov = if g.feather <= 0.0 {
+        if d <= 0.0 { 1.0 } else { 0.0 }
+      } else {
+        soft_cover((g.feather - d) / g.feather, Smooth)
+      }""",
+        """      let cov = soft_cover((g.feather - d) / g.feather, Smooth)""",
+        "killed",
+    ),
+    (
+        "U27",
+        "geo 选择子的 t 化简成 1-d/feather（数学等价但浮点舍入不同）",
+        "pixel/edit.mbt",
+        """        soft_cover((g.feather - d) / g.feather, Smooth)""",
+        """        soft_cover(1.0 - d / g.feather, Smooth)""",
+        "killed",
+    ),
+    (
+        "U24",
+        "共享软覆盖原语的 Linear 预设被换成 Smooth（蒙版羽化曲线静默变陡）",
+        "pixel/color.mbt",
+        """    Linear => t
+    Smooth => smoothstep(t)""",
+        """    Linear => smoothstep(t)
+    Smooth => smoothstep(t)""",
+        "killed",
+    ),
+    (
+        "U25",
+        "共享软覆盖原语的 Smooth 预设退化成线性（选择子软窗边界不再连续可导）",
+        "pixel/color.mbt",
+        """    Linear => t
+    Smooth => smoothstep(t)""",
+        """    Linear => t
+    Smooth => t""",
+        "killed",
+    ),
+    (
         "U23",
         "geo 选择子的软覆盖方向反了（边界处就衰减，窗内反而落选）",
         "pixel/edit.mbt",
-        """      f.v[y * ctx.base.width + x] = window_membership(d, g.feather, 1.0)""",
-        """      f.v[y * ctx.base.width + x] = window_membership(g.feather + d, g.feather, 1.0)""",
+        """        soft_cover((g.feather - d) / g.feather, Smooth)""",
+        """        soft_cover(d / g.feather, Smooth)""",
         "killed",
     ),
     (
@@ -1478,17 +1530,43 @@ MUTS = [
 ]
 
 
+TEST_TIMEOUT = 900  # 秒；正常一轮全量测试约 1–2 分钟
+
+
 def run_native_tests():
-    r = subprocess.run(
-        ["moon", "test", "--target", "native"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-    )
-    return r.stdout + r.stderr
+    """跑一轮全量 native 测试。
+
+    ⚠️ **必须有超时。** 实测撞到过一种变异：把 `feather<=0` 的硬边分支删掉，
+    边界上算出 `0/0 = NaN`，NaN 漏进下游某个带比较的循环，测试**永不结束**
+    （`moon test -p moonpainter/pixel` 挂了 40 分钟、日志一个字节都没有）。
+    当时变异门没有超时，于是**整个门跟着一起挂死**——比"漏掉一条变异"更糟，
+    因为连"被抓住 N 个"的汇总都拿不到。超时把这种变异判成 KILLED
+    （它确实被抓住了：测试跑不完就是最响的失败），而不是让门一起停摆。
+    （那处 NaN 已同时修成"原语不许输出 NaN"，这里是第二道保险。）
+    """
+    try:
+        r = subprocess.run(
+            ["moon", "test", "--target", "native"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=TEST_TIMEOUT,
+        )
+        return r.stdout + r.stderr
+    except subprocess.TimeoutExpired as e:
+        def dec(x):
+            if x is None:
+                return ""
+            return x if isinstance(x, str) else x.decode("utf-8", "replace")
+
+        return dec(e.stdout) + dec(e.stderr) + "\n@@TIMEOUT@@\n"
 
 
 def judge(out):
+    if "@@TIMEOUT@@" in out:
+        # 测试没跑完（挂死）。这不是"存活"——变异确实把行为改坏了，
+        # 而且坏得很明显（跑不完）。详见 run_native_tests 的注释。
+        return "KILLED", f"测试挂死（超过 {TEST_TIMEOUT}s 未结束）"
     summary = [l for l in out.splitlines() if l.startswith("Total tests")]
     crashed = "exited with signal" in out or "SIGABRT" in out
     if not summary:

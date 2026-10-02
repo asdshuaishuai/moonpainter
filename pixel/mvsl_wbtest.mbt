@@ -1010,3 +1010,200 @@ test "软覆盖的方向：geo 选择子朝窗外、蒙版朝窗内（同名 fea
     msg="窗内应当是满覆盖（geo 的过渡带不在窗内）",
   )
 }
+
+///|
+/// **共享原语 ⇄ 两处软覆盖的等价性**（本轮"统一"的全部内容）。
+///
+/// `soft_cover(t, curve)` 是唯一的软覆盖原语，两处各自是它的一个**预设**：
+///   * 蒙版（朝内、线性）：`t = 内距 / feather`，`Linear`；
+///   * geo 选择子（朝外、smoothstep）：`t = 1 - 外距 / half`，`Smooth`。
+/// 下面逐点断言"预设复现旧实现的每一个值"——**不是近似，是逐值相同**。
+/// 这条测试的作用是：以后谁把 `soft_cover` 改坏（或把某一侧的预设写错），
+/// 这里立刻红，而不是等到某张渲染图变了才发现。
+///
+/// ⚠️ 为什么必须两处都钉：只钉一边的话，"把蒙版也改成 Smooth"这种变异会
+/// 存活（它只改了一侧的数值）。**两边的曲线都是承诺**。
+test "共享软覆盖原语：两侧预设逐值复现各自的旧实现（Linear 蒙版 / Smooth 选择子）" {
+  let fe = 8.0
+  // ① 蒙版侧：cover(d_in) == d_in/fe（0..fe 线性，两端夹住）
+  let mut d = 0.0
+  while d <= 10.0 {
+    let expect = if d <= 0.0 {
+      0.0
+    } else if d >= fe {
+      1.0
+    } else {
+      d / fe
+    }
+    let got = soft_cover(d / fe, Linear)
+    assert_eq(got, expect, msg="蒙版预设在内距 \{d} 处与旧实现不符")
+    d = d + 0.25
+  }
+  // ② 选择子侧：**直接与旧实现 `window_membership(d, feather, 1.0)` 对账**。
+  //    这比"和 1-smoothstep(x) 比"强得多：后者只是数学等价式，浮点上未必
+  //    逐位相同（`(f-d)/f` 与 `1.0-d/f` 在 f=3,d=1 时就差最后一位），
+  //    而这里比的是**旧代码真正算的那个表达式**。
+  let mut o = 0.0
+  while o <= 10.0 {
+    let old = window_membership(o, fe, 1.0)
+    let got = if fe <= 0.0 {
+      if o <= 0.0 { 1.0 } else { 0.0 }
+    } else {
+      soft_cover((fe - o) / fe, Smooth)
+    }
+    assert_eq(got, old, msg="选择子预设在外距 \{o} 处与旧实现 window_membership 不符")
+    o = o + 0.25
+  }
+  // ③ **feather=0（默认值）必须走硬边且不产生 NaN**——这条是实测事故的回归。
+  //    按公式 `(0-d)/0` 在 d=0 处是 `0/0 = NaN`，而 NaN 既不 ≤0 也不 ≥1，
+  //    会从 soft_cover 的夹取分支底下漏出去，**让整包测试挂死 40 分钟**。
+  let mut z = 0.0 - 2.0
+  while z <= 2.0 {
+    let old0 = window_membership(z, 0.0, 1.0)
+    let got0 = if 0.0 <= 0.0 {
+      if z <= 0.0 { 1.0 } else { 0.0 }
+    } else {
+      soft_cover((0.0 - z) / 0.0, Smooth)
+    }
+    assert_true(got0 == got0, msg="feather=0 在 d=\{z} 处产生了 NaN")
+    assert_eq(got0, old0, msg="feather=0 的硬边与旧实现不符（d=\{z}）")
+    z = z + 0.25
+  }
+  // ③ 两个预设**确实不同**（否则"统一"就成了"把两边合并成一种"，
+  //    而那会静默改掉一边的渲染字节）。这条是判别力自证。
+  let mut differing = 0
+  let mut k = 0
+  while k <= 40 {
+    let t = k.to_double() / 40.0
+    if soft_cover(t, Linear) != soft_cover(t, Smooth) {
+      differing = differing + 1
+    }
+    k = k + 1
+  }
+  assert_true(differing > 20, msg="Linear 与 Smooth 应当处处不同（除了 t=0/1），实际只差 \{differing} 点")
+  // ④ 两端点必须严格夹住（0 端 0、1 端 1，且越界被夹）
+  assert_eq(soft_cover(0.0, Linear), 0.0)
+  assert_eq(soft_cover(1.0, Linear), 1.0)
+  assert_eq(soft_cover(0.0, Smooth), 0.0)
+  assert_eq(soft_cover(1.0, Smooth), 1.0)
+  assert_eq(soft_cover(-3.0, Smooth), 0.0, msg="越界应夹到 0")
+  assert_eq(soft_cover(3.0, Smooth), 1.0, msg="越界应夹到 1")
+  // ⑤ 中点两侧都恰好 0.5（互为镜像的对称点，是"方向相反"的直接推论）
+  assert_eq(soft_cover(0.5, Linear), 0.5)
+  assert_eq(soft_cover(0.5, Smooth), 0.5)
+  // ⑥ **全函数性：NaN 进、不许 NaN 出。** 判据刻意写成 `!(t > 0.0)` 就是为这
+  //    一条。这不是洁癖——实测某处调用点写出 `0/0` 时，NaN 会从两个夹取分支
+  //    底下漏进下游循环，**让整包测试挂死**（比"数值错"难查得多）。把原语变
+  //    全函数之后，同类调用错误退化成"数值不对"，秒级被断言抓住。
+  let nan = 0.0 / 0.0
+  let inf = 1.0 / 0.0
+  for curve in [Linear, Smooth] {
+    let v = soft_cover(nan, curve)
+    assert_true(v == v, msg="soft_cover(NaN) 不许是 NaN——它必须是全函数")
+    assert_eq(v, 0.0, msg="NaN 应退化成 0（最保守的「不覆盖」）")
+    assert_eq(soft_cover(inf, curve), 1.0, msg="+inf 应夹到 1")
+    assert_eq(soft_cover(0.0 - inf, curve), 0.0, msg="-inf 应夹到 0")
+  }
+}
+
+///|
+/// **`feather=0` 的几何选择子必须给出精确的 0/1，绝不许出现 NaN。**
+///
+/// 这条是实测事故的回归：把 geo 的选择子改走共享原语 `soft_cover` 时，
+/// 我按公式写成 `t = 1.0 - d / feather`。`feather` 的**默认值就是 0**，
+/// 于是边界上恰好 `d = 0` 的像素算成 `1.0 - 0.0/0.0 = 1.0 - NaN = NaN`；
+/// 而 NaN 既不 `<= 0` 也不 `>= 1`，从 `soft_cover` 两个夹取分支底下漏了出去。
+/// 后果不是"报错"而是**整包测试挂死**（NaN 漏进下游一个带比较的循环，
+/// 循环永不终止）——`moon test -p moonpainter/pixel` 卡了 40 分钟没有任何输出。
+///
+/// 修法是 `feather <= 0` 单独走硬边（照抄旧实现对 `d <= 0` 给 1.0）。
+/// 这条测试的作用：把"NaN 不许出现"变成一句话。**数值断言必须能抓住 NaN**
+/// ——`assert_eq(f.v[k], 1.0)` 对 NaN 会失败，所以逐点断言就够了；
+/// 但要显式写一条 `f.v[k] != f.v[k]`（NaN 自比不等的判据），
+/// 因为"没报错"不等于"不是 NaN"。
+test "几何选择子 feather=0（默认值）：边界像素是精确 0/1，不许是 NaN" {
+  let base = mk_buf(16, 16)
+  fill(base, 0, 0, 16, 16, argb(200, 200, 200))
+  let ctx = SelCtx::new(base)
+  // 旧实现的硬边：`d <= 0` 给 1.0（矩形内距在内部为 0），其余 0.0
+  let g : @core.GeoWindow = { x: 0.0, y: 0.0, w: 8.0, h: 16.0, feather: 0.0 }
+  let f = geo_field(g, "rect", ctx)
+  let mut nan = 0
+  let mut bad = 0
+  let mut k = 0
+  while k < 256 {
+    let v = f.v[k]
+    // NaN 的唯一自洽判据：它不等于自己
+    if v != v {
+      nan = nan + 1
+    } else if v != 0.0 && v != 1.0 {
+      bad = bad + 1
+    }
+    k = k + 1
+  }
+  assert_eq(nan, 0, msg="feather=0 的几何选择子出现了 \{nan} 个 NaN（就是它把测试挂死的）")
+  assert_eq(bad, 0, msg="feather=0 必须是硬边（只有 0 与 1），却有 \{bad} 个中间值")
+  // 正控：窗内/窗外各取一个点，确认"硬边"真的是硬边而不是恒 0 或恒 1
+  assert_eq(f.v[0 * 16 + 0], 1.0, msg="窗内应满覆盖")
+  assert_eq(f.v[0 * 16 + 15], 0.0, msg="窗外应不覆盖")
+  // `feather` 为负同样要走硬边（入口会拒，但手改容器能绕过）——不许出现 NaN
+  let gneg : @core.GeoWindow = { x: 0.0, y: 0.0, w: 8.0, h: 16.0, feather: 0.0 - 3.0 }
+  let fneg = geo_field(gneg, "rect", ctx)
+  let mut nan2 = 0
+  let mut j = 0
+  while j < 256 {
+    if fneg.v[j] != fneg.v[j] {
+      nan2 = nan2 + 1
+    }
+    j = j + 1
+  }
+  assert_eq(nan2, 0, msg="负 feather 也不许产生 NaN，实际 \{nan2} 个")
+}
+
+///|
+/// **`geo_field`（生产路径）与旧实现 `window_membership` 逐位对账。**
+///
+/// 上一条测试拿 `soft_cover(...)` 与 `window_membership(...)` 对账，但它
+/// **没经过 `geo_field`**——所以"把 `geo_field` 里的 `(feather-d)/feather`
+/// 化简成 `1.0-d/feather`"这种变异照样存活（实测 U27 SURVIVED）。
+/// 教训：**等价性测试必须打在真正被调用的那条路径上**，否则它只是在自证。
+///
+/// 这里逐像素比 `geo_field` 的输出与 `window_membership(rect_dist(...),
+/// g.feather, 1.0)`。因为 `rect_dist` 在窗内恒 0、在窗外是真实像素距离，
+/// 采样点覆盖了硬边（feather=0）、线性区与两端，**逐位**（`assert_eq` 比
+/// double 的全部精度），所以任何浮点改写都会被抓住。
+test "geo_field 逐位对账 window_membership（等价性必须打在真路径上）" {
+  let base = mk_buf(32, 32)
+  fill(base, 0, 0, 32, 32, argb(200, 200, 200))
+  let ctx = SelCtx::new(base)
+  // feather=3 是特意挑的：`(3-1)/3 = 0.6666666666666666` 而
+  // `1 - 1/3 = 0.6666666666666667`，两个写法在这一位上分得开。
+  for fe in [0.0, 3.0, 7.5] {
+    for shape in ["rect", "ellipse"] {
+      let g : @core.GeoWindow = { x: 4.0, y: 5.0, w: 11.0, h: 13.0, feather: fe }
+      let f = geo_field(g, shape, ctx)
+      let mut y = 0
+      while y < 32 {
+        let mut x = 0
+        while x < 32 {
+          let px = x.to_double() + 0.5
+          let py = y.to_double() + 0.5
+          let d = if shape == "ellipse" {
+            ellipse_dist(px, py, g)
+          } else {
+            rect_dist(px, py, g)
+          }
+          let old = window_membership(d, g.feather, 1.0)
+          let got = f.v[y * 32 + x]
+          assert_eq(
+            got,
+            old,
+            msg="feather=\{fe} shape=\{shape} 在 (\{x},\{y}) 与旧实现不同：\{got} vs \{old}",
+          )
+          x = x + 1
+        }
+        y = y + 1
+      }
+    }
+  }
+}
