@@ -223,6 +223,48 @@ fn arg_d(
 }
 
 ///|
+/// **位图层的盒子跟着「内容」走**——这是"盒子"这件事的第二处（第一处是
+/// `agent.session` 的 `text_box`，文本层）。
+///
+/// 渲染器把资产**拉伸到盒子**（`paint_layer`：`sx = lx / w * img.width`），
+/// 所以"给一张 400×300 的图却留着缺省 100×100 的盒"不是无害的默认值：画面被
+/// 静默压成正方形，而回包里 `asset_size` 还老老实实写 400x300 ——同一个信封里
+/// 两个字段描述的不是同一件事（本仓库那类最难的 bug：**看起来成功了**）。
+///
+/// 规则（与文本层的占位盒同一条）：**都没给** → 盒 = 资产像素尺寸；
+/// **只给一边** → 另一边按原比例推（不许把长宽比悄悄改掉）；**两边都给** →
+/// 听调用方的（他要的就是那个框）。范围检查**不在这里**：显式给的值由
+/// `build_shape_layer` 那唯一一句话判（`w/h 必须为正`），推出来的值在正数
+/// 输入下必然为正——同一句话不抄两遍。
+pub fn image_box(
+  m : Map[String, String],
+  iw : Int,
+  ih : Int,
+) -> Result[(Double, Double), String] {
+  let w_given = m.get("w") is Some(_)
+  let h_given = m.get("h") is Some(_)
+  if !w_given && !h_given {
+    return Ok((iw.to_double(), ih.to_double()))
+  }
+  let w = match arg_d(m, "w", 0.0) {
+    Ok(v) => v
+    Err(e) => return Err(e)
+  }
+  let h = match arg_d(m, "h", 0.0) {
+    Ok(v) => v
+    Err(e) => return Err(e)
+  }
+  if w_given && h_given {
+    return Ok((w, h))
+  }
+  let ratio = iw.to_double() / ih.to_double()
+  if w_given {
+    return Ok((w, w / ratio))
+  }
+  Ok((h * ratio, h))
+}
+
+///|
 /// 递归替换层（就地替换数组槽位；children 数组是引用，可变）。
 pub fn update_layer(
   layers : Array[@core.Layer],

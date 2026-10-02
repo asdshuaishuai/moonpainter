@@ -1168,3 +1168,103 @@ test "字典承诺的参数必须真的认：erase 不收 color=（恒全强度�
   let b = run(s, "brush layer=l1 pts=10,10;20,20 r=4 color=#FF000080")
   assert_true(b.contains("\"ok\":true"), msg="brush 应接受 color=：\{b}")
 }
+
+///|
+/// 造一张 `w`×`h` 的纯色 PNG 的 base64（位图命令的测试夹具）。
+fn solid_png_b64(w : Int, h : Int, hex : String) -> String {
+  let img = @codec.rgba_new(w, h)
+  @codec.fill_rect_rgba(img, 0, 0, w, h, @codec.color_from_hex(hex))
+  @base64.encode(@codec.png_encode(img))
+}
+
+///|
+test "add-image：盒子跟着内容走 —— 缺省不再是 100×100，只给一边时不许改长宽比" {
+  // 渲染器把资产**拉伸到盒子**（`paint_layer`：`sx = lx / w * img.width`），
+  // 所以"给一张 400×300 的图却留着缺省 100×100 的盒"是**静默压扁**：回包里
+  // `asset_size` 写 400x300、`query-layer` 说 w=100 h=100，画面被压成正方形。
+  // 规则与文本层的占位盒同一条：都没给 → 盒 = 资产像素尺寸；只给一边 → 另一边
+  // 按原比例推；两边都给 → 听调用方的。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 400 300")
+  let b64 = solid_png_b64(200, 100, "#2266CC")
+  // ① 都不给 → 盒 = 200×100
+  let r1 = run(s, "add-image b64=\{b64} id=a")
+  assert_true(r1.contains("\"asset_size\":\"200x100\""), msg=r1)
+  assert_true(r1.contains("\"w\":200"), msg=r1)
+  assert_true(r1.contains("\"h\":100"), msg=r1)
+  let q1 = run(s, "query-layer a")
+  assert_true(q1.contains("\"w\":200,"), msg=q1)
+  assert_true(q1.contains("\"h\":100,"), msg=q1)
+  // ② 只给 w=80 → h 按 2:1 推成 40（**不许**留缺省 100 把比例改掉）
+  let r2 = run(s, "add-image b64=\{b64} id=b w=80")
+  assert_true(r2.contains("\"w\":80"), msg=r2)
+  assert_true(r2.contains("\"h\":40"), msg=r2)
+  // ③ 只给 h=30 → w 推成 60
+  let r3 = run(s, "add-image b64=\{b64} id=c h=30")
+  assert_true(r3.contains("\"w\":60"), msg=r3)
+  assert_true(r3.contains("\"h\":30"), msg=r3)
+  // ④ 两边都给 → 听调用方的（他就是要那个框，哪怕变形）
+  let r4 = run(s, "add-image b64=\{b64} id=d w=40 h=40")
+  assert_true(r4.contains("\"w\":40"), msg=r4)
+  assert_true(r4.contains("\"h\":40"), msg=r4)
+  // ⑤ 正控：显式的非法值仍由 `build_shape_layer` 那唯一一句话拒
+  let bad = run(s, "add-image b64=\{b64} id=e w=0")
+  assert_true(bad.has_prefix("{\"error\":\""), msg=bad)
+}
+
+///|
+test "set-image：原地换图（层序/蒙版/标签/透明度/翻转都不丢），非位图层拒" {
+  // 对偶于 `set-text`：此前换图只能 delete + add-image，层序/蒙版/标签/透明度/
+  // 翻转/旋转全丢，而且重加会把它推到栈顶（改变与相邻层的叠放关系）。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 200 150")
+  let b64a = solid_png_b64(200, 100, "#CC3366")
+  let b64b = solid_png_b64(300, 300, "#33CC66")
+  let _ = run(s, "add-rect x=0 y=0 w=50 h=50 fill=#111111FF id=below")
+  let _ = run(s, "add-image b64=\{b64a} id=pic")
+  let _ = run(s, "add-rect x=0 y=0 w=10 h=10 fill=#222222FF id=above")
+  // 给 pic 挂上"会丢"的那些属性
+  let _ = run(s, "tag pic hero")
+  let _ = run(s, "add-mask pic kind=rect x=0 y=0 w=50 h=50")
+  let _ = run(s, "visible pic false")
+  let _ = run(s, "rotate pic 30")
+  let before = run(s, "query-layer pic")
+  let _ = run(s, "visible pic true")
+  assert_true(before.contains("\"mask\":{"), msg=before)
+  // 换图：只有 asset/盒子变
+  let r = run(s, "set-image pic b64=\{b64b}")
+  assert_true(r.contains("\"op\":\"set-image\""), msg=r)
+  assert_true(r.contains("\"asset_size\":\"300x300\""), msg=r)
+  let after = run(s, "query-layer pic")
+  // ① 资产真的换了（sha 不同）
+  assert_true(after.contains("\"id\":\"pic\""), msg=after)
+  let _ = run(s, "visible pic true")
+  // ② 其余属性一个没丢
+  let q = run(s, "query-layer pic")
+  assert_true(q.contains("\"rot\":30,"), msg=q)
+  assert_true(q.contains("\"tags\":[\"hero\"]"), msg=q)
+  assert_true(q.contains("\"mask\":{"), msg=q)
+  // ③ 层序没变：pic 仍夹在 below 与 above 之间
+  let l = run(s, "list-layers")
+  let ib = l.find("below").unwrap_or(-1)
+  let ip = l.find("pic").unwrap_or(-1)
+  let ia = l.find("above").unwrap_or(-1)
+  assert_true(ib >= 0 && ip > ib && ia > ip, msg="层序必须保持 below < pic < above：\{l}")
+  // ④ 非位图层拒（set-image 只改像素）
+  let e = run(s, "set-image below b64=\{b64b}")
+  assert_true(e.has_prefix("{\"error\":\""), msg=e)
+  // ⑤ 不给 b64 拒（换图必须给新像素，缺省 = 什么都不做）
+  let e2 = run(s, "set-image pic")
+  assert_true(e2.has_prefix("{\"error\":\""), msg=e2)
+  // ⑥ 坏载荷拒，且**一个字节都不许改**（指纹不变）
+  let fp_before = run(s, "fingerprint")
+  let e3 = run(s, "set-image pic b64=!!!not-base64!!!")
+  assert_true(e3.has_prefix("{\"error\":\""), msg=e3)
+  let fp_after = run(s, "fingerprint")
+  assert_eq(fp_before, fp_after, msg="坏载荷必须在改文档之前就拒（指纹不许变）")
+  // ⑦ lint 干净
+  let lint = run(s, "lint")
+  assert_true(lint.contains("\"violations\":0"), msg=lint)
+}

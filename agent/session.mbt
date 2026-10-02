@@ -234,6 +234,7 @@ pub fn exec(s : Session, line : String) -> String {
     "add-polygon" => cmd_add_shape(s, tokens, @core.ShapeKind::Polygon, "add-polygon")
     "add-line" => cmd_add_shape(s, tokens, @core.ShapeKind::Line, "add-line")
     "add-image" => cmd_add_image(s, tokens)
+    "set-image" => cmd_set_image(s, tokens)
     "set-style" => cmd_set_style(s, tokens)
     "move" => cmd_move(s, tokens)
     "resize" => cmd_resize(s, tokens)
@@ -608,29 +609,22 @@ fn cmd_add_shape(
 }
 
 ///|
-fn cmd_add_image(s : Session, tokens : Array[String]) -> String {
-  let doc = match require_doc(s) {
-    Ok(d) => d
-    Err(e) => return err(e)
-  }
-  match check_kv_args(tokens, 1, add_image_keys(), "add-image") {
-    Ok(_) => ()
-    Err(e) => return err(e)
-  }
-  let m = kv_args(tokens, 1)
-  let b64 = match m.get("b64") {
-    Some(v) => v
-    None => return err("add-image 需要 b64=<png base64>")
-  }
-  let bytes : Bytes = @base64.decode(b64) catch {
-    _ => return err("b64 载荷解码失败")
-  }
+/// 登记一份 PNG 资产（内容寻址、幂等）：返回 `(hash, 宽, 高)`。
+///
+/// 两张表要同时维护：`s.assets` 是**只增**的字节登记簿（撤销要把字节还回来），
+/// `doc.assets` 是写进 canonical design.json 的**当前引用表**。**一处实现**：
+/// `add-image` 与 `set-image` 共用——各登记一遍必然有一处先烂（只塞登记簿忘了
+/// 引用表，`save` 就会丢资产；只塞引用表，渲染时 `env.assets` 取不到位图）。
+fn place_asset(
+  s : Session,
+  doc : @core.Document,
+  bytes : Bytes,
+) -> Result[(String, Int, Int), String] {
   let img = match @codec.png_decode(bytes) {
     Ok(i) => i
-    Err(e) => return err("PNG 解码失败：\{e}")
+    Err(e) => return Err("PNG 解码失败：\{e}")
   }
   let hash = @base.sha256_hex(bytes)
-  // 登记资产（幂等）
   let mut already = false
   for pair in s.assets {
     if pair.0 == hash {
@@ -649,6 +643,43 @@ fn cmd_add_image(s : Session, tokens : Array[String]) -> String {
   if !doc_has {
     doc.assets.push({ hash, width: img.width, height: img.height })
   }
+  Ok((hash, img.width, img.height))
+}
+
+///|
+/// `b64=` 载荷 → 字节（两条位图命令共用的那一句话）。**PNG 解码不在这里**：
+/// 它在 `place_asset` 里、登记资产**之前**——这样"载荷损坏"必然在改文档之前失败
+/// （唯一一处解码，而不是每条命令各解一遍）。
+fn decode_b64(b64 : String) -> Result[Bytes, String] {
+  let bytes : Bytes = @base64.decode(b64) catch {
+    _ => return Err("b64 载荷解码失败")
+  }
+  Ok(bytes)
+}
+
+///|
+fn cmd_add_image(s : Session, tokens : Array[String]) -> String {
+  let doc = match require_doc(s) {
+    Ok(d) => d
+    Err(e) => return err(e)
+  }
+  match check_kv_args(tokens, 1, add_image_keys(), "add-image") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }
+  let m = kv_args(tokens, 1)
+  let b64 = match m.get("b64") {
+    Some(v) => v
+    None => return err("add-image 需要 b64=<png base64>")
+  }
+  let bytes = match decode_b64(b64) {
+    Ok(b) => b
+    Err(e) => return err(e)
+  }
+  let (hash, iw, ih) = match place_asset(s, doc, bytes) {
+    Ok(t) => t
+    Err(e) => return err(e)
+  }
   let id = match user_layer_id(doc, m, "add-image") {
     Ok(id) => id
     Err(e) => return err(e)
@@ -657,10 +688,73 @@ fn cmd_add_image(s : Session, tokens : Array[String]) -> String {
     Ok(l) => l
     Err(e) => return err(e)
   }
-  let layer2 = { ..layer, asset_hash: hash }
+  // 盒子跟着内容走（见 `image_box` 的长注释）：缺省不再是 100×100。
+  let (bw, bh) = match image_box(m, iw, ih) {
+    Ok(pair) => pair
+    Err(e) => return err(e)
+  }
+  let layer2 = { ..layer, asset_hash: hash, w: bw, h: bh }
   snapshot(s, doc, "add image \{id} asset=\{hash[0:8].to_owned()}")
   doc.layers.push(layer2)
-  "{\"ok\":true,\"op\":\"add-image\",\"id\":\"\{id}\",\"asset\":\"\{hash}\",\"asset_size\":\"\{img.width}x\{img.height}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+  "{\"ok\":true,\"op\":\"add-image\",\"id\":\"\{id}\",\"asset\":\"\{hash}\",\"asset_size\":\"\{iw}x\{ih}\",\"w\":\{@core.fmt_num(bw)},\"h\":\{@core.fmt_num(bh)},\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+}
+
+///|
+/// `set-image <id> b64=<png base64> [w=] [h=]`：**原地换掉**一个位图层的资产。
+///
+/// 对偶于 `set-text` / `set-adjust` / `set-mask` / `set-style points=`：此前
+/// "换一张图"只能 `delete` 再 `add-image`，于是层序、蒙版、标签、透明度、翻转、
+/// 旋转**全丢**，而且重加会把它推到栈顶（改变它与相邻层的叠放关系）。
+/// 换图只该换像素。
+fn cmd_set_image(s : Session, tokens : Array[String]) -> String {
+  if tokens.length() < 2 {
+    return err("用法：set-image <id> b64=<png base64> [w=] [h=]")
+  }
+  match check_kv_args(tokens, 2, set_image_keys(), "set-image") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }
+  let doc = match require_doc(s) {
+    Ok(d) => d
+    Err(e) => return err(e)
+  }
+  let id = tokens[1]
+  let target = match @core.find_layer(doc.layers, id) {
+    Some(l) => l
+    None => return err("层不存在：\{id}")
+  }
+  if !(target.kind is @core.ShapeKind::Image) {
+    return err(
+      "层 \{id} 是 \{kind_str(target.kind)} 不是位图层（换几何用 set-style，换文字用 set-text）",
+    )
+  }
+  let m = kv_args(tokens, 2)
+  let b64 = match m.get("b64") {
+    Some(v) => v
+    None => return err("set-image 需要 b64=<png base64>（换图必须给新像素）")
+  }
+  let bytes = match decode_b64(b64) {
+    Ok(b) => b
+    Err(e) => return err(e)
+  }
+  let (hash, iw, ih) = match place_asset(s, doc, bytes) {
+    Ok(t) => t
+    Err(e) => return err(e)
+  }
+  let (bw, bh) = match image_box(m, iw, ih) {
+    Ok(pair) => pair
+    Err(e) => return err(e)
+  }
+  snapshot(s, doc, "set image \{id} asset=\{hash[0:8].to_owned()}")
+  let _ = update_layer(doc.layers, id, fn(l) { { ..l, asset_hash: hash, w: bw, h: bh } })
+  "{\"ok\":true,\"op\":\"set-image\",\"id\":\"\{id}\",\"asset\":\"\{hash}\",\"asset_size\":\"\{iw}x\{ih}\",\"w\":\{@core.fmt_num(bw)},\"h\":\{@core.fmt_num(bh)},\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+}
+
+///|
+/// `set-image` 认的全部键（`w`/`h` 只在调用方要**固定框**时才给；不给就是
+/// "盒子跟着新图走"，见 `image_box`）。
+fn set_image_keys() -> Array[String] {
+  ["b64", "w", "h"]
 }
 
 ///|

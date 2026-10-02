@@ -1724,6 +1724,34 @@ MUTS = [
         '''        let ok = same_seg''',
         "killed",
     ),
+    (
+        "Z7",
+        "位图层的盒子退回缺省 100×100（任意比例的图被静默压成正方形——回包里 asset_size 还写着真实尺寸）",
+        "agent/ops.mbt",
+        '''    return Ok((iw.to_double(), ih.to_double()))''',
+        '''    return Ok((100.0, 100.0))''',
+        "killed",
+    ),
+    (
+        "Z8",
+        "只给一边时另一边不按原比例推（留缺省 100 → 长宽比被悄悄改掉）",
+        "agent/ops.mbt",
+        '''  if w_given {
+    return Ok((w, w / ratio))
+  }''',
+        '''  if w_given {
+    return Ok((w, 100.0))
+  }''',
+        "killed",
+    ),
+    (
+        "Z9",
+        "set-image 从『原地换像素』退化成『重造该层』（蒙版/标签/层序一起丢）",
+        "agent/session.mbt",
+        '''  let _ = update_layer(doc.layers, id, fn(l) { { ..l, asset_hash: hash, w: bw, h: bh } })''',
+        '''  let _ = update_layer(doc.layers, id, fn(l) { { ..l, asset_hash: hash, w: bw, h: bh, mask: None, tags: [] } })''',
+        "killed",
+    ),
     ]
 
 

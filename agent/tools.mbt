@@ -52,7 +52,12 @@ pub fn list_tools() -> Array[AgentTool] {
   )
   add(
     "add-image",
-    "add-image x= y= w= h= b64=<png base64>：导入位图资产并置入。可选：" + add_image_keys().map(fn(k) { "[\{k}=]" }).join(""),
+    "add-image x= y= w= h= b64=<png base64>：导入位图资产并置入。可选：" + add_image_keys().map(fn(k) { "[\{k}=]" }).join("") + "。**盒子跟着内容走**：不给 w=/h= 时盒 = 资产像素尺寸（400×300 的图不会缩进 100×100 的方框里），只给一边时另一边按原比例推，两边都给才听你的",
+    "both",
+  )
+  add(
+    "set-image",
+    "set-image <id> b64=<png base64> [" + set_image_keys().map(fn(k) { "\{k}=/" }).join("") + "]：**原地换掉**一个位图层的资产——层序、蒙版、标签、透明度、翻转、旋转都不动（此前换图只能 delete 再 add-image，那些全丢、而且层被推到栈顶）。缺省盒子跟随新图（规则同 add-image）",
     "both",
   )
   add(
