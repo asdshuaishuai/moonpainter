@@ -1060,6 +1060,102 @@ fn kind_only_reject_text(
 
 /// 收集重复 id / 越界 / 非法值等 P0–P2 违规（lint 命令）。
 ///|
+///|
+/// `max(0, a, b)`：上面那条"超出窗多少"的判据用（负值 = 在窗内）。
+fn over2(a : Double, b : Double) -> Double {
+  let m = if a > b { a } else { b }
+  if m > 0.0 { m } else { 0.0 }
+}
+
+///|
+/// 「描边把整层盖满」的判据（**只有一处**）：矩形/椭圆的描边**朝内**（内缩一圈），
+/// 内缩盒在 `2*stroke_w >= min(w,h)` 时退化成空 ⇒ 整块内部都算描边，`fill` 一个
+/// 像素都看不见。实测 20×20 + `stroke_w=10`（等号）时中心就是描边色 —— 所以
+/// 判据是 `>=` 而不是 `>`。
+fn stroke_cover_error(l : @core.Layer) -> String? {
+  let sw = l.stroke.width
+  if sw <= 0.0 {
+    return None
+  }
+  let inward = l.kind is @core.ShapeKind::Rect || l.kind is @core.ShapeKind::Ellipse
+  if !inward {
+    return None
+  }
+  let short = if l.w < l.h { l.w } else { l.h }
+  if sw * 2.0 < short {
+    return None
+  }
+  Some(
+    "P2 stroke 层 \{l.id} 的描边宽 \{@core.fmt_num(sw)} 盖满整层（\{@core.fmt_num(l.w)}x\{@core.fmt_num(l.h)}）：渲染器把描边画成实心块、fill 看不见（描边朝内，内缩盒退化成空）——要实心就直接给 fill=，要描边请把 stroke_w 降到 \{@core.fmt_num(short / 2.0)} 以下",
+  )
+}
+
+///|
+/// 「线段的描边被渲染窗裁掉」的判据（**只有一处**）。线段描边**以线段为中心**
+/// （两侧各半宽 + 圆头），胶囊会伸出层盒子；而渲染窗只有"盒子的对角线为边 +
+/// 2px"（`@render.paint_window`，与 `pick` 共用一处实现），**窗外的像素根本不画**
+/// ⇒ 画出来的线比 `stroke_w` 窄。实测 8×4 盒 + `stroke_w=20` 只画出 13×13 的
+/// 方块（圆头与两侧全没了）；旋转 30° 后还会更偏（窗是轴对齐的，胶囊不是）。
+/// 只报"落在画布内"的那部分：窗外且画布外的部分本来就没有损失。
+fn stroke_clip_error(l : @core.Layer, cw : Int, ch : Int) -> String? {
+  if !(l.kind is @core.ShapeKind::Line) || l.stroke.width <= 0.0 {
+    return None
+  }
+  let pts = l.points
+  if pts.length() < 2 {
+    return None
+  }
+  let (wx0, wy0, wx1, wy1) = @render.paint_window(l)
+  let half = l.stroke.width / 2.0
+  let mut clipped = false
+  let mut i = 0
+  while i + 1 < pts.length() && !clipped {
+    let (ax, ay) = pts[i]
+    let (bx, by) = pts[i + 1]
+    let dx = bx - ax
+    let dy = by - ay
+    let len = Double::sqrt(dx * dx + dy * dy)
+    if len > 0.0 {
+      let ux = dx / len
+      let uy = dy / len
+      // 胶囊在局部坐标里的极值点：两侧各半宽（法向）+ 两端的圆头顶点（轴向）
+      let cand : Array[(Double, Double)] = [
+        (ax - uy * half, ay + ux * half),
+        (ax + uy * half, ay - ux * half),
+        (bx - uy * half, by + ux * half),
+        (bx + uy * half, by - ux * half),
+        (ax - ux * half, ay - uy * half),
+        (bx + ux * half, by + uy * half),
+      ]
+      for p in cand {
+        // 正逆变换分开写就会有一边先烂 ⇒ 走渲染器自己的 `to_canvas`
+        let (cx, cy) = @render.to_canvas(l, p.0, p.1)
+        let in_canvas = cx >= 0.0 && cy >= 0.0 && cx < cw.to_double() && cy < ch.to_double()
+        if in_canvas {
+          // **超出窗多少**才说话：窗的 2px 松弛量就是用来吸收整数取整的
+          // （`paint_window` 把边界 `.to_int()` 之后 ±2），所以只切掉 0–2px 的
+          // 圆头不该报——实测 `sw=4` 的正常线就被切了不到 1px，按"出窗即报"
+          // 会误报。超出松弛量才是"画出来真的比 stroke_w 窄"。
+          let cutx = over2(wx0.to_double() - cx, cx - wx1.to_double())
+          let cuty = over2(wy0.to_double() - cy, cy - wy1.to_double())
+          let cut = if cutx > cuty { cutx } else { cuty }
+          if cut > 2.0 {
+            clipped = true
+          }
+        }
+      }
+    }
+    i = i + 1
+  }
+  if !clipped {
+    return None
+  }
+  Some(
+    "P2 stroke 层 \{l.id} 的描边（宽 \{@core.fmt_num(l.stroke.width)}）伸出渲染窗超过松弛量：窗 = 层盒子的对角线为边 + 2px（\{wx0},\{wy0}–\{wx1},\{wy1}），伸到窗外的两侧与圆头不会被画 ⇒ 画出来比 stroke_w 窄；要么把 stroke_w 调小，要么把盒子 w/h 放大到装得下描边",
+  )
+}
+
+///|
 pub fn lint_doc(doc : @core.Document) -> Array[String] {
   let v : Array[String] = []
   // P0 画布限额
@@ -1206,6 +1302,18 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
           "P2 noop 层 \{l.id} 是 \{kind_str(l.kind)} 却带着 \{why}（渲染器只对 \{c.reader} 读 \{c.field}，纯粹改变指纹）",
         )
       }
+    }
+    // 描边把整层盖满 / 线段的描边被渲染窗裁掉：两条都是"护栏改了输出却没人报"
+    // （PLAN 十九）。判据各只有一处，命令面**不拦**——把描边调宽是合法操作，
+    // 结果只是"变成实心块"或"被裁窄"，同 `adjust value=0` 那条分工：
+    // 入口拦"非法/无效字段"，lint 拦"合法但画出来的不是他要的"。
+    match stroke_cover_error(l) {
+      Some(m) => v.push(m)
+      None => ()
+    }
+    match stroke_clip_error(l, doc.width, doc.height) {
+      Some(m) => v.push(m)
+      None => ()
     }
     // 渐变端点越界：命令面已拦（add-rect/set-style 直接报错），这里兜住
     // 手改 design.json 或外部构造的容器——它渲染出来是个「几乎看不出过渡」
