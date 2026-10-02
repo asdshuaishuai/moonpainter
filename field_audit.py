@@ -199,13 +199,34 @@ def read_kv_keys():
 
 
 def read_commands():
-    """从 `agent/tools.mbt` 读命令名（字典是单一事实源）。"""
+    """从 `agent/tools.mbt` 读命令名（字典是单一事实源）。
+
+    ⚠️ 名字里的字符集**不许写窄**：这里原先写的是 `[a-z-]+`，于是
+    `open-mpd-b64` / `save-mpd-b64` 两条**带数字**的命令**从来没被读进来**
+    （61 ≠ 63），而脚本照旧打印"对账通过"。窄的两个后果都要命：
+    ①`CMD_FIELD` 里给这两条命令登记归属会被判成"不存在的命令"（**误报**）；
+    ②将来任何带数字的新命令都**静默**落在覆盖面之外（**漏报**）。
+    所以现在先读**全部** `add("…")` 的第一个参数，再检查每个名字都在允许字符集里
+    ——读不出来就**判失败**，不静默跳过（同 `verify.sh#params` 那课）。
+    """
     src = (ROOT / "agent" / "tools.mbt").read_text(encoding="utf-8")
     src = re.sub(r"//[^\n]*", "", src)
-    cmds = set(re.findall(r'add\(\s*"([a-z-]+)"', src))
-    if not cmds:
+    names = re.findall(r'add\(\s*"([^"]+)"', src)
+    if not names:
         return None, "agent/tools.mbt 里的命令名一个都没读出来"
-    return cmds, None
+    # **读不出来就判失败**：`add(` 的调用次数与读到的名字数必须相等。少了就说明
+    # 正则的字符集写窄了——修复前正是这个状态（63 次调用只读到 61 个名字），
+    # 而门禁照样全绿。判据要能自己发现"我少读了"，不能等外部对账来喊。
+    calls = len(re.findall(r'add\(\s*"', src))
+    if len(names) != calls:
+        return None, "有 %d 个 add(…) 的名字没读进来（字符集写窄了？）" % (calls - len(names))
+    bad = sorted(n for n in names if not re.fullmatch(r"[a-z0-9-]+", n))
+    if bad:
+        return None, "这些命令名读不出来（含允许字符集外的字符）：%s" % bad
+    if len(set(names)) != len(names):
+        dup = sorted(n for n in set(names) if names.count(n) > 1)
+        return None, "命令表里有重名：%s" % dup
+    return set(names), None
 
 
 def main():
