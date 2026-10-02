@@ -229,7 +229,14 @@ pub fn dispatch(s : @agent.Session, line : String) -> String {
       Some(bytes) => {
         let r = @agent.load_mpd(s, bytes)
         match r {
-          Ok(fp) => "{\"ok\":true,\"op\":\"open-mpd\",\"path\":\"\{@core.json_escape(path)}\",\"fingerprint\":\"\{fp}\"}"
+          Ok(pair) => {
+            let (fp, notice) = pair
+            let mut out = "{\"ok\":true,\"op\":\"open-mpd\",\"path\":\"\{@core.json_escape(path)}\",\"fingerprint\":\"\{fp}\""
+            if notice != "" {
+              out = out + ",\"notice\":\"\{@core.json_escape(notice)}\""
+            }
+            out + "}"
+          }
           Err(e) => "{\"error\":\"\{@core.json_escape(e)}\"}"
         }
       }

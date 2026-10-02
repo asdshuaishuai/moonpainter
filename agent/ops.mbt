@@ -703,8 +703,9 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
   if doc.width.to_int64() * doc.height.to_int64() > @mpd.LIMIT_MAX_PIXELS.to_int64() {
     v.push("P0 canvas 画布总像素超限")
   }
-  // P0 render 超出**可渲染上限**：命令面已拒（`new`/`set-canvas`），这里兜住
-  // 手改容器、别的工具产出的容器（旧引擎的截断也是 4096，产不出这种容器）。
+  // P0 render 超出**可渲染上限**：`new`/`set-canvas` 已拒，这里兜住手改容器、
+  // 以及**旧引擎（81ff759 之前）产出的超限容器**——那时候 `new 5000 200` 是能
+  // 建能存的，所以这种容器真实存在（"旧引擎产不出"是错的说法）。
   // 与上面两条不同，这一条不是"参数非法"而是
   // **"渲染会静默丢内容"**——容器是合法的、指纹是对的、命令全回 ok，
   // 只有渲染少画一块。所以它必须能被单独报出来。

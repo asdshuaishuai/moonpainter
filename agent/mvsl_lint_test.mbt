@@ -403,7 +403,8 @@ test "lint：超出可渲染上限的画布必须报出来（此前是静默截�
 test "入口：超限画布在 new / set-canvas 就拒绝（画布是唯一能改大的入口）" {
   // `scene()` 已经建好一个文档，所以这里的"没有副作用"用**指纹**核对：
   // `fingerprint` 是 canonical design.json（含 width/height）的哈希，文档结构
-  // 动一个字段它就变——比"看画布尺寸"更精确（而且没有单独回读画布的命令）。
+  // 动一个字段它就变——比"看画布尺寸"更精确（当时还**没有**单独回读画布的命令；
+  // 现在有了：`census` 的 `canvas` 是文档记账尺寸、`render` 是实际渲染尺寸）。
   let s = scene("canvas-limit")
   let fp0 = run(s, "fingerprint")
   let bad = run(s, "new 5000 200")

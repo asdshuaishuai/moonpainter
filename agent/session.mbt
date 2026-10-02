@@ -2311,7 +2311,17 @@ fn cmd_save_b64(s : Session) -> String {
 
 ///|
 /// 从容器字节载入会话（cli 的 open-mpd / open-mpd-b64 底座）。
-pub fn load_mpd(s : Session, bytes : Bytes) -> Result[String, String] {
+///
+/// 返回 `(指纹, 知会语)`：知会语非空时调用方**必须**把它带给用户。
+///
+/// ⚠️ **这是第四个能装进"超出可渲染上限"画布的入口**（前两个是 `new` /
+/// `set-canvas`），而它与那两个的处理**必须不同**：这里**不拒**。理由是可自救性
+/// ——`81ff759` 之前的引擎**允许** `new 5000 200`，所以这种容器**真实存在**
+/// （本仓库自己的旧版本产出的），拒绝打开就等于"用户连打开自己的文件再
+/// `crop` 到 4096 这条路都没有"。于是：放行 + **明说**（`notice` 字段），后果
+/// 继续由 `lint` 的 P0 与渲染兜底去报。这与 `new`/`set-canvas` 拒绝不矛盾：
+/// 那两个入口的参数是**调用方现在写的**，改个数字就行，没有要保留的既有文件。
+pub fn load_mpd(s : Session, bytes : Bytes) -> Result[(String, String), String] {
   let m = match @mpd.unpack(bytes) {
     Ok(x) => x
     Err(e) => return Err(e)
@@ -2330,7 +2340,7 @@ pub fn load_mpd(s : Session, bytes : Bytes) -> Result[String, String] {
   // 从而 open→save 必须字节一致（verify.sh 第 5 步的确定性闭环）。
   s.undo_stack.clear()
   s.redo_stack.clear()
-  Ok(@core.fingerprint(m.doc))
+  Ok((@core.fingerprint(m.doc), @render.render_limit_error(m.doc.width, m.doc.height)))
 }
 
 ///|
@@ -2342,7 +2352,14 @@ fn cmd_open_b64(s : Session, tokens : Array[String]) -> String {
     _ => return err("b64 载荷解码失败")
   }
   match load_mpd(s, bytes) {
-    Ok(fp) => "{\"ok\":true,\"op\":\"open-mpd-b64\",\"fingerprint\":\"\{fp}\"}"
+    Ok(pair) => {
+      let (fp, notice) = pair
+      let mut out = "{\"ok\":true,\"op\":\"open-mpd-b64\",\"fingerprint\":\"\{fp}\""
+      if notice != "" {
+        out = out + ",\"notice\":\"\{@core.json_escape(notice)}\""
+      }
+      out + "}"
+    }
     Err(e) => err(e)
   }
 }

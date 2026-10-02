@@ -110,9 +110,20 @@ fn cmd_census(s : Session, tokens : Array[String]) -> String {
     None => ()
   }
   let cen = @pixel.census(base, field)
+  // `canvas` 报的是**文档真实尺寸**。此前它报的是 `base` 的尺寸，也就是被
+  // 可渲染上限**截断之后**的尺寸——同一个字段名指向了两个数里错的那一个：
+  // 5000×200 的文档会报 `canvas:[4096,200]`，而"文档到底多大"在**命令面上
+  // 没有任何回读路径**（`fingerprint` 只给哈希、`probe` 只有点）。
+  // 现在两个数都报：`canvas` = 文档记账尺寸、`render` = 实际渲染尺寸；
+  // 两者不等就是"容器能存但渲染画不出来"，调用方一眼能对账。
+  let (dw, dh) = match s.doc {
+    Some(d) => (d.width, d.height)
+    None => (base.width, base.height)
+  }
   let sb = StringBuilder()
   sb.write_string("{\"ok\":true,\"op\":\"census\"")
-  sb.write_string(",\"canvas\":[\{base.width},\{base.height}]")
+  sb.write_string(",\"canvas\":[\{dw},\{dh}]")
+  sb.write_string(",\"render\":[\{base.width},\{base.height}]")
   sb.write_string(",\"total\":\{cen.total}")
   sb.write_string(",\"counted\":\{cen.counted}")
   sb.write_string(",\"hue_bins\":[")

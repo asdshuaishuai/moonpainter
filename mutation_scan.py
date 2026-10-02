@@ -1642,6 +1642,22 @@ MUTS = [
         """  (w, h)""",
         "killed",
     ),
+    (
+        "Y1",
+        "census 又把 canvas 报成**截断后**的渲染尺寸（回读缺陷原样复发）",
+        "agent/affordance_cmds.mbt",
+        '''  sb.write_string(",\\"canvas\\":[\\{dw},\\{dh}]")''',
+        '''  sb.write_string(",\\"canvas\\":[\\{base.width},\\{base.height}]")''',
+        "killed",
+    ),
+    (
+        "Y2",
+        "open-mpd 又对超限容器一声不吭（notice 恒为空）",
+        "agent/session.mbt",
+        '''  Ok((@core.fingerprint(m.doc), @render.render_limit_error(m.doc.width, m.doc.height)))''',
+        '''  Ok((@core.fingerprint(m.doc), ""))''',
+        "killed",
+    ),
     ]
 
 
