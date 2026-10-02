@@ -352,6 +352,133 @@ pub fn paint_window(l : @core.Layer) -> (Int, Int, Int, Int) {
 }
 
 ///|
+/// 把"覆盖度 + 取样色 + 蒙版因子 + 层透明度"折成**源色**（`source-over` 的输入）。
+///
+/// 这是唯一一处：通用逐像素路径与下面的实心矩形快速路径都调它，所以"颜色自带
+/// 的 alpha 并进覆盖度""蒙版因子先于合成""层透明度并入源 alpha"这三条语义
+/// 不可能在两条路径上分叉。
+fn compose_src(cover : Int, color : Int, mf : Double, eff_opacity : Double) -> Int {
+  // 颜色自带的 alpha 要并进覆盖度。`Fill::Solid(0xAARRGGBB)` 的类型注释
+  // 和工具面的 `fill: #RRGGBB[AA]` 都承诺了它，但此前这里
+  // `color & 0x00FFFFFF` 把 alpha 直接丢了——`fill=#FF000080`（半透明红）
+  // 渲染成**完全不透明红**，而且不报错。仓库里没有任何测试用半透明
+  // 填充，所以这个缺口一直没人踩到。
+  let ca = (color >> 24) & 0xFF
+  let cover = if ca >= 255 { cover } else { (cover * ca + 127) / 255 }
+  let src_alpha = ((cover & 0xFF) << 24)
+  let rgb = color & 0x00FFFFFF
+  let mut src = src_alpha | rgb
+  // 蒙版因子先于合成融入源 alpha（蒙版外→源透明→下层透出）
+  if mf < 1.0 {
+    let ma = ((src >> 24) & 0xFF).to_double() / 255.0 * mf
+    let ma255 = (ma * 255.0 + 0.5).to_int()
+    src = (ma255 << 24) | rgb
+  }
+  // 层透明度并入源 alpha
+  let a = ((src >> 24) & 0xFF).to_double() / 255.0 * eff_opacity
+  let a255 = (a * 255.0 + 0.5).to_int()
+  (a255 << 24) | rgb
+}
+
+///|
+/// 实心矩形层的**整块内部**（半开区间），落在 `[px0,px1)×[py0,py1)` 窗内。
+///
+/// 这些像素的 4 个 2×2 子样本**全都**在矩形内部，于是覆盖度恒为 255、取样色
+/// 恒为 `fill`、蒙版因子恒为 1.0——逐像素跑 4 次 `to_local`/`inside_fill` 是
+/// 白做的。12MP 的整幅矩形层因此从 ~0.5 s/层降到合成一遍的量级。
+///
+/// ⚠️ 这里是**性能**路径，一旦判宽了一个像素，画面就少/多一块而没人报错，
+/// 所以前提全部写成"缺一不可"：
+///   * `Rect` 且不旋转、不翻转、圆角 ≤ 0（否则内部不再是"整块"，或 `to_local`
+///     走另一支）；
+///   * 无蒙版（有蒙版时每像素的因子不同）、无描边（`inside_stroke` 优先级最高）；
+///   * `Fill::Solid`（渐变/位图的颜色逐像素不同）。
+/// 边界按**严格不等式留 EPS 余量**：`to_local` 里的浮点算式
+/// （`(px + 0.25) - l.x`）与这里的 `px - (l.x - 0.25)` 在 ulp 级别可以不一样，
+/// 而判宽一个像素是**静默**改画面。留余量的代价只是边界那一圈退回通用路径。
+//// 返回 `None` = 没有可快速填充的内部（不满足前提，或内部为空）。
+fn solid_rect_interior(
+  l : @core.Layer,
+  fill : @core.Fill,
+  px0 : Int,
+  py0 : Int,
+  px1 : Int,
+  py1 : Int,
+) -> (Int, Int, Int, Int)? {
+  match fill {
+    @core.Fill::Solid(_) => ()
+    _ => return None
+  }
+  if !(l.kind is @core.ShapeKind::Rect) {
+    return None
+  }
+  if l.rotation_deg != 0.0 || l.flip_h || l.flip_v || l.corner_radius > 0.0 {
+    return None
+  }
+  match l.mask {
+    Some(_) => return None
+    None => ()
+  }
+  if l.stroke.width > 0.0 {
+    return None
+  }
+  // 4 个样本全在内 ⇔ px + 0.25 - l.x ≥ 0 且 px + 0.75 - l.x < w（半开上界）。
+  let ix0 = clamp_int((l.x - 0.25 + INTERIOR_EPS).ceil(), px0, px1)
+  let ix1 = clamp_int((l.x + l.w - 0.75 - INTERIOR_EPS).ceil(), px0, px1)
+  let iy0 = clamp_int((l.y - 0.25 + INTERIOR_EPS).ceil(), py0, py1)
+  let iy1 = clamp_int((l.y + l.h - 0.75 - INTERIOR_EPS).ceil(), py0, py1)
+  if ix1 <= ix0 || iy1 <= iy0 {
+    return None
+  }
+  Some((ix0, iy0, ix1, iy1))
+}
+
+///|
+/// 夹到 `[lo, hi]` 的整数转换（`v` 已是整数双精度，截断无损；先夹再转，
+/// 免得手改容器里的极端坐标把 `to_int` 推出范围）。
+fn clamp_int(v : Double, lo : Int, hi : Int) -> Int {
+  if v <= lo.to_double() {
+    lo
+  } else if v >= hi.to_double() {
+    hi
+  } else {
+    v.to_int()
+  }
+}
+
+///|
+/// 边界余量。见 `solid_rect_interior`：只用来把"卡在 ulp 边界上"的像素让给
+/// 通用路径，1e-6 远大于 1e4 量级坐标的 ulp（~1e-12），又不影响任何真实几何。
+const INTERIOR_EPS : Double = 1.0e-6
+
+///|
+/// 整块内部按**常量源色**合成（`compose_src` 与通用路径同一处）。
+fn paint_solid_rect_interior(
+  l : @core.Layer,
+  buf : @codec.RgbaBuf,
+  color : Int,
+  eff_opacity : Double,
+  ix0 : Int,
+  iy0 : Int,
+  ix1 : Int,
+  iy1 : Int,
+) -> Unit {
+  let src = compose_src(255, color, 1.0, eff_opacity)
+  let stride = buf.width
+  let mut py = iy0
+  while py < iy1 {
+    let row = py * stride
+    let mut px = ix0
+    while px < ix1 {
+      let i = row + px
+      buf.pixels[i] = composite_pixel(buf.pixels[i], src, l.blend)
+      px = px + 1
+    }
+    py = py + 1
+  }
+}
+
+///|
 /// 渲染单个层到画布（含 2×2 子采样 AA 与混合）。
 fn paint_layer(
   l : @core.Layer,
@@ -395,6 +522,24 @@ fn paint_layer(
   let py0 = if y0 < 0 { 0 } else { y0 }
   let px1 = if x1 > buf.width { buf.width } else { x1 }
   let py1 = if y1 > buf.height { buf.height } else { y1 }
+  // **实心矩形层的整块内部**：4 个子样本全在内 ⇒ 覆盖度/取样色/蒙版因子全是
+  // 常量，逐像素的 4 次形状测试是白做的（12MP 整幅层上这是全部代价）。
+  // 先按常量源色填掉，再让下面的通用循环**跳过**这块（窗内其余像素——边界、
+  // 旋转、蒙版、描边、渐变——照旧走通用路径，一条语义都没分叉）。
+  let interior = solid_rect_interior(l, l.fill, px0, py0, px1, py1)
+  let (fx0, fy0, fx1, fy1) = match interior {
+    Some(b) => b
+    None => (0, 0, 0, 0)
+  }
+  match interior {
+    Some(_) =>
+      match l.fill {
+        @core.Fill::Solid(c) =>
+          paint_solid_rect_interior(l, buf, c, eff_opacity, fx0, fy0, fx1, fy1)
+        _ => ()
+      }
+    None => ()
+  }
   // 位图源
   let img : @codec.RgbaBuf? = if l.kind is @core.ShapeKind::Image {
     env.assets.get(l.asset_hash)
@@ -408,6 +553,11 @@ fn paint_layer(
   while py < py1 {
     let mut px = px0
     while px < px1 {
+      // 整块内部已经填过：同行的这一段直接跳过去（不逐像素空转）。
+      if px >= fx0 && px < fx1 && py >= fy0 && py < fy1 {
+        px = fx1
+        continue
+      }
       // 2×2 子采样
       let mut fill_hits = 0
       let mut stroke_hits = 0
@@ -440,27 +590,10 @@ fn paint_layer(
       }
       let (cover, color) = subsample_result(fill_hits, stroke_hits, sample_colors)
       if cover > 0 {
-        // 颜色自带的 alpha 要并进覆盖度。`Fill::Solid(0xAARRGGBB)` 的类型注释
-        // 和工具面的 `fill: #RRGGBB[AA]` 都承诺了它，但此前这里
-        // `color & 0x00FFFFFF` 把 alpha 直接丢了——`fill=#FF000080`（半透明红）
-        // 渲染成**完全不透明红**，而且不报错。仓库里没有任何测试用半透明
-        // 填充，所以这个缺口一直没人踩到。
-        let ca = (color >> 24) & 0xFF
-        let cover = if ca >= 255 { cover } else { (cover * ca + 127) / 255 }
-        let src_alpha = ((cover & 0xFF) << 24)
-        let rgb = color & 0x00FFFFFF
-        let mut src = src_alpha | rgb
-        // 蒙版因子先于合成融入源 alpha（蒙版外→源透明→下层透出）
+        // 蒙版因子先于合成融入源 alpha（蒙版外→源透明→下层透出）；
+        // 折算本身在 `compose_src` 一处，与快速路径共用。
         let mf = mask_cover_at(l, px.to_double(), py.to_double())
-        if mf < 1.0 {
-          let ma = ((src >> 24) & 0xFF).to_double() / 255.0 * mf
-          let ma255 = (ma * 255.0 + 0.5).to_int()
-          src = (ma255 << 24) | rgb
-        }
-        // 层透明度并入源 alpha
-        let a = ((src >> 24) & 0xFF).to_double() / 255.0 * eff_opacity
-        let a255 = (a * 255.0 + 0.5).to_int()
-        src = (a255 << 24) | rgb
+        let src = compose_src(cover, color, mf, eff_opacity)
         let dst = @codec.rgba_get(buf, px, py)
         @codec.rgba_set(buf, px, py, composite_pixel(dst, src, l.blend))
       }

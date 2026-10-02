@@ -232,8 +232,8 @@ MUTS = [
         "R7",
         "填充/描边色自带的 alpha 又被丢掉（半透明渲染成不透明）",
         "render/scene.mbt",
-        '        let ca = (color >> 24) & 0xFF\n        let cover = if ca >= 255 { cover } else { (cover * ca + 127) / 255 }',
-        '        let cover = cover',
+        '  let ca = (color >> 24) & 0xFF\n  let cover = if ca >= 255 { cover } else { (cover * ca + 127) / 255 }',
+        '  let cover = cover',
         "killed",
     ),
     (
@@ -1790,6 +1790,18 @@ MUTS = [
   let y0 = (l.y + d.y - d.r).to_int()
   let x1 = (l.x + d.x + d.r).to_int()
   let y1 = (l.y + d.y + d.r).to_int()""",
+        "killed",
+    ),
+    (
+        "Q26",
+        "实心矩形的快速内部判宽 1 像素（边界像素按全覆盖合成：画面多出一条硬边）",
+        "render/scene.mbt",
+        """  let ix1 = clamp_int((l.x + l.w - 0.75 - INTERIOR_EPS).ceil(), px0, px1)
+  let iy0 = clamp_int((l.y - 0.25 + INTERIOR_EPS).ceil(), py0, py1)
+  let iy1 = clamp_int((l.y + l.h - 0.75 - INTERIOR_EPS).ceil(), py0, py1)""",
+        """  let ix1 = clamp_int((l.x + l.w - 0.75 - INTERIOR_EPS).ceil() + 1.0, px0, px1)
+  let iy0 = clamp_int((l.y - 0.25 + INTERIOR_EPS).ceil(), py0, py1)
+  let iy1 = clamp_int((l.y + l.h - 0.75 - INTERIOR_EPS).ceil() + 1.0, py0, py1)""",
         "killed",
     ),
     (
