@@ -1439,6 +1439,14 @@ MUTS = [
         "killed",
     ),
     (
+        "U23",
+        "geo 选择子的软覆盖方向反了（边界处就衰减，窗内反而落选）",
+        "pixel/edit.mbt",
+        """      f.v[y * ctx.base.width + x] = window_membership(d, g.feather, 1.0)""",
+        """      f.v[y * ctx.base.width + x] = window_membership(g.feather + d, g.feather, 1.0)""",
+        "killed",
+    ),
+    (
         "U21",
         "文档级 STAGE(n>0) 与图层级算子共存被放行（两段式下静默换掉取到的像素）",
         "core/mvsl.mbt",

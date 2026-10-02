@@ -89,7 +89,7 @@ fn cmd_sel_schema(s : Session, _tokens : Array[String]) -> String {
   sb.write_string("{\"ok\":true,\"op\":\"sel-schema\"")
   // 量纲说明：模型最容易錯的就是这里
   sb.write_string(
-    ",\"units\":\"color 选择子用的是 **OKLCh/OKLab** 坐标：h/hw = OKLCh 色相（度，0..360 环）；s/sh = **OKLCh 彩度**（sRGB 可达上限 0.3225，纯红 0.258 / 纯绿 0.295 / 纯蓝 0.313 / 纯洋红最高 —— **不是** 0..1 的 HSV 饱和度；整条窗高于上限会被直接拒绝，因为那必然空选）；l/lh = OKLab 感知亮度（0..1，**不是** HSV 的 V、也不是 0..255）；feather = 0..1 的窗宽软化比例。geo 的 x/y/w/h 与 feather 是画布像素\"",
+    ",\"units\":\"color 选择子用的是 **OKLCh/OKLab** 坐标：h/hw = OKLCh 色相（度，0..360 环）；s/sh = **OKLCh 彩度**（sRGB 可达上限 0.3225，纯红 0.258 / 纯绿 0.295 / 纯蓝 0.313 / 纯洋红最高 —— **不是** 0..1 的 HSV 饱和度；整条窗高于上限会被直接拒绝，因为那必然空选）；l/lh = OKLab 感知亮度（0..1，**不是** HSV 的 V、也不是 0..255）；feather = 0..1 的窗宽软化比例。geo 的 x/y/w/h 与 feather 是画布像素，且 geo 的 feather 是**从窗边界向外**衰减到 0 的距离（边界上仍满覆盖、往外 feather 像素落选——**不是**窗内的羽化宽度，方向与蒙版的 feather 相反）\"",
   )
   sb.write_string(
     ",\"how_to_use\":\"每条 example 是给人看的嵌套对象；要传参时用同一行的 example_json 字段（字符串，直接粘进 select_preview 的 sel_json / mvsl_set 的 program_json，不需要自己转义）\"",

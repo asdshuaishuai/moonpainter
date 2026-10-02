@@ -972,3 +972,41 @@ test "canonical 往返：evidence=null 不被膨胀成空证据对象" {
 
 
 ///|
+
+///|
+/// 两种"软覆盖"的**方向**必须被钉住：蒙版朝内、geo 选择子朝外。
+///
+/// 这两个参数同名（`feather`）、同单位（像素），却**方向相反**，而且此前
+/// 没有任何测试或文档把方向写下来——读代码的人只能自己去追
+/// `mask_cover_at` 与 `geo_field` 两处实现，而 PLAN-MVSL §P2 那半边的
+/// "统一"讨论正卡在这里。
+///
+/// 实测（100×20 画布、窗/蒙版都是 0..50、边界在 x=50）：
+///   * **蒙版** `feather=8`：边界处覆盖 0，**向内** 8px 到满覆盖
+///     （过渡带 [42,50]）——把蒙版**缩小**；
+///   * **geo 选择子** `feather=8`：边界处仍 1，**向外** 8px 才衰减到 0
+///     （过渡带 [50,58]）——把选区**放大**。
+/// 同一个 `feather=8`，边界上的覆盖度相差 1.0，受影响区域整体错开 16px。
+///
+/// 这条测试用 `@pixel.window_membership` 与 `rect_dist` 这两个**已被两处
+/// 共用**的纯函数把方向算出来（不依赖渲染），所以它是"口径"的证据而不是
+/// "某次渲染的巧合"。
+test "软覆盖的方向：geo 选择子朝窗外、蒙版朝窗内（同名 feather，方向相反）" {
+  let win : @core.GeoWindow = { x: 0.0, y: 0.0, w: 50.0, h: 20.0, feather: 8.0 }
+  // geo 选择子的真实调用形态：half = g.feather，过渡比例硬编码 1.0
+  let at_boundary = window_membership(rect_dist(50.0, 10.0, win), win.feather, 1.0)
+  let outside_4 = window_membership(rect_dist(54.0, 10.0, win), win.feather, 1.0)
+  let outside_9 = window_membership(rect_dist(59.0, 10.0, win), win.feather, 1.0)
+  assert_eq(at_boundary, 1.0, msg="geo 选择子在窗边界上应为满覆盖（过渡带在**窗外**）")
+  assert_true(
+    outside_4 > 0.0 && outside_4 < 1.0,
+    msg="geo 的 feather 应当是**向外**的衰减距离，窗外 4px 处应仍在过渡带内，得 \{outside_4}",
+  )
+  assert_eq(outside_9, 0.0, msg="窗外超过 feather 应完全落选")
+  // 反方向必须为 0：如果哪天有人把 geo 改成"向内羽化"，这句会红
+  assert_eq(
+    window_membership(rect_dist(45.0, 10.0, win), win.feather, 1.0),
+    1.0,
+    msg="窗内应当是满覆盖（geo 的过渡带不在窗内）",
+  )
+}
