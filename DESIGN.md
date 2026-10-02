@@ -414,25 +414,56 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
   `STAGE(0)`，`lint` 另有 P4 兜底；
 - 填充/描边颜色是 `0xAARRGGBB`，alpha **真的参与混合**（`paint_layer` 里若写成
   `color & 0x00FFFFFF` 就会静默丢掉它——这曾经是真实缺陷，见 PLAN 补遗 7 第八节）；
-- **变换/混合/蒙版有一张「读点矩阵」，不在矩阵里的组合命令面直接拒**。
+- **每个字段有一张「读点矩阵」，不在矩阵里的组合命令面直接拒**。
   实测（**非退化探针**：非白底 + 左右不对称的位图 + 30° 旋转；退化探针会得出
   反结论——整块纯色方块的 `rotate`/`flip` 是恒等变换，`multiply` 压在白底上
   也是恒等）：
 
-  | 层 kind | `rotate` | `flip` | `blend` | `mask` |
-  | :-- | :-: | :-: | :-: | :-: |
-  | 几何（矩形/椭圆/折线/线段）· 位图 | 读 | 读 | 读 | 读 |
-  | 文本 / 笔触 / 调整层 | **不读** | **不读** | **不读** | 读 |
-  | 组 | **不读** | **不读** | **不读** | **不读** |
+  | 层 kind | `rotate`/`flip`/`blend` | `mask` | `fill`/`lgrad` | `stroke`/`stroke_w` | `radius` | `points` |
+  | :-- | :-: | :-: | :-: | :-: | :-: | :-: |
+  | 矩形 | 读 | 读 | 读 | 读 | 读 | — |
+  | 椭圆 | 读 | 读 | 读 | 读 | **不读** | — |
+  | 多边形 | 读 | 读 | 读 | **不读** | **不读** | 读 |
+  | 线段 | 读 | 读 | **不读** | 读 | **不读** | 读 |
+  | 位图 | 读 | 读 | **不读** | **不读** | **不读** | — |
+  | 文本 | **不读** | 读 | 读 | **不读** | **不读** | — |
+  | 笔触 | **不读** | 读 | **不读** | **不读** | **不读** | — |
+  | 调整层 | **不读** | 读 | **不读** | **不读** | **不读** | — |
+  | 组 | **不读** | **不读** | **不读** | **不读** | **不读** | — |
+
+  几处"不读"的实底：线段没有填充面（`inside_fill` 的 `Line` 分支恒 false，
+  字典里那句"fill 不生效"说的就是它）；描边只实现了矩形/椭圆/线段
+  （`inside_stroke` 的 `_ =>` 分支写着"多边形描边与位图描边不实现"），所以
+  多边形、位图、文本、笔触、调整层、组上的 `stroke_w` 都是死数据；位图的
+  `fill` 也不读（资产缺失时是**固定洋红**占位，不是 fill 色）；圆角只在
+  `inside_fill` 的 Rect 分支被读。
+
+  ⚠️ **描边的方向是"向内"**（与 `fill` 无关）：矩形/椭圆的描边带 = 盒子内、
+  内缩 `stroke_w` 的盒子外的那一圈（`inside_stroke` 的 `outer && !inner`），
+  **不越出层盒子**；线段的描边是**以线段为中心**两边各半宽（`dist_to_seg <=
+  stroke_w/2`）——同一个"描边宽"在几何形状上是内缩、在线段上是居中，这是
+  当前实现的语义（有白盒测试钉住，见 `render` 的描边方向测试）。
+  连带一个**边界**：`stroke_w ≥ min(w,h)/2` 时内缩盒子退化成负尺寸，
+  整块矩形内部都判成描边 ⇒ 画出来是一个**实心块**（fill 被盖住），
+  实测 `20×20` 盒子 + `stroke_w=16` 得到全红方块；
 
   不读的组合此前是**静默**的：`rotate t1 30` 回 ok、指纹变、画面**逐位不变**
   （文本层的字形循环不走 `to_local`、笔触的 dab 存画布坐标、调整层直接作用在
-  整幅缓冲上、组只递归子层）。现在写这些字段**在入口就拒**（`rotate` / `flip` /
-  `set-style rot=` / `set-style blend=` / `add-mask` / `set-mask` 六处共用
-  `kind_only_write_error` 这一句判据，传**候选层**）——于是"写默认值 = 清字段"
-  自动放行（`rotate t1 0` / `flip t1 none` / `blend=normal` / `remove-mask`），
-  旧容器里的死数据洗得回来。`lint_doc` 用**同一张表**（`kind_only_fields`，
-  一行一个字段）兜住手改容器与旧引擎存下来的容器。⚠️ `opacity`/`visible`
+  整幅缓冲上、组只递归子层）。现在写这些字段**在入口就拒**：`rotate` / `flip` /
+  `add-mask` / `set-mask` 与 `set-style` 的每个键（`rot=`/`blend=`/`fill=`/
+  `lgrad=`/`stroke=`/`stroke_w=`/`radius=`/`points=`）共用
+  `kind_only_write_error` 这一句判据，传**候选层**——于是"写默认值 = 清字段"
+  自动放行（`rotate t1 0` / `flip t1 none` / `blend=normal` / `fill=none` /
+  `stroke_w=0` / `radius=0` / `remove-mask`），旧容器里的死数据洗得回来。
+  `lint_doc` 用**同一张表**（`kind_only_fields`，一行一个字段）兜住手改容器与
+  旧引擎存下来的容器。
+  **建层命令的键表也从这张表算**（`add_shape_keys(kind)` 只留这个 kind 真读的
+  键 ⇒ 字典描述、`check_kv_args` 的允许键表自动跟着走）：`add-polygon` 不再
+  广告 `stroke=`、`add-image` 整套形状键只剩 `opacity/blend/rot/visible/tag`、
+  `add-ellipse` 不再广告 `radius=`——此前字典承诺了它们，而写进去画面逐位不变
+  （字典是模型唯一的说明书，承诺一件做不到的事就是在骗它）。命令键 →
+  表字段的映射只有一处（`key_field`），参数报错里的"为什么不生效"也从表算
+  （`kind_only_dead_note`）。⚠️ `opacity`/`visible`
   不在矩阵里：组直通时它们真的生效（实测 `set-style g1 opacity=0.5` 与
   `set-style r1 opacity=0.5` 同一个 sha256）；`x/y/w/h` 也不在——它们有消费者
   （`query-layer` 报告、取景线框 `render overlay=1` 按它画），但渲染器不读：
@@ -588,7 +619,7 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
   | 10 层 + 软蒙版 | 6.17 s | **1.24 s** | −80% |
 
   每层边际 **0.55 s → 0.08 s**、**软蒙版边际 0.53 s → 0.11 s**，像素逐位未变
-  （301 条测试含 golden sha256 全绿）。
+  （302 条测试含 golden sha256 全绿）。
 
   **圆角矩形随后也进来了**（同一个内接盒，各边再内缩半径）：半径的**夹取**
   提成了一处实现（`clamped_radius`，渲染器 `in_rounded_rect` 与快速路径共用

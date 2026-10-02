@@ -800,10 +800,22 @@ fn add_image_keys() -> Array[String] {
 /// 只有 polygon/line 才认 `points`（其余 kind 上的 points 是死数据，见
 /// `build_shape_layer` 里的拒绝）；只有 rect 才认 `radius`。
 fn add_shape_keys(kind : @core.ShapeKind) -> Array[String] {
-  let ks : Array[String] = [
+  // 只广告**这个 kind 真的读**的键（读点矩阵在 `agent/ops.mbt` 的
+  // `kind_only_fields` 一处）：字典的描述从这里生成，所以"字典承诺的键"
+  // 与"渲染器读的键"不可能分叉——此前 `add-polygon` 广告了 `stroke=`、
+  // `add-image` 广告了整套形状键，而它们在那些 kind 上写进去画面逐位不变。
+  let all : Array[String] = [
     "id", "name", "x", "y", "w", "h", "fill", "lgrad", "stroke", "stroke_w", "opacity", "blend",
     "radius", "rot", "visible", "tag",
   ]
+  let ks : Array[String] = []
+  for k in all {
+    let f = key_field(k)
+    // 认不出的键（id/name/opacity/…）一律留；认得出的按表判"这层读不读它"
+    if f == "" || kind_only_dead_note(kind, f) == "" {
+      ks.push(k)
+    }
+  }
   if kind is @core.ShapeKind::Polygon || kind is @core.ShapeKind::Line {
     ks.push("points")
   }

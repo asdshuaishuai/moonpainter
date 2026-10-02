@@ -37,17 +37,17 @@ pub fn list_tools() -> Array[AgentTool] {
   )
   add(
     "add-ellipse",
-    "add-ellipse x= y= w= h= " + add_shape_keys(@core.ShapeKind::Ellipse).map(fn(k) { "[\{k}=]" }).join("") + "：椭圆（键与 add-rect 同）",
+    "add-ellipse x= y= w= h= " + add_shape_keys(@core.ShapeKind::Ellipse).map(fn(k) { "[\{k}=]" }).join("") + "：椭圆（键见上；**没有 radius=**——圆角只对矩形有意义，要圆角请用 add-rect）",
     "meta",
   )
   add(
     "add-polygon",
-    "add-polygon x= y= w= h= points=x,y;x,y;…（局部坐标）" + add_shape_keys(@core.ShapeKind::Polygon).map(fn(k) { "[\{k}=]" }).join("") + "：多边形（键与 add-rect 同，另需 points）",
+    "add-polygon x= y= w= h= points=x,y;x,y;…（局部坐标）" + add_shape_keys(@core.ShapeKind::Polygon).map(fn(k) { "[\{k}=]" }).join("") + "：多边形（键见上，另需 points；**没有 stroke=/stroke_w=**——描边只实现了矩形/椭圆/线段）",
     "meta",
   )
   add(
     "add-line",
-    "add-line x= y= w= h= " + add_shape_keys(@core.ShapeKind::Line).map(fn(k) { "[\{k}=]" }).join("") + "：折线，默认对角线，可 points= 自定义；fill 不生效",
+    "add-line x= y= w= h= " + add_shape_keys(@core.ShapeKind::Line).map(fn(k) { "[\{k}=]" }).join("") + "：折线，默认对角线，可 points= 自定义；**只有描边**（没有 fill=/lgrad=/radius=：要颜色用 stroke=）",
     "meta",
   )
   add(

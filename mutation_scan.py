@@ -309,9 +309,11 @@ MUTS = [
         "agent/ops.mbt",
         r"""      field: "text",
       reader: "text 层",
+      hint: "",
       kinds: ["text"],""",
         r"""      field: "text",
       reader: "text 层",
+      hint: "",
       kinds: ["rect"],""",
         "killed",
     ),
@@ -319,13 +321,8 @@ MUTS = [
         "R26",
         "非矩形层也接受 radius（死数据改变指纹、画面没变）",
         "agent/ops.mbt",
-        """        if !(nl.kind is @core.ShapeKind::Rect) {
-          return Err(
-            "radius 只对矩形（rect）有意义：这层是 \\{kind_str(nl.kind)}，渲染器不读它的圆角（椭圆本身就是圆的；要给图形加圆角请用 add-rect）",
-          )
-        }
-""",
-        "",
+        """        match kind_only_write_error(cand, "corner_radius") {""",
+        """        match kind_only_write_error(cand, "corner_radiusX") {""",
         "killed",
     ),
     (
@@ -439,8 +436,14 @@ MUTS = [
         "R37",
         "points 的 kind 门写反（rect 收下顶点、polygon 反被拒）—— 判据的允许集合错",
         "agent/ops.mbt",
-        """      if !(nl.kind is @core.ShapeKind::Polygon) && !(nl.kind is @core.ShapeKind::Line) {""",
-        """      if !(nl.kind is @core.ShapeKind::Rect) && !(nl.kind is @core.ShapeKind::Line) {""",
+        """      if c.kinds.contains(kind_str(kind)) {
+        return None
+      }
+      return kind_only_reject_text(c, kind, id, field, "")""",
+        """      if true {
+        return None
+      }
+      return kind_only_reject_text(c, kind, id, field, "")""",
         "killed",
     ),
     (
@@ -449,9 +452,11 @@ MUTS = [
         "agent/ops.mbt",
         r"""      field: "points",
       reader: "polygon/line",
+      hint: "渲染器不读它的顶点（矩形/椭圆用 w/h/radius 定义形状；要折线请用 add-line）",
       kinds: ["polygon", "line"],""",
         r"""      field: "points",
       reader: "polygon/line",
+      hint: "渲染器不读它的顶点（矩形/椭圆用 w/h/radius 定义形状；要折线请用 add-line）",
       kinds: ["polygon", "line", "rect"],""",
         "killed",
     ),
@@ -616,10 +621,12 @@ MUTS = [
         r"""    {
       field: "font_size",
       reader: "text 层",
+      hint: "",
       kinds: ["text"],""",
         r"""    {
       field: "font_size",
       reader: "unknown",
+      hint: "",
       kinds: ["font_size-never"],""",
         "killed",
     ),
@@ -629,9 +636,11 @@ MUTS = [
         "agent/ops.mbt",
         r"""      field: "adjust",
       reader: "adjust 层",
+      hint: "",
       kinds: ["adjust"],""",
         r"""      field: "adjust",
       reader: "unknown",
+      hint: "",
       kinds: ["adjust-never"],""",
         "killed",
     ),
@@ -641,12 +650,14 @@ MUTS = [
         "agent/ops.mbt",
         r"""      field: "asset_hash",
       reader: "image 层",
+      hint: "",
       kinds: ["image"],
       dead: fn(l) { if l.asset_hash != "" { "asset 引用" } else { "" } },
     },
     {
       field: "dabs",
       reader: "raster 层",
+      hint: "",
       kinds: ["raster"],
       dead: fn(l) {
         if l.dabs.length() > 0 { "\{l.dabs.length()} 个笔触" } else { "" }
@@ -655,6 +666,7 @@ MUTS = [
     {
       field: "children",
       reader: "group",
+      hint: "",
       kinds: ["group"],
       dead: fn(l) {
         if l.children.length() > 0 { "\{l.children.length()} 个子层" } else { "" }
@@ -662,6 +674,7 @@ MUTS = [
     },""",
         r"""      field: "asset_hash",
       reader: "image 层",
+      hint: "",
       kinds: ["image"],
       dead: fn(l) { if l.asset_hash != "" { "asset 引用" } else { "" } },
     },""",
@@ -936,12 +949,8 @@ MUTS = [
         "Q22",
         "set-style 不在入口拦「非 polygon/line 上的 points」（死数据照样写进 JSON 改指纹）",
         "agent/ops.mbt",
-        """      if !(nl.kind is @core.ShapeKind::Polygon) && !(nl.kind is @core.ShapeKind::Line) {
-        return Err(
-          "points 只对 polygon/line 有意义：这层是 \\{kind_str(nl.kind)}""",
-        """      if !(nl.kind is @core.ShapeKind::Polygon) && !(nl.kind is @core.ShapeKind::Line) && false {
-        return Err(
-          "points 只对 polygon/line 有意义：这层是 \\{kind_str(nl.kind)}""",
+        """      match kind_only_kind_error(nl.kind, nl.id, "points") {""",
+        """      match kind_only_kind_error(nl.kind, nl.id, "pointsX") {""",
         "killed",
     ),
     (
@@ -1865,11 +1874,59 @@ MUTS = [
         "equivalent",
     ),
     (
+        "Q42",
+        "fill 那一行漏掉 polygon（多边形的填充被当成死数据，正常路径被误伤）",
+        "agent/ops.mbt",
+        '      kinds: ["rect", "ellipse", "polygon", "text"],',
+        '      kinds: ["rect", "ellipse", "text"],',
+        "killed",
+    ),
+    (
+        "Q43",
+        "stroke 那一行把 polygon 也算成读描边的（多边形描边静默收下、画面不变）",
+        "agent/ops.mbt",
+        '      kinds: ["rect", "ellipse", "line"],',
+        '      kinds: ["rect", "ellipse", "line", "polygon"],',
+        "killed",
+    ),
+    (
+        "Q44",
+        "fill 的默认值判据失效（默认灰也被当成写了填充：正常矩形全被误伤）",
+        "agent/ops.mbt",
+        '          @core.Fill::Solid(c) => if c == 0xFF808080 { "" } else { "fill=\\{@codec.color_to_hex(c)}" }',
+        '          @core.Fill::Solid(c) => if false { "" } else { "fill=\\{@codec.color_to_hex(c)}" }',
+        "killed",
+    ),
+    (
+        "Q45",
+        "字典不再按读点矩阵过滤（建层命令又开始广告它做不到的键）",
+        "agent/session.mbt",
+        '    if f == "" || kind_only_dead_note(kind, f) == "" {',
+        '    if true {',
+        "killed",
+    ),
+    (
+        "Q46",
+        "key_field 丢掉 lgrad 的映射（折线上的渐变填充从键表里漏回一条生路）",
+        "agent/ops.mbt",
+        '    "lgrad" => "fill"',
+        '    "lgrad" => ""',
+        "killed",
+    ),
+    (
+        "Q47",
+        "只给 stroke_w 的那条闸问的是旧宽度（等于永不触发：多边形描边宽静默收下）",
+        "agent/ops.mbt",
+        '              let cand = { ..nl, stroke: { color: nl.stroke.color, width: w } }',
+        '              let cand = { ..nl, stroke: { color: nl.stroke.color, width: nl.stroke.width } }',
+        "killed",
+    ),
+    (
         "Q35",
         "读点矩阵里把某一行的合法 kind 写宽（group 也被当成能读 rotation 的层）",
         "agent/ops.mbt",
-        '      field: "rotation_deg",\n      reader: "有面的层（几何/位图）",\n      kinds: ["rect", "ellipse", "polygon", "line", "image"],',
-        '      field: "rotation_deg",\n      reader: "有面的层（几何/位图）",\n      kinds: ["rect", "ellipse", "polygon", "line", "image", "group"],',
+        '      field: "rotation_deg",\n      reader: "有面的层（几何/位图）",\n      hint: "",\n      kinds: ["rect", "ellipse", "polygon", "line", "image"],',
+        '      field: "rotation_deg",\n      reader: "有面的层（几何/位图）",\n      hint: "",\n      kinds: ["rect", "ellipse", "polygon", "line", "image", "group"],',
         "killed",
     ),
     (
@@ -1884,8 +1941,8 @@ MUTS = [
         "Q37",
         "写入门禁的判据整个失效（kind_only_write_error 永不报错）",
         "agent/ops.mbt",
-        '      let why = (c.dead)(l)\n      if why != "" && !c.kinds.contains(kind_str(l.kind)) {\n        return Some(',
-        "      let why = (c.dead)(l)\n      if false {\n        return Some(",
+        '      if c.kinds.contains(kind_str(l.kind)) {\n        return None\n      }\n      return kind_only_reject_text(c, l.kind, l.id, field, why)',
+        '      if false {\n        return None\n      }\n      return kind_only_reject_text(c, l.kind, l.id, field, why)',
         "killed",
     ),
     (

@@ -893,7 +893,9 @@ test "radius 只对矩形有意义：椭圆上传 radius 必须在入口被拒" 
   let _ = run(s, "session-open full_image")
   let _ = run(s, "new 320 240 uuid=radiuskind")
   let r1 = run(s, "add-ellipse x=0 y=0 w=40 h=40 fill=#FF0000FF name=E radius=12")
-  assert_true(r1.contains("只对矩形"), msg="add-ellipse 的 radius 必须被拒：\{r1}")
+  // 两条入口拒的**路径不同**（都咬住"谁是圆角的读点"，而不是某句措辞）：
+  // ① `add-ellipse` 的键表里已经没有 `radius` ⇒ 参数面拒，指路到 add-rect；
+  assert_true(r1.contains("radius") && r1.contains("add-rect"), msg="add-ellipse 的 radius 必须被拒并指路：\{r1}")
   // 被拒的命令**也会消耗掉一个 id**（id 在参数校验之前就分配），所以别写死
   // l2；从成功回包里取真实 id。
   let added = run(s, "add-ellipse x=0 y=0 w=40 h=40 fill=#FF0000FF name=E2")
@@ -906,6 +908,8 @@ test "radius 只对矩形有意义：椭圆上传 radius 必须在入口被拒" 
     Err(e) => abort("add-ellipse 回包不是 JSON：\{e}")
   }
   let r2 = run(s, "set-style \{eid} radius=9")
+  // ② `set-style` 的键是通用的（同一个键在不同层上答案不同）⇒ 由写值时的
+  //    读点矩阵拒，措辞是"只对矩形有意义"。
   assert_true(r2.contains("只对矩形"), msg="set-style 的 radius 必须被拒：\{r2}")
   // 矩形照常（入口变严不许误伤正常路径）
   let ok = run(s, "add-rect x=0 y=0 w=20 h=20 fill=#00FF00FF name=R radius=5")
@@ -942,7 +946,8 @@ test "参数零容忍：拼错的键、漏了 = 的裸词、空值都必须拒�
   // 这一层是矩形，所以拒绝改由 kind 门给出（与 radius 同一句话），
   // 断言咬住"两类层才收顶点"这个语义，而不是某句措辞。
   let ep = run(s, "set-style l1 points=0,0;1,1")
-  assert_true(ep.contains("只对 polygon/line 有意义"), msg="points 要指路：\{ep}")
+  assert_true(ep.contains("只对polygon/line有意义"), msg="points 要指路：\{ep}")
+  assert_true(ep.contains("add-line"), msg="points 被拒要给出路（要折线用 add-line）：\{ep}")
   assert_true(run(s, "set-style l1 text=hi").contains("set-text"), msg="text 要指路")
   assert_true(run(s, "set-style l1 w=10").contains("resize"), msg="w 要指路")
   // 三次被拒之后，文档必须**逐位没变**（连指纹都不该动）

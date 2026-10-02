@@ -112,18 +112,30 @@ pub fn check_kv_args(
         }
         let k = t[0:eq].to_owned()
         if !allowed.contains(k) {
+          let k2 = k
           let hint = match k {
             "points" => "（顶点只在 polygon/line 层上有意义：建层用 add-polygon/add-line，改已建层的顶点用 set-style <id> points=x,y;x,y;…）"
-            "x" | "y" => "（改位置用 move）"
-            "w" | "h" => "（改尺寸用 resize）"
+            "x" => "（改位置用 move）"
+            "y" => "（改位置用 move）"
+            "w" => "（改尺寸用 resize）"
+            "h" => "（改尺寸用 resize）"
             "text" => "（改文字用 set-text）"
             "font_size" => "（字号在 add-text 建层时给）"
             _ => ""
           }
+          // 手写的那几条更具体（说的是"换哪条命令"）；表里的短注补上
+          // "这个 kind 为什么不读它"——两条不重复，也不互相打架。
+          let table_hint = match ctx_shape_kind(ctx) {
+            Some(k) => kind_only_dead_note(k, key_field(k2))
+            None => ""
+          }
           if allowed.length() == 0 {
             return Err("\{ctx}：不接受 `\{k}=` 这类参数（该命令只认位置参数）")
           }
-          return Err("\{ctx}：不认识的参数 `\{k}`\{hint}；认得的是 \{allowed.join("/")}")
+          let extra = if hint == "" { table_hint } else { "" }
+          return Err(
+            "\{ctx}：不认识的参数 `\{k}`\{hint}\{extra}；认得的是 \{allowed.join("/")}",
+          )
         }
       }
       None => {
@@ -386,14 +398,19 @@ pub fn apply_style_kv(
   let mut nl = l
   match m.get("fill") {
     Some(v) => {
-      if v == "none" {
-        nl = { ..nl, fill: @core.Fill::NoFill }
+      let cand = if v == "none" {
+        { ..nl, fill: @core.Fill::NoFill }
       } else {
         match parse_color(v) {
-          Ok(c) => nl = { ..nl, fill: @core.Fill::Solid(c) }
+          Ok(c) => { ..nl, fill: @core.Fill::Solid(c) }
           Err(e) => return Err(e)
         }
       }
+      match kind_only_write_error(cand, "fill") {
+        Some(e) => return Err(e)
+        None => ()
+      }
+      nl = cand
     }
     None => ()
   }
@@ -430,10 +447,16 @@ pub fn apply_style_kv(
       if gerr != "" {
         return Err(gerr)
       }
-      nl = {
+      let cand = {
         ..nl,
         fill: @core.Fill::LinearGradient(c0, c1, nums[0], nums[1], nums[2], nums[3]),
       }
+      // 渐变也是 `fill` 这一格（同一张表、同一句判据）：折线上写 lgrad 同样不生效
+      match kind_only_write_error(cand, "fill") {
+        Some(e) => return Err(e)
+        None => ()
+      }
+      nl = cand
     }
     None => ()
   }
@@ -461,7 +484,14 @@ pub fn apply_style_kv(
         Ok(_) => ()
         Err(e) => return Err(e)
       }
-      nl = { ..nl, stroke: { color: c, width: w } }
+      // 描边只实现了矩形/椭圆/线段（`inside_stroke` 的 `_ =>` 分支就是这句
+      // 话）。别的 kind 上写它是死数据 ⇒ 与 fill/rot/blend 同一句判据。
+      let cand = { ..nl, stroke: { color: c, width: w } }
+      match kind_only_write_error(cand, "stroke") {
+        Some(e) => return Err(e)
+        None => ()
+      }
+      nl = cand
     }
     None => match m.get("stroke_w") {
         Some(_) => {
@@ -471,7 +501,12 @@ pub fn apply_style_kv(
                 Ok(_) => ()
                 Err(e) => return Err(e)
               }
-              nl = { ..nl, stroke: { color: nl.stroke.color, width: w } }
+              let cand = { ..nl, stroke: { color: nl.stroke.color, width: w } }
+              match kind_only_write_error(cand, "stroke") {
+                Some(e) => return Err(e)
+                None => ()
+              }
+              nl = cand
             }
             Err(e) => return Err(e)
           }
@@ -524,12 +559,13 @@ pub fn apply_style_kv(
       // 顶点原先只能在建层时给：想改一个三角形的顶点只能删了重加，而重加把层
       // 推到栈顶（蒙版/标签/透明度/层序全丢）。这里补上"改得动"这条路，
       // 与 set-text / set-adjust 同一条纪律。
-      // 种类检查与建层同一句话：非 polygon/line 上写 points 是**死数据**
-      // （写进 canonical JSON、改变指纹、画面逐位不变）。
-      if !(nl.kind is @core.ShapeKind::Polygon) && !(nl.kind is @core.ShapeKind::Line) {
-        return Err(
-          "points 只对 polygon/line 有意义：这层是 \{kind_str(nl.kind)}，渲染器不读它的顶点（矩形/椭圆用 w/h/radius 定义形状；要折线请用 add-line）",
-        )
+      // 种类检查与建层同一句话（表里那一行）：非 polygon/line 上写 points 是
+      // **死数据**（写进 canonical JSON、改变指纹、画面逐位不变）。
+      // ⚠️ 必须排在形态检查**之前**：`set-style bg points=0,0;1` 要先听到
+      // "这层不读顶点"，而不是"顶点太少"（那句话会把人引到错的方向）。
+      match kind_only_kind_error(nl.kind, nl.id, "points") {
+        Some(e) => return Err(e)
+        None => ()
       }
       match parse_points_for(nl.kind, v) {
         Ok(pts) => nl = { ..nl, points: pts }
@@ -547,13 +583,14 @@ pub fn apply_style_kv(
         // 非矩形层的圆角是**死数据**：`corner_radius` 只在渲染器的 Rect
         // 分支被读，而 `add-*`/`set-style` 都会把它写进 canonical JSON ——
         // 于是指纹变了、query-layer 又不报（它按 kind 投影）、画面逐位没变。
-        // 入口直接拒绝（与 set-text 同一条纪律），lint 兜住手改容器。
-        if !(nl.kind is @core.ShapeKind::Rect) {
-          return Err(
-            "radius 只对矩形（rect）有意义：这层是 \{kind_str(nl.kind)}，渲染器不读它的圆角（椭圆本身就是圆的；要给图形加圆角请用 add-rect）",
-          )
+        // 判据与**表里那一行**共用（`kind_only_write_error`，传候选层）；
+        // `radius=0` 是清字段，自动放行。lint 兜住手改容器。
+        let cand = { ..nl, corner_radius: r }
+        match kind_only_write_error(cand, "corner_radius") {
+          Some(e) => return Err(e)
+          None => ()
         }
-        nl = { ..nl, corner_radius: r }
+        nl = cand
       }
       None => return Err("radius \{v} 不是数字")
     }
@@ -673,6 +710,10 @@ priv struct KindOnly {
   reader : String // 渲染器在哪种 kind 下读它（写给人看）
   kinds : Array[String] // 允许携带它的 kind（`kind_str` 的词）
   dead : (@core.Layer) -> String // 返回非空 = 带着死数据（内容是值的描述）
+  // 被拒时的**出路**（空 = 用通用措辞）。有些字段的替代写法是具体的：
+  // `radius` 只对矩形有意义 ⇒ 要圆角请用 `add-rect`；`fill` 在折线上
+  // ⇒ 请用 `stroke=`。这句跟着表走，命令面与 lint 才不会一个说 A 一个说 B。
+  hint : String
 }
 
 ///|
@@ -681,12 +722,14 @@ fn kind_only_fields() -> Array[KindOnly] {
     {
       field: "text",
       reader: "text 层",
+      hint: "",
       kinds: ["text"],
       dead: fn(l) { if l.text != "" { "text 字段" } else { "" } },
     },
     {
       field: "font_size",
       reader: "text 层",
+      hint: "",
       kinds: ["text"],
       dead: fn(l) {
         if l.font_size != 16.0 {
@@ -698,7 +741,8 @@ fn kind_only_fields() -> Array[KindOnly] {
     },
     {
       field: "corner_radius",
-      reader: "rect",
+      reader: "矩形（rect）",
+      hint: "渲染器不读它的圆角（椭圆本身就是圆的；要给图形加圆角请用 add-rect）",
       kinds: ["rect"],
       dead: fn(l) {
         if l.corner_radius != 0.0 {
@@ -711,6 +755,7 @@ fn kind_only_fields() -> Array[KindOnly] {
     {
       field: "points",
       reader: "polygon/line",
+      hint: "渲染器不读它的顶点（矩形/椭圆用 w/h/radius 定义形状；要折线请用 add-line）",
       kinds: ["polygon", "line"],
       dead: fn(l) {
         if l.points.length() > 0 {
@@ -723,18 +768,21 @@ fn kind_only_fields() -> Array[KindOnly] {
     {
       field: "adjust",
       reader: "adjust 层",
+      hint: "",
       kinds: ["adjust"],
       dead: fn(l) { if l.adjust is Some(_) { "adjust 字段" } else { "" } },
     },
     {
       field: "asset_hash",
       reader: "image 层",
+      hint: "",
       kinds: ["image"],
       dead: fn(l) { if l.asset_hash != "" { "asset 引用" } else { "" } },
     },
     {
       field: "dabs",
       reader: "raster 层",
+      hint: "",
       kinds: ["raster"],
       dead: fn(l) {
         if l.dabs.length() > 0 { "\{l.dabs.length()} 个笔触" } else { "" }
@@ -743,6 +791,7 @@ fn kind_only_fields() -> Array[KindOnly] {
     {
       field: "children",
       reader: "group",
+      hint: "",
       kinds: ["group"],
       dead: fn(l) {
         if l.children.length() > 0 { "\{l.children.length()} 个子层" } else { "" }
@@ -757,6 +806,7 @@ fn kind_only_fields() -> Array[KindOnly] {
     {
       field: "rotation_deg",
       reader: "有面的层（几何/位图）",
+      hint: "",
       kinds: ["rect", "ellipse", "polygon", "line", "image"],
       dead: fn(l) {
         if l.rotation_deg != 0.0 {
@@ -769,18 +819,21 @@ fn kind_only_fields() -> Array[KindOnly] {
     {
       field: "flip_h",
       reader: "有面的层（几何/位图）",
+      hint: "",
       kinds: ["rect", "ellipse", "polygon", "line", "image"],
       dead: fn(l) { if l.flip_h { "flip_h=true" } else { "" } },
     },
     {
       field: "flip_v",
       reader: "有面的层（几何/位图）",
+      hint: "",
       kinds: ["rect", "ellipse", "polygon", "line", "image"],
       dead: fn(l) { if l.flip_v { "flip_v=true" } else { "" } },
     },
     {
       field: "blend",
       reader: "有面的层（几何/位图）",
+      hint: "",
       kinds: ["rect", "ellipse", "polygon", "line", "image"],
       dead: fn(l) {
         if !(l.blend is @core.BlendMode::Normal) {
@@ -790,9 +843,57 @@ fn kind_only_fields() -> Array[KindOnly] {
         }
       },
     },
+    // ↓ 填充与描边也是读点矩阵的一部分：**描边只实现了矩形/椭圆/线段**
+    //   （`inside_stroke` 的 `_ =>` 分支写着"多边形描边与位图描边不实现"），
+    //   而"多边形描边"这条边界此前只有一句代码注释——`add-polygon stroke=6`
+    //   收得下、指纹变、画面逐位不变。填充同理：折线只有描边（字典里那句
+    //   "fill 不生效"说的就是它），位图的填充也不读（缺资产是固定洋红）。
+    //   ⚠️ 默认填充是 `Solid(0xFF808080)`、默认描边是 `{0xFF000000, width 0}`
+    //   ——"写了默认值"与"没写"必须一样，否则清字段的写法会被自己拒掉。
+    {
+      field: "fill",
+      reader: "有填充面的层（矩形/椭圆/多边形/文本）",
+      hint: "折线只有描边（要颜色请用 stroke=），位图/笔触/调整层/组没有填充面",
+      kinds: ["rect", "ellipse", "polygon", "text"],
+      dead: fn(l) {
+        match l.fill {
+          // 默认灰：没写过填充
+          @core.Fill::Solid(c) => if c == 0xFF808080 { "" } else { "fill=\{@codec.color_to_hex(c)}" }
+          // `fill=none` 是**清空**写法（也是组的常态），不算死数据
+          @core.Fill::NoFill => ""
+          @core.Fill::LinearGradient(_, _, _, _, _, _) => "lgrad=…"
+        }
+      },
+    },
+    {
+      field: "stroke",
+      reader: "矩形/椭圆/线段（`inside_stroke` 只实现这三种）",
+      hint: "描边只实现了矩形/椭圆/线段；位图/文本/笔触/调整层/组都没有描边",
+      kinds: ["rect", "ellipse", "line"],
+      dead: fn(l) {
+        let w = if l.stroke.width != 0.0 {
+          "stroke_w=\{@core.fmt_num(l.stroke.width)}"
+        } else {
+          ""
+        }
+        let c = if l.stroke.color != 0xFF000000 {
+          "stroke=\{@codec.color_to_hex(l.stroke.color)}"
+        } else {
+          ""
+        }
+        if w != "" && c != "" {
+          "\{w} \{c}"
+        } else if w != "" {
+          w
+        } else {
+          c
+        }
+      },
+    },
     {
       field: "mask",
       reader: "除组以外的层",
+      hint: "",
       kinds: ["rect", "ellipse", "polygon", "line", "image", "text", "raster", "adjust"],
       dead: fn(l) {
         match l.mask {
@@ -832,19 +933,129 @@ fn mask_write_probe() -> @core.LayerMask {
 }
 
 ///|
+fn kind_only_row(field : String) -> KindOnly? {
+  for c in kind_only_fields() {
+    if c.field == field {
+      return Some(c)
+    }
+  }
+  None
+}
+
+///|
+/// 命令键 → 表里的字段名（`fill=`/`lgrad=` 都写 `Fill`、`stroke=`/`stroke_w=`
+/// 都写 `Stroke`）。**只此一份**：字典的"这个 kind 认哪些键"与参数报错里的
+/// 指路都从它算——手写第二份映射就一定会分叉。
+fn key_field(key : String) -> String {
+  match key {
+    "fill" => "fill"
+    "lgrad" => "fill"
+    "stroke" => "stroke"
+    "stroke_w" => "stroke"
+    "radius" => "corner_radius"
+    "points" => "points"
+    "rot" => "rotation_deg"
+    "blend" => "blend"
+    _ => ""
+  }
+}
+
+///|
+/// `check_kv_args` 的 `ctx` 名 → 这一层的 kind。只有 `add-*` 建层命令有**确定**
+/// 的 kind；`set-style` 的 kind 是逐层的（同一个键在不同层上答案不同），那种
+/// 情况由写值时的 `kind_only_write_error` 拒。
+fn ctx_shape_kind(ctx : String) -> @core.ShapeKind? {
+  match ctx {
+    "add-rect" => Some(@core.ShapeKind::Rect)
+    "add-ellipse" => Some(@core.ShapeKind::Ellipse)
+    "add-polygon" => Some(@core.ShapeKind::Polygon)
+    "add-line" => Some(@core.ShapeKind::Line)
+    "add-image" => Some(@core.ShapeKind::Image)
+    "add-text" => Some(@core.ShapeKind::Text)
+    "add-adjust" => Some(@core.ShapeKind::Adjust)
+    "add-paint" => Some(@core.ShapeKind::Raster)
+    _ => None
+  }
+}
+
+///|
+/// 这个 kind 上不读这个字段时的**短注**（空 = 读它）。字典的描述与参数报错
+/// 的指路都用它 ⇒ 措辞与 `kind_only_write_error` 同源，不会一个说 A 一个说 B。
+fn kind_only_dead_note(kind : @core.ShapeKind, field : String) -> String {
+  match kind_only_row(field) {
+    Some(c) =>
+      if c.kinds.contains(kind_str(kind)) {
+        ""
+      } else {
+        let h = if c.hint != "" { c.hint } else { "渲染器只对 \{c.reader} 读 \{c.field}" }
+        "（\{field} 在 \{kind_str(kind)} 上不生效：\{h}）"
+      }
+    None => ""
+  }
+}
+
+///|
 fn kind_only_write_error(l : @core.Layer, field : String) -> String? {
   for c in kind_only_fields() {
     if c.field == field {
       let why = (c.dead)(l)
-      if why != "" && !c.kinds.contains(kind_str(l.kind)) {
-        return Some(
-          "\{kind_str(l.kind)} 层 \{l.id} 上的 \{field} 不生效：渲染器只对 \{c.reader} 读 \{c.field}，写进去也不会改变任何像素。要清掉这个字段请写默认值（蒙版用 remove-mask）",
-        )
+      // 写了默认值 = 清字段：放行（旧容器里的死数据要洗得回来）
+      if why == "" {
+        return None
       }
-      return None
+      // ⚠️ 这一句是**判据本体**：`kind_only_reject_text` 只拼措辞、不判成员
+      // （重构时漏掉它 ⇒ 每个 kind 都被拒，测试当场红）
+      if c.kinds.contains(kind_str(l.kind)) {
+        return None
+      }
+      return kind_only_reject_text(c, l.kind, l.id, field, why)
     }
   }
   None
+}
+
+///|
+/// 只想问"这个 kind 读不读这个字段"、**值还没解析出来**时用（`points` 的形态
+/// 检查依赖 kind，得先听到"这层不读顶点"，而不是"顶点太少"）。
+///
+/// 与 `kind_only_write_error` 共用同一行、同一句措辞——两条入口路径判的必须
+/// 是同一件事。
+fn kind_only_kind_error(
+  kind : @core.ShapeKind,
+  id : String,
+  field : String,
+) -> String? {
+  for c in kind_only_fields() {
+    if c.field == field {
+      if c.kinds.contains(kind_str(kind)) {
+        return None
+      }
+      return kind_only_reject_text(c, kind, id, field, "")
+    }
+  }
+  None
+}
+
+///|
+/// 被拒时的措辞只有这一处：有"出路"（`hint`）的行说清该用什么替代，其余走
+/// 通用措辞（说清渲染器在哪读、怎么清）。
+fn kind_only_reject_text(
+  c : KindOnly,
+  kind : @core.ShapeKind,
+  id : String,
+  field : String,
+  why : String,
+) -> String? {
+  if c.hint != "" {
+    let val = if why != "" { "（\{why}）" } else { "" }
+    return Some(
+      "\{field} 只对\{c.reader}有意义：这层是 \{kind_str(kind)}\{val}，\{c.hint}",
+    )
+  }
+  let hint = if field == "mask" { "（蒙版用 remove-mask）" } else { "" }
+  Some(
+    "\{kind_str(kind)} 层 \{id} 上的 \{field} 不生效：渲染器只对 \{c.reader} 读 \{c.field}，写进去也不会改变任何像素。要清掉这个字段请写默认值\{hint}",
+  )
 }
 
 /// 收集重复 id / 越界 / 非法值等 P0–P2 违规（lint 命令）。

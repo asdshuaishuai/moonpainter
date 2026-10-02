@@ -317,12 +317,40 @@ test "lint：变换/混合/蒙版的读点矩阵（表里每一格都要报，�
       blend: @core.BlendMode::Multiply,
     },
   )
+  // 填充/描边的读点是同一张表的另外两格：折线只有描边（fill 死）、
+  // 多边形/位图/文本没有描边（stroke 死）、位图的 fill 也不读。
+  bad.layers.push({
+    ..b,
+    id: "ln1",
+    kind: @core.ShapeKind::Line,
+    points: [(0.0, 0.0), (8.0, 8.0)],
+    fill: @core.Fill::Solid(0xFFFF0000),
+  })
+  bad.layers.push({
+    ..b,
+    id: "pg1",
+    kind: @core.ShapeKind::Polygon,
+    points: [(0.0, 0.0), (8.0, 0.0), (0.0, 8.0)],
+    stroke: { color: 0xFF0000FF, width: 4.0 },
+  })
+  bad.layers.push({
+    ..b,
+    id: "im1",
+    kind: @core.ShapeKind::Image,
+    asset_hash: "deadbeef",
+    fill: @core.Fill::Solid(0xFF00FF00),
+    stroke: { color: 0xFF0000FF, width: 4.0 },
+  })
   let items = @agent.lint_doc(bad)
   let j = items.join(" | ")
-  for needle in ["rotation_deg=45", "flip_h=true", "flip_v=true", "blend=multiply", "mask=已设置"] {
+  for needle in [
+    "rotation_deg=45", "flip_h=true", "flip_v=true", "blend=multiply", "mask=已设置",
+    "fill=#FF0000FF", "stroke_w=4", "fill=#00FF00FF",
+  ] {
     assert_true(j.contains(needle), msg="表里的 \{needle} 必须被报：\{j}")
   }
-  // 格数也要对：group 5 格 + text 3 格 + raster 2 格 + adjust 2 格 = 12。
+  // 格数也要对：group 5 + text 3 + raster 2 + adjust 2 + line 1（fill）
+  // + polygon 1（stroke）+ image 2（fill+stroke）= 16。
   // 只查"含某个词"会被"多报/少报但恰好含这些词"骗过。
   let mut hits = 0
   for it in items {
@@ -330,7 +358,7 @@ test "lint：变换/混合/蒙版的读点矩阵（表里每一格都要报，�
       hits = hits + 1
     }
   }
-  assert_eq(hits, 12, msg="读点矩阵应报 12 格，实报 \{hits}：\{j}")
+  assert_eq(hits, 16, msg="读点矩阵应报 16 格，实报 \{hits}：\{j}")
 
   // ② 正控：**读它的 kind** 上带着同样的字段，一格都不许报（漏报与误报都是 bug）
   let ok = @core.new_document("lint-matrix-ok", 64, 64)
@@ -381,7 +409,9 @@ test "lint：变换/混合/蒙版的读点矩阵（表里每一格都要报，�
   })
   let okj = @agent.lint_doc(ok).join(" | ")
   // 只断言**这五格**没被报（别的行可能因为别的字段开火，那是对的）
-  for needle in ["rotation_deg", "flip_h", "flip_v", "blend=", "mask=已设置"] {
+  for needle in [
+    "rotation_deg", "flip_h", "flip_v", "blend=", "mask=已设置", "上的 fill 不生效", "上的 stroke 不生效",
+  ] {
     assert_true(!okj.contains(needle), msg="读它的 kind 上不许报 \{needle}（误报也是 bug）：\{okj}")
   }
 }
@@ -410,6 +440,59 @@ test "写不生效的字段在入口就拒；写默认值（清字段）必须�
       r.contains("不生效") && r.contains("渲染器只对"),
       msg="`\{bad}` 必须被拒并说清读点：\{r}",
     )
+  }
+  // 折线/多边形/位图：填充与描边的读点也在这张表里
+  let _ = run(s, "add-line id=n0 x=0 y=0 w=20 h=20 points=0,0;20,20")
+  let _ = run(s, "add-polygon id=g0 x=0 y=0 w=20 h=20 points=0,0;20,0;0,20")
+  let _ = run(s, "add-ellipse id=e0 x=0 y=0 w=10 h=10")
+  let _ = run(s, "add-image id=m0 x=0 y=0 w=8 h=4 b64=\{solid_png_b64(8, 4, "#FF0000")}")
+  // ① fill：折线只有描边 ⇒ 死；位图/笔触/调整层/组没有填充面 ⇒ 死
+  for bad in [
+    "set-style n0 fill=#FF0000FF", "set-style m0 fill=#FF0000FF",
+    "set-style p0 fill=#FF0000FF", "set-style a0 fill=#FF0000FF",
+  ] {
+    let r = run(s, bad)
+    assert_true(r.contains("fill") && r.contains("stroke="), msg="`\{bad}` 必须被拒并指路：\{r}")
+  }
+  // ② stroke：只实现了矩形/椭圆/线段
+  for bad in [
+    "set-style g0 stroke=#0000FFFF stroke_w=4", "set-style t0 stroke_w=4",
+    "set-style m0 stroke_w=4", "set-style p0 stroke_w=4", "set-style a0 stroke_w=4",
+  ] {
+    let r = run(s, bad)
+    assert_true(r.contains("stroke") && r.contains("矩形/椭圆/线段"), msg="`\{bad}` 必须被拒：\{r}")
+  }
+  // ③ **键表**这一层：`add-*` 的字典里不再广告这些键 ⇒ 报"不认识的参数"+理由
+  //    （字典是 LLM 唯一的说明书，广告一个必然被拒的键就是在骗它）
+  for bad in ["add-polygon x=0 y=0 w=4 h=4 points=0,0;4,0;0,4 stroke=#0000FFFF", "add-ellipse x=0 y=0 w=4 h=4 radius=3"] {
+    let r = run(s, bad)
+    // 理由必须来自**同一张表**（描边的读点 / 圆角的出路），不是某句泛泛的报错
+    let why = r.contains("描边只实现了矩形/椭圆/线段") || r.contains("要给图形加圆角请用 add-rect")
+    assert_true(r.contains("不认识的参数") && why, msg="`\{bad}` 的参数面必须带理由拒：\{r}")
+  }
+  // ④ 字典承诺的键 == 这个 kind 真读的键（**正着咬**：把整串键列出来，
+  //    它同时证明"该有的都在"与"不该有的不在"——用 contains 反着断言
+  //    某个片段不存在会被别的命令的行骗过，实测踩过一次）。
+  let lt = run(s, "list-tools")
+  for needle in [
+    "[id=][name=][x=][y=][w=][h=][fill=][lgrad=][opacity=][blend=][rot=][visible=][tag=][points=]：多边形",
+    "[id=][name=][x=][y=][w=][h=][stroke=][stroke_w=][opacity=][blend=][rot=][visible=][tag=][points=]：折线",
+    "[id=][name=][x=][y=][w=][h=][opacity=][blend=][rot=][visible=][tag=][b64=]。",
+  ] {
+    assert_true(lt.contains(needle), msg="字典的键要与读点矩阵一致（见这句）：\{needle}")
+  }
+  // ④ 清字段照样放行（旧容器里的死数据洗得回来）
+  for ok in ["set-style n0 fill=none", "set-style g0 stroke_w=0", "set-style e0 radius=0"] {
+    let r = run(s, ok)
+    assert_true(r.contains("\"ok\":true"), msg="`\{ok}` 是清字段，必须放行：\{r}")
+  }
+  // ⑤ 正控：读它的 kind 上照旧成功（几何全覆盖、椭圆只碰 fill/stroke）
+  for ok in [
+    "set-style g0 fill=#00FF00FF", "set-style n0 stroke=#00FF00FF stroke_w=2",
+    "set-style t0 fill=#123456FF", "set-style e0 stroke_w=1",
+  ] {
+    let r = run(s, ok)
+    assert_true(r.contains("\"ok\":true"), msg="`\{ok}` 必须成功：\{r}")
   }
   // 组：连同蒙版一起拒（mask 在 group 上也不被读）
   let _ = run(s, "group g1 r0")
