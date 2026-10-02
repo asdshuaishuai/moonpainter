@@ -247,6 +247,8 @@ pub fn exec(s : Session, line : String) -> String {
     "visible" => cmd_visible(s, tokens)
     "reorder" => cmd_reorder(s, tokens)
     "group" => cmd_group(s, tokens)
+    "group-add" => cmd_group_add(s, tokens)
+    "group-remove" => cmd_group_remove(s, tokens)
     "ungroup" => cmd_ungroup(s, tokens)
     "add-text" => cmd_add_text(s, tokens)
     "set-text" => cmd_set_text(s, tokens)
@@ -1951,6 +1953,209 @@ fn cmd_ungroup(s : Session, tokens : Array[String]) -> String {
     offset = offset + 1
   }
   "{\"ok\":true,\"op\":\"ungroup\",\"id\":\"\{gid}\",\"restored\":\{g.children.length()},\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+}
+
+///|
+/// 把一个层从它所在的那个数组里**摘出来**（就地移除并返回该层）。
+///
+/// `locate_container` 给的容器可能是根数组、也可能是某个组的 `children`——
+/// 两者是同一类东西，所以"摘取"只有这一份实现：`group-add` / `group-remove`
+/// 共用（`ungroup` 是整体搬，另有自己的整段逻辑）。
+fn detach_layer(layers : Array[@core.Layer], id : String) -> @core.Layer? {
+  let arr = match locate_container(layers, id) {
+    Some(a) => a
+    None => return None
+  }
+  let mut i = 0
+  while i < arr.length() {
+    if arr[i].id == id {
+      return Some(arr.remove(i))
+    }
+    i = i + 1
+  }
+  None
+}
+
+///|
+/// 收集 `ids` 里出现在 `arr` 中的层，**按 `arr` 的顺序**（层序即数组序）。
+fn collect_in_order(
+  arr : Array[@core.Layer],
+  ids : Array[String],
+) -> Array[@core.Layer] {
+  let out : Array[@core.Layer] = []
+  for l in arr {
+    for id in ids {
+      if l.id == id {
+        out.push(l)
+      }
+    }
+  }
+  out
+}
+
+///|
+/// 成员 id 列表：去重（同一个 id 给两次是**调用方的错**，不是"加两份"）。
+fn member_ids_of(tokens : Array[String], from : Int) -> Result[Array[String], String] {
+  let ids : Array[String] = []
+  let mut i = from
+  while i < tokens.length() {
+    let mid = tokens[i]
+    for seen in ids {
+      if seen == mid {
+        return Err("成员重复：\{mid}")
+      }
+    }
+    ids.push(mid)
+    i = i + 1
+  }
+  Ok(ids)
+}
+
+///|
+/// `group-add <gid> <id> [id...]`：把**已经存在**的根级层加进**已经存在**的组。
+///
+/// 对偶于 `group-remove`，也是 `children` 这一格"局部可改"的补丁：此前只能
+/// `ungroup` + `group` 整体重组——组的 `name`/`opacity`/`blend`/`tags`/`mask`
+/// 全丢，而且整组会被重排到成员的层序位置。
+///
+/// 三条刻意的不支持（都写在字典与 README 边界里，不静默降级）：
+/// ①成员必须是**根级**层（已经在组里的先 `group-remove`）；
+/// ②成员不能是组——**不支持嵌套编组**（`group` 建组时也只收根级层，这条不变量
+///  渲染/命中/压平都依赖，不能从侧门打开）；
+/// ③新成员追加到该组 `children` 的**栈顶**（children 自底向上，即画在原有成员
+///   之上）。要精确层序用 `reorder`。
+fn cmd_group_add(s : Session, tokens : Array[String]) -> String {
+  if tokens.length() < 3 {
+    return err("用法：group-add <gid> <id> [id...]（成员须是根级层，追加到该组栈顶）")
+  }
+  let doc = match require_doc(s) {
+    Ok(d) => d
+    Err(e) => return err(e)
+  }
+  let gid = tokens[1]
+  let g = match @core.find_layer(doc.layers, gid) {
+    Some(l) => l
+    None => return err("组不存在：\{gid}（新建组用 group）")
+  }
+  if !(g.kind is @core.ShapeKind::Group) {
+    return err(
+      "层 \{gid} 是 \{kind_str(g.kind)} 不是组（新建组用 group；改它的属性用 set-style）",
+    )
+  }
+  let ids = match member_ids_of(tokens, 2) {
+    Ok(ids) => ids
+    Err(e) => return err(e)
+  }
+  for mid in ids {
+    if mid == gid {
+      return err("不能把组加进它自己：\{gid}")
+    }
+    let mut at_root = false
+    for l in doc.layers {
+      if l.id == mid {
+        at_root = true
+      }
+    }
+    if !at_root {
+      return err(
+        "成员 \{mid} 不是根级层（不存在，或已在某个组里）——先 group-remove 再 group-add",
+      )
+    }
+    let m = match @core.find_layer(doc.layers, mid) {
+      Some(l) => l
+      None => return err("层不存在：\{mid}")
+    }
+    if m.kind is @core.ShapeKind::Group {
+      return err("成员 \{mid} 是组——不支持嵌套编组（先把它的成员 group-remove 出来）")
+    }
+  }
+  // 先按根级顺序把要搬的层抓出来（摘掉之后就找不到它们了）
+  let moving = collect_in_order(doc.layers, ids)
+  snapshot(s, doc, "group-add \{gid} (\{moving.length()})")
+  for mid in ids {
+    let _ = detach_layer(doc.layers, mid)
+  }
+  let _ = update_layer(doc.layers, gid, fn(l) {
+    let kids = l.children
+    for m in moving {
+      kids.push(m)
+    }
+    { ..l, children: kids }
+  })
+  "{\"ok\":true,\"op\":\"group-add\",\"id\":\"\{gid}\",\"moved\":\{moving.length()},\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+}
+
+///|
+/// `group-remove <gid> <id> [id...]`：把组的**直接成员**移回根级。
+///
+/// 落在**该组的槽位上 = 组的下一层（画在组的下面）**——与 `ungroup` 的落点
+/// 一致（`ungroup` 也是把子层放在组的那个槽位）；"方向"是语义，别留给读者猜。
+/// 成员的相对次序按 `children` 顺序保留，要精确层序用 `reorder`。
+/// 解散整组仍用 `ungroup`。
+fn cmd_group_remove(s : Session, tokens : Array[String]) -> String {
+  if tokens.length() < 3 {
+    return err("用法：group-remove <gid> <id> [id...]（移回根级，落在该组的层序位置）")
+  }
+  let doc = match require_doc(s) {
+    Ok(d) => d
+    Err(e) => return err(e)
+  }
+  let gid = tokens[1]
+  let g = match @core.find_layer(doc.layers, gid) {
+    Some(l) => l
+    None => return err("层不存在：\{gid}")
+  }
+  if !(g.kind is @core.ShapeKind::Group) {
+    return err("层 \{gid} 是 \{kind_str(g.kind)} 不是组（解散整组用 ungroup）")
+  }
+  let ids = match member_ids_of(tokens, 2) {
+    Ok(ids) => ids
+    Err(e) => return err(e)
+  }
+  for mid in ids {
+    // **直接**成员：嵌套的孙子层不在这里移（主编组不支持嵌套，但手改容器可能造出来）
+    let mut direct = false
+    for c in g.children {
+      if c.id == mid {
+        direct = true
+      }
+    }
+    if !direct {
+      return err("层 \{mid} 不是组 \{gid} 的直接成员（解散整组用 ungroup）")
+    }
+  }
+  let taken = collect_in_order(g.children, ids)
+  // 组的槽位（要在动 children 之前拿到）
+  let mut idx = 0
+  let mut i = 0
+  while i < doc.layers.length() {
+    if doc.layers[i].id == gid {
+      idx = i
+    }
+    i = i + 1
+  }
+  snapshot(s, doc, "group-remove \{gid} (\{taken.length()})")
+  let _ = update_layer(doc.layers, gid, fn(l) {
+    let kids : Array[@core.Layer] = []
+    for c in l.children {
+      let mut drop = false
+      for mid in ids {
+        if c.id == mid {
+          drop = true
+        }
+      }
+      if !drop {
+        kids.push(c)
+      }
+    }
+    { ..l, children: kids }
+  })
+  let mut off = 0
+  for t in taken {
+    doc.layers.insert(idx + off, t)
+    off = off + 1
+  }
+  "{\"ok\":true,\"op\":\"group-remove\",\"id\":\"\{gid}\",\"moved\":\{taken.length()},\"at\":\{idx},\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
 }
 
 ///|

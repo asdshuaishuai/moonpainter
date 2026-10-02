@@ -1745,6 +1745,40 @@ MUTS = [
         "killed",
     ),
     (
+        "Z10",
+        "group-add 把新成员塞到 children 头部（组内层序反转，画面变了）",
+        "agent/session.mbt",
+        '''    let kids = l.children
+    for m in moving {
+      kids.push(m)
+    }''',
+        '''    let kids = l.children
+    for m in moving {
+      kids.insert(0, m)
+    }''',
+        "killed",
+    ),
+    (
+        "Z11",
+        "group-remove 把成员推到根级栈顶（落点从『组的下一层』变成最上面）",
+        "agent/session.mbt",
+        '''    doc.layers.insert(idx + off, t)''',
+        '''    doc.layers.push(t)''',
+        "killed",
+    ),
+    (
+        "Z12",
+        "group-add 忘了从根级摘掉（层同时挂在根级与组里）",
+        "agent/session.mbt",
+        '''  for mid in ids {
+    let _ = detach_layer(doc.layers, mid)
+  }''',
+        '''  for mid in ids {
+    let _ = mid
+  }''',
+        "killed",
+    ),
+    (
         "Z9",
         "set-image 从『原地换像素』退化成『重造该层』（蒙版/标签/层序一起丢）",
         "agent/session.mbt",

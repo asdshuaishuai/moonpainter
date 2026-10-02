@@ -32,11 +32,11 @@
 | 域 | 内容 |
 | :-- | :-- |
 | 画布 | `new` / `set-canvas` / `crop`。**容器允许单边 ≤30000、总量 ≤1e8 像素，但渲染器只能画单边 ≤4096**——超过的画布 `new`/`set-canvas` **直接拒绝**（报错说清"只会画左上角 4096×4096、其余图层一个像素都不会出现"，并给可行的下一步），`lint` 以 P0 兜住手改容器、以及**旧引擎（本仓库 81ff759 之前）产出的超限容器**——那时候 `new 5000 200` 是能建能存的，所以这种容器真实存在；`open-mpd` 因此**只知会不拒绝**（拒绝打开就等于用户连"打开自己的文件再 `crop` 到 4096"这条自救路都没有，报错里的 `notice` 字段会说清），`census` 也把两个数分开报（`canvas` = 文档记账尺寸、`render` = 实际渲染尺寸，不等即"能存但画不出来"）。**此前是静默截断**：`new 5000 200` 回 ok、画布尺寸/指纹/容器都按 5000 记账，而渲染只画左上角 4096×200 那块，`lint` 报 0 违规（实测放在 x=4500 的图层整个消失） |
-| 绘制 | 矩形（圆角）/椭圆/线段/多边形，纯色+线性渐变填充（颜色支持 `#RRGGBB[AA]`，**AA 真的参与混合**：50% 红压白 = `#FF7F7F`；**端点归一化到本层 bbox 的 0..1**；与同命令的像素参数 x/y/w/h 不同，写错会被入口拒绝并给出换算值），描边，7 种混合（normal/multiply/screen/overlay/darken/lighten/difference，W3C 合成公式），透明度，旋转（Taylor 三角）+ **翻转（flip h/v/both，先翻转后旋转）**，编组（直通），PNG 位图导入（8-bit RGB/RGBA/灰非交错；**盒子跟着内容走**：不给 `w=`/`h=` 时盒 = 资产像素尺寸，只给一边时另一边按原比例推——渲染器把资产**拉伸到盒子**，缺省 100×100 会把任意比例的图静默压扁）、**原地换图** `set-image`（只换像素，层序/蒙版/标签/透明度/翻转/旋转都不动——此前只能删了重加，那些全丢且层被推到栈顶） |
+| 绘制 | 矩形（圆角）/椭圆/线段/多边形，纯色+线性渐变填充（颜色支持 `#RRGGBB[AA]`，**AA 真的参与混合**：50% 红压白 = `#FF7F7F`；**端点归一化到本层 bbox 的 0..1**；与同命令的像素参数 x/y/w/h 不同，写错会被入口拒绝并给出换算值），描边，7 种混合（normal/multiply/screen/overlay/darken/lighten/difference，W3C 合成公式），透明度，旋转（Taylor 三角）+ **翻转（flip h/v/both，先翻转后旋转）**，编组（直通；**已有层进出已有组**走 `group-add`/`group-remove`——此前只能 `ungroup`+`group` 整体重组，组的 name/opacity/blend/tags/mask 全丢；新成员追加到组栈顶，移出的层落在**组的下一层**），PNG 位图导入（8-bit RGB/RGBA/灰非交错；**盒子跟着内容走**：不给 `w=`/`h=` 时盒 = 资产像素尺寸，只给一边时另一边按原比例推——渲染器把资产**拉伸到盒子**，缺省 100×100 会把任意比例的图静默压扁）、**原地换图** `set-image`（只换像素，层序/蒙版/标签/透明度/翻转/旋转都不动——此前只能删了重加，那些全丢且层被推到栈顶） |
 | 图层蒙版 | 几何蒙版（矩形/椭圆 + **圆角 `radius`（仅矩形，超过半边长按半边长夹住）** + **边缘羽化 `feather`（按到边界的真实内距线性过渡，`0`=硬边）** + **边缘毛化 `roughen`（按画布坐标的确定性值噪声扰动边界，手绘/撕裂纸边那种不规则轮廓，`0`=光滑边；与 feather 叠加 = 先毛化再羽化）** + `invert` 反选，**蒙版外不渲染**）：人类前端可拖拽创建（工具条 ▭/◯），拖拽前用工具条上的滑块设**圆角**（仅矩形）与**羽化**，另有「蒙版反选 / 去蒙版」按钮，AI 可走 `add_mask` / `set_mask` / `remove_mask` 工具；**`set_mask` 是全参数的部分更新**（只给要改的键，其余原样保留——全量重建会把没重复写的 `radius`/`roughen` 悄悄重置成 0）；`query-layer` / `list-layers` 报告 `mask` 状态（否则加了蒙版看不出来）。用到 `roughen` 的容器在 manifest 里声明 `render_contract:2`，**旧引擎据此拒绝打开**而不是把它画成光滑边 |
 | 渲染 | 2×2 子采样 AA、取景渲染（归一化 viewport + 目标宽）、**overlay=1（层 bbox 序号线框 + 3×5 数字标注，像素↔结构对位辅助）**、pick 像素→层 id、直方图/覆盖统计、渲染确定性（golden sha256 锁定） |
 | 容器 | pack/unpack 全环、确定性 pack（两次打包字节一致）、原子落盘（tmp+rename）、八类拒绝路径全测试 |
-| 会话 | 61 个命令（字典 = agent/tools.mbt）、vision 闸、undo/redo（快照栈 ≤64）、编辑历史、P0–P2 lint、语义标签 `tag`/`untag`（可打可摘；可当**层作用域**用，见下） |
+| 会话 | 63 个命令（字典 = agent/tools.mbt）、vision 闸、undo/redo（快照栈 ≤64）、编辑历史、P0–P2 lint、语义标签 `tag`/`untag`（可打可摘；可当**层作用域**用，见下） |
 | MVSL 编辑表 | 确定性声明式编辑 IR：**图层级作用域 `layer=<id>` 与标签作用域 `layer=@<标签>`**（前者只作用于指定层，后者作用于带该标签的**全部层**——"只改某几个层"的声明式写法；该层先单独栅格化到透明底，选择子在**这一层自己的像素**上求值，再合成回去；标签是活绑定：打/摘标签即改作用范围，落不到任何层则**拒绝**而不是静默不生效；**这同时是 `recolor` 边界去污染的正确做法**：半透明边缘的颜色是前景与背景的混合，在合成图上变换会连背景一起偏移，在层栅格上则只作用于纯前景色）+ 谓词选择子（OKLCh 色相环/彩度/OKLab 亮度/几何/渐变/种子连通域/外部 mask 资产，全部输出 [0,1] 软权重场，可 Union/And/Diff 组合）+ 有序算子程序（recolor/temperature/relight，`out=lerp(in,op(in),w)` 软权重过渡）+ 选区精修（grow/shrink/feather/fill_holes/keep_largest/guided filter）+ 保护断言；**是渲染的最终一遍**（`最终图 = apply(编辑表, 层合成底图)`，`render`/`previews/`/`mvsl-impact` 三条出口同一张图）；canonical JSON 往返幂等、旧引擎遇未知算子/更高版本一律拒绝、前视 `stage:` 与带 `stage:` 基准的断言在校验期拦下 |
 | MVSL 闭环 affordance | `select-preview`（选择子→overlay PNG + 覆盖率/bbox/连通域事实，"AI 选 ID 不报坐标"）、`mvsl-impact`（逐算子 diff 证书：改动像素数/ΔE/选区外泄漏率 + 结果 PNG；泄漏率判据是**选择子支撑集**，软过渡带不算泄漏——`out=lerp(in,op(in),w)` 保证支撑集外逐位不变，所以它是不变量/安全网）、`mvsl-assert`（保护区约束违反则命令信封直接 fail，"别动人物"变成机器可验证约束）、`census`（hue×sat 12×3 桶普查 + OKLab L 与 HSV V 均值对照，`within=` 可收窄到某条选择子）、`probe`（邻域统计 + 边缘置信度 + 当前编辑表每个算子/断言在该点的 membership 与连通域 id；**支持 `points=x1,y1;x2,y2;…` 一次探 64 点**，返回数组且每点字段与单点模式逐字段一致——探九宫格不用往返 9 次）、`sel-schema`（选择子/算子语法自证清单：canonical 示例由写出器产出、由同一解析器验回，附量纲与"数值该取哪个字段"）；**lint 也查编辑表**（空操作/断言被违反/空断言/白装算子）；预览**先全分辨率生成再盒平均降采样**，防发丝级软边界被抹掉误判 |
 | wasm SDK | `wasm/` 包：经典 wasm 零 import（默认会话面 `mp_version/mp_reset/mp_exec_in` + in 槽；多会话句柄面 `mp_open/mp_close/mp_exec_h`），Node/浏览器双宿主冒烟 + 合同测试；JS 宿主胶水 `npm/moonpainter-sdk/`（.d.ts 类型化门面） |
@@ -137,8 +137,9 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   `build_demo.sh#doc-tools` 会机械核对下面这块，同时保证**工具面不许指向一条
   引擎里不存在的命令**。要新增可达能力时改这里，而不是默默改数：
   <!-- unreachable:begin -->
-  引擎 61 条命令里，demo 的 AI 够不着 8 条：`session-open` `open-mpd-b64`
+  引擎 63 条命令里，demo 的 AI 够不着 10 条：`session-open` `open-mpd-b64`
   `help` `list-tools` `fingerprint` `add-image` `set-image` `inspect`
+  `group-add` `group-remove`
   <!-- unreachable:end -->
   各自原因——`session-open`/`open-mpd-b64`：会话与开门由前端管，不该让模型
   自己开门；`help`/`list-tools`：工具清单本来就在 system prompt 里；
@@ -146,7 +147,9 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   模型无法产出、也无处接收图片字节——插图与换图是人类的动作：前端上传后成为图片层，
   AI 可以在它之上移动/缩放/改样式（`move`/`resize`/`set-style`/`set-mask`），
   但不能凭空造出或替换掉图片像素**；`inspect`：
-  文档概览，AI 用 list_layers + edits + stats 已能拼出。
+  文档概览，AI 用 list_layers + edits + stats 已能拼出；**`group-add`/`group-remove`：
+  组的成员增删——这两条是"还没接线"而不是"不该给"（人类前端可直接用；
+  AI 侧要"把这个层放进那个组"时会用到，属下一步）。
 - **元参数通道**：`list_params` / `set_param` / `remove_param` 读写命名元参数
   （品牌主色、网点密度这类设计系统元数据）。**纯元数据、不影响渲染**——改画面
   仍要走 MVSL 或图形命令；它的用途是让 AI 在开场先读既有规范（而不是凭空配色）、
@@ -292,7 +295,7 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
 - **P3 manifest 的 `counts` 无人校验**：把 `layers` 和 `assets` 计数互换全部测试通过——
   而 `counts` 正是工具/审阅者据以判断"容器里有什么"的对外事实。
 
-当前 166 个变异中 165 个被抓住，唯一存活的 M2 是**已确认的等价变异**。
+当前 169 个变异中 168 个被抓住，唯一存活的 M2 是**已确认的等价变异**。
 变异门自己也有一个静默失效模式：锚点文本被重构改掉或变得不唯一，那个变异就
 **再也没跑过**，而汇总里的「N 个变异全部通过」照旧好看（实测踩过：两个变异
 静静失效了一轮）。所以 `verify.sh#anchors` 用 `--check-anchors` 秒级校验

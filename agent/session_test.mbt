@@ -1268,3 +1268,95 @@ test "set-image：原地换图（层序/蒙版/标签/透明度/翻转都不丢�
   let lint = run(s, "lint")
   assert_true(lint.contains("\"violations\":0"), msg=lint)
 }
+
+///|
+test "group-add / group-remove：已有层进出已有组，组的属性与成员层序都不丢" {
+  // `children` 这一格此前是"整体可改、局部不可改"：要往已有组里加一个成员，
+  // 只能 ungroup 再 group，组的 name/opacity/blend/tags/mask 全丢，整组还会
+  // 被重排到成员的层序位置。这两个命令是它的对偶。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 100 100")
+  // 底：红方块（组外）——组内两个成员叠在同一处，用来量**组内层序**
+  let _ = run(s, "add-rect x=0 y=0 w=100 h=100 fill=#FF0000FF id=below")
+  let _ = run(s, "add-rect x=0 y=0 w=10 h=10 fill=#00FF00FF id=g1c1")
+  let _ = run(s, "group g1 g1c1")
+  // 给组挂上"重组会丢"的那些属性
+  let _ = run(s, "set-style g1 opacity=0.5 blend=multiply tag=hero name=\"My Group\"")
+  // 组外再放一个蓝方块（待加入）
+  let _ = run(s, "add-rect x=0 y=0 w=20 h=20 fill=#0000FFFF id=g2c2")
+  let before = run(s, "list-layers")
+  assert_true(before.contains("\"count\":3"), msg=before)
+  // ① 加进已有组：根级层数 3 → 2，成员进组
+  let a = run(s, "group-add g1 g2c2")
+  assert_true(a.contains("\"op\":\"group-add\""), msg=a)
+  assert_true(a.contains("\"moved\":1"), msg=a)
+  let l1 = run(s, "list-layers")
+  assert_true(l1.contains("\"count\":2"), msg=l1)
+  let g = run(s, "query-layer g1")
+  // ② 组的属性一个没丢（这正是 ungroup+group 做不到的）
+  assert_true(g.contains("\"name\":\"My Group\""), msg=g)
+  assert_true(g.contains("\"opacity\":0.5"), msg=g)
+  assert_true(g.contains("\"blend\":\"multiply\""), msg=g)
+  assert_true(g.contains("\"tags\":[\"hero\"]"), msg=g)
+  // ③ 新成员在组内**栈顶**（画在 g1c1 之上）：两个方块都盖住 (5,5)，
+  //    pick 必须报后加进来的那个 —— 这是层序断言，不是结构断言
+  let p = run(s, "pick 5 5")
+  assert_true(p.contains("\"id\":\"g2c2\""), msg=p)
+  // ④ 移回根级：落在**该组的层序位置**，层序保留
+  let r = run(s, "group-remove g1 g2c2")
+  assert_true(r.contains("\"op\":\"group-remove\""), msg=r)
+  assert_true(r.contains("\"at\":1"), msg=r)
+  let l2 = run(s, "list-layers")
+  assert_true(l2.contains("\"count\":3"), msg=l2)
+  // g2c2 现在在**组外、组的下一层**（与 ungroup 的落点一致：`ungroup` 也是
+  // 把子层放在组的那个槽位上）。这是"方向也是语义"那条：落点在上还是在下、
+  // 差一层就是两个不同的画面，所以要有测试钉住，而不是留给读者猜。
+  let gg = run(s, "query-layer g1")
+  assert_true(!gg.contains("g2c2"), msg="g2c2 必须已经不在组里：\{gg}")
+  let i2 = l2.find("\"id\":\"g2c2\"").unwrap_or(-1)
+  let i1 = l2.find("\"id\":\"g1\"").unwrap_or(-1)
+  assert_true(i2 >= 0 && i1 >= 0 && i2 < i1, msg="g2c2 必须落在 g1 的下一层：\{l2}")
+  // 所以组（含 g1c1）仍盖在它上面 —— pick 报 g1c1，不是 g2c2
+  let p2 = run(s, "pick 5 5")
+  assert_true(p2.contains("\"id\":\"g1c1\""), msg=p2)
+  // ⑤ 两向的拒绝都要响（静默成功比报错坏得多）
+  let e1 = run(s, "group-add g1 g1")           // 自己加自己
+  assert_true(e1.has_prefix("{\"error\":\""), msg=e1)
+  let e2 = run(s, "group-add g1 nope")         // 不存在的成员
+  assert_true(e2.has_prefix("{\"error\":\""), msg=e2)
+  let e3 = run(s, "group-add g1 g1c1")         // 已在组里（不是根级）
+  assert_true(e3.has_prefix("{\"error\":\""), msg=e3)
+  let e4 = run(s, "group-add below g2c2")      // 目标不是组
+  assert_true(e4.has_prefix("{\"error\":\""), msg=e4)
+  let e5 = run(s, "group-add g1 g2c2 g2c2")    // 成员重复
+  assert_true(e5.has_prefix("{\"error\":\""), msg=e5)
+  let e6 = run(s, "group-remove g1 nope")      // 不是该组的直接成员
+  assert_true(e6.has_prefix("{\"error\":\""), msg=e6)
+  let e7 = run(s, "group-add g1 g9")           // 把组加进组 = 嵌套编组，拒
+  assert_true(e7.has_prefix("{\"error\":\""), msg=e7)
+  // ⑥ lint 干净（成员进出之后不该留下"装了却什么都不干"的状态）
+  let lint = run(s, "lint")
+  assert_true(lint.contains("\"violations\":0"), msg=lint)
+}
+
+///|
+test "group-add：嵌套编组被拒（成员是组），且不产生\"同时在两处\"的层" {
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 40 40")
+  let _ = run(s, "add-rect x=0 y=0 w=10 h=10 fill=#FF0000FF id=a")
+  let _ = run(s, "add-rect x=0 y=0 w=10 h=10 fill=#00FF00FF id=b")
+  let _ = run(s, "group g1 a")
+  let _ = run(s, "group g2 b")
+  let e = run(s, "group-add g1 g2")
+  assert_true(e.has_prefix("{\"error\":\""), msg="嵌套编组必须拒：\{e}")
+  assert_true(e.contains("嵌套编组"), msg=e)
+  // 拒了之后什么都没变：两个组都还在根级，成员各就各位
+  let l = run(s, "list-layers")
+  assert_true(l.contains("\"count\":2"), msg=l)
+  let q1 = run(s, "query-layer g1")
+  assert_true(q1.contains("\"id\":\"a\""), msg=q1)
+  let q2 = run(s, "query-layer g2")
+  assert_true(q2.contains("\"id\":\"b\""), msg=q2)
+}
