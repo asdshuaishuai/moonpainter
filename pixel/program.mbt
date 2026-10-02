@@ -127,6 +127,27 @@ pub fn op_weight(
 // ---------------------------------------------------------------------------
 
 ///|
+/// 算子选择子的**求值基底**：`stage:n` 落在哪个缓冲上。
+///
+/// `n == 0` = **本段的输入**（单段时=底图；文档级段里=层合成结果），否则是
+/// 第 n 个算子之后的中间缓冲。这是这句判断的**唯一实现**——执行器
+/// （`run_program`）与"逐算子报告"（`render.ImpactStage.basis`）都必须用它，
+/// 否则报告出去的基底与真渲染用的不是同一张图：`agent` 侧三个消费者
+/// （`mvsl-impact` 的逐算子数字、`lint` 的空操作判定、`census` 的连通域标签）
+/// 都拿 `basis` **重算**选择子权重，基底错 = 报出去的每个数字都错，而渲染是对的。
+pub fn stage_basis_of(
+  base : @codec.RgbaBuf,
+  stages : Array[@codec.RgbaBuf],
+  n : Int,
+) -> @codec.RgbaBuf {
+  if n == 0 {
+    base
+  } else {
+    stages[n - 1]
+  }
+}
+
+///|
 /// 执行整张编辑表：base → 逐算子应用 → 最终缓冲。
 /// 返回 (最终缓冲, 各步中间缓冲数组)。
 ///
@@ -158,8 +179,9 @@ pub fn run_program(
             "算子 \{op.id} 的 STAGE(\{n}) 超出可用前置阶段（自身序号 \{i}）——拒绝前视引用",
           )
         }
-        // STAGE(0) = base；STAGE(n) = 第 n 个算子之后的中间缓冲
-        let sbuf = if n == 0 { base } else { stages[n - 1] }
+        // STAGE(0) = 本段输入；STAGE(n) = 第 n 个算子之后的中间缓冲
+        // （与"逐算子报告"共用 `stage_basis_of` 一处实现）。
+        let sbuf = stage_basis_of(base, stages, n)
         let sctx = SelCtx::new(sbuf)
         match op_weight(op, sctx, FieldCache::new()) {
           Ok(f) => f

@@ -1329,7 +1329,7 @@ MUTS = [
         """        list.push({
           op: sub.ops[k],
           layer: l.id,
-          basis: lb,""",
+          basis: kbasis,""",
         """        list.push({
           op: sub.ops[k],
           layer: l.id,
@@ -1502,7 +1502,7 @@ MUTS = [
         "U21",
         "文档级 STAGE(n>0) 与图层级算子共存被放行（两段式下静默换掉取到的像素）",
         "core/mvsl.mbt",
-        """        let same_segment = op.layer == "" && n > 0 && target_is_doc
+        """        let same_segment = op.layer == "" && n > 0 && target_is_doc && n - 1 < i
         if n > 0 && !same_segment {""",
         """        let same_segment = true
         if false {""",
@@ -1656,6 +1656,33 @@ MUTS = [
         "agent/session.mbt",
         '''  Ok((@core.fingerprint(m.doc), @render.render_limit_error(m.doc.width, m.doc.height)))''',
         '''  Ok((@core.fingerprint(m.doc), ""))''',
+        "killed",
+    ),
+    (
+        "Z1",
+        "文档级段不再把 stage:n 从表序改写成段内序号（静默指到别的缓冲）",
+        "core/mvsl.mbt",
+        '''            { ..op.sel, basis: Stage(seg_no[n - 1]) }''',
+        '''            { ..op.sel, basis: Stage(n) }''',
+        "killed",
+    ),
+    (
+        "Z2",
+        "逐算子报告又把 basis 报成段基准而不是真正求值的缓冲（数字全错而渲染是对的）",
+        "render/scene.mbt",
+        '''      let obasis = match prog.ops[i].sel.basis {
+        @core.Base => base
+        @core.Stage(n) => @pixel.stage_basis_of(base, stages, n)
+      }''',
+        '''      let obasis = base''',
+        "killed",
+    ),
+    (
+        "Z3",
+        "stage:n 的静态判据丢掉上界（自指/前视变成校验放行、渲染才失败）",
+        "core/mvsl.mbt",
+        '''        let same_segment = op.layer == "" && n > 0 && target_is_doc && n - 1 < i''',
+        '''        let same_segment = op.layer == "" && n > 0 && target_is_doc''',
         "killed",
     ),
     ]

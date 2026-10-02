@@ -1070,10 +1070,17 @@ pub fn impact_stages(
     let mut i = 0
     while i < prog.ops.length() {
       let after = stages[i]
+      // `basis` 是**该算子选择子实际求值的那个缓冲**（`stage:n` 落到哪张图），
+      // 不是"本段的输入"——`agent` 侧三个消费者拿它重算权重场，报错了数字全错
+      // 而渲染是对的。取值走 `@pixel.stage_basis_of`，与执行器同一处实现。
+      let obasis = match prog.ops[i].sel.basis {
+        @core.Base => base
+        @core.Stage(n) => @pixel.stage_basis_of(base, stages, n)
+      }
       list.push({
         op: prog.ops[i],
         layer: "",
-        basis: base,
+        basis: obasis,
         before: prev,
         after,
       })
@@ -1122,10 +1129,16 @@ pub fn impact_stages(
       let mut k = 0
       while k < sub.ops.length() {
         let after = sub_stages.1[k]
+        // 层算子的 `stage:n>0` 被判据拒（图层级与 STAGE(n>0) 不能共存），
+        // 所以这里只可能是 `stage:0` = 本段输入 = 该层自己的栅格。
+        let kbasis = match sub.ops[k].sel.basis {
+          @core.Base => lb
+          @core.Stage(n) => @pixel.stage_basis_of(lb, sub_stages.1, n)
+        }
         list.push({
           op: sub.ops[k],
           layer: l.id,
-          basis: lb,
+          basis: kbasis,
           before: prev,
           after,
         })
@@ -1147,10 +1160,15 @@ pub fn impact_stages(
   let mut i = 0
   while i < docprog.ops.length() {
     let after = doc_stages[i]
+    // 同单段：`stage:n` 指向的是哪个缓冲就报哪个（`out` 只对应 `stage:0`）。
+    let dbasis = match docprog.ops[i].sel.basis {
+      @core.Base => out
+      @core.Stage(n) => @pixel.stage_basis_of(out, doc_stages, n)
+    }
     list.push({
       op: docprog.ops[i],
       layer: "",
-      basis: out,
+      basis: dbasis,
       before: prev,
       after,
     })

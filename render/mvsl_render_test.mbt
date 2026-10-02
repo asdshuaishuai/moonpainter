@@ -694,3 +694,115 @@ test "标签作用域在阶段报告里已展开成具体层：一个标签两�
   assert_eq(stages[1].layer, "l2", msg="层序即顺序（l2 后）")
   assert_eq(stages[0].op.id, "e1", msg="展开后 id 保持不变（同一算子落到两个层）")
 }
+
+///|
+/// 造一条给定 id / 选择子 / 色相的 recolor 算子（表里每条都要不同 id）。
+fn docop(id : String, sel : @core.SelSpec, hue : Double) -> @core.EditOp {
+  let o = rprog(sel, hue).ops[0]
+  { ..o, id, sel }
+}
+
+///|
+test "两段式下文档级 stage:n 仍是**表序**：段内重编号不许偷偷换掉取到的缓冲" {
+  // 由来：`stage:n` 的声明含义是"**表里**第 n 条算子之后的中间缓冲"，而两段式
+  // 渲染把表拆段跑（层段 → 合成 → 文档级段），`run_program` 的 `Stage(n)` 却是
+  // **段内**序号。`layer_scope_error` 只检查了"第 n 条是不是文档级算子"，没检查
+  // 段内重编号之后那个 n 还指不指着同一条——于是**文档级算子前面插一条层算子，
+  // 取到的缓冲就整体前移一格**，而校验、lint、渲染全都不会说话。
+  let env = @render.RenderEnv::new()
+  let doc = two_tone_doc() // l1 左半红、l2 右半蓝
+  // 表（0 基）：0=层算子（唯一作用是让两段式生效）1=a 2=b 3=c
+  // `c` 用 stage:2 ⇒ 按表序 = "第 2 条之后" = a 的输出。
+  let lay = rprog_layer(whole16(), 120.0, "l1").ops[0]
+  let opa = docop("a", whole16(), 10.0)
+  let opb = docop("b", whole16(), 200.0)
+  let selc : @core.SelSpec = { basis: @core.Stage(2), expr: whole16().expr }
+  let opc = docop("c", selc, 300.0)
+  let prog : @core.EditProgram = { ops: [lay, opa, opb, opc], guards: [] }
+  assert_true(
+    @core.layer_scope_error(prog) is None,
+    msg="这张表按现有判据是合法的（不然测的就不是这一段）",
+  )
+  let (stages, _) = stages_of(doc, env, prog)
+  // 阶段顺序：层算子（按层序）→ 文档级算子（按表序）
+  assert_eq(stages.length(), 4, msg="1 条层阶段 + 3 条文档级阶段")
+  assert_eq(stages[1].op.id, "a", msg="文档级阶段按表序")
+  assert_eq(stages[3].op.id, "c", msg="文档级阶段按表序")
+  // **判别力自证**：两个候选缓冲必须真的不同，否则这条断言会悄悄变成空的。
+  assert_true(
+    !same_buf(stages[1].after, stages[2].after),
+    msg="a 与 b 的输出必须不同（否则'指错了'根本量不出来）",
+  )
+  // 声明语义：c 的基准 = 表里第 2 条算子之后的缓冲 = a 的输出。
+  assert_true(
+    same_buf(stages[3].basis, stages[1].after),
+    msg="stage:2 必须指表序第 2 条（a）之后的缓冲；指到 b 上就是静默换了像素",
+  )
+}
+
+///|
+test "stage:n 的静态判据要连「前视/自指」一起咬（否则校验放行、渲染才失败）" {
+  // `stage:n` 指的是"**表里**第 n 条之后的缓冲"，所以引用者自己的表序是上界：
+  // n 必须**严格小于**引用者（0 基 i ⇒ n ≤ i）。此前判据只查了"第 n 条是不是
+  // 文档级算子"，漏掉上界——于是 `stage:` 指到自己（或后面那条）时校验放行，
+  // 而 `run_program` 在执行期才报"拒绝前视引用"：**命令面收下了、渲染时才失败**，
+  // 正是 `validate_program` 开头声明要避免的那件事。
+  let opa = docop("a", whole16(), 10.0)
+  let opc = docop("c", whole16(), 300.0)
+  // 表：[a, b(stage:2), c]；b 自己是第 2 条，stage:2 = "第 2 条之后" = b 的输出
+  let b_self = docop("b", { basis: @core.Stage(2), expr: whole16().expr }, 200.0)
+  let bad : @core.EditProgram = { ops: [opa, b_self, opc], guards: [] }
+  match @core.layer_scope_error(bad) {
+    None => abort("自指/前视必须在**静态校验**里拒（否则执行期才报'拒绝前视引用'）")
+    Some(e) => {
+      assert_true(e.contains("b"), msg="报错要点出是哪条算子：\{e}")
+      assert_true(e.contains("STAGE(2)"), msg="报错要回显收到的 n：\{e}")
+    }
+  }
+  // 正控 1：stage:1（第 1 条之后 = a 的输出）对第 2 条算子来说是合法的
+  let b_ok = docop("b", { basis: @core.Stage(1), expr: whole16().expr }, 200.0)
+  let good : @core.EditProgram = { ops: [opa, b_ok, opc], guards: [] }
+  assert_true(
+    @core.layer_scope_error(good) is None,
+    msg="stage:1 在表序上指向更早的算子，必须放行（判据不许写宽）",
+  )
+  // 正控 2：stage:0（本段输入）恒放行
+  let b_zero = docop("b", { basis: @core.Stage(0), expr: whole16().expr }, 200.0)
+  assert_true(
+    @core.layer_scope_error({ ops: [opa, b_zero], guards: [] }) is None,
+    msg="stage:0 表示本段输入，无歧义，必须放行",
+  )
+  // 正控 3：**不带 STAGE** 的同形表当然也要放行（否则前两条正控可能是靠别的原因过的）
+  assert_true(
+    @core.layer_scope_error({ ops: [opa, opc], guards: [] }) is None,
+    msg="没有 STAGE 的表必须放行",
+  )
+}
+
+///|
+test "单段路径下 stage:n 的 basis 报告也必须是**真正求值的**那个缓冲" {
+  // 与两段式那条同源，但走的是**单段**分支（表里没有层算子）——两条分支各写
+  // 一遍"basis 取哪个缓冲"，于是必须各有一条测试守着（变异 Z2 就是拿这条
+  // 单段分支做的反例：没有它，单段下把 basis 报成段基准没人会发现）。
+  let env = @render.RenderEnv::new()
+  let doc = two_tone_doc()
+  // 表：[a, b, c(stage:1)]；stage:1 = 表里第 1 条之后 = a 的输出
+  //（**不是** c 自己的输入——c 的输入是 b 的输出，这正是这条断言有判别力的原因）
+  let opa = docop("a", whole16(), 10.0)
+  let opb = docop("b", whole16(), 200.0)
+  let opc = docop("c", { basis: @core.Stage(1), expr: whole16().expr }, 300.0)
+  let (stages, _) = stages_of(doc, env, { ops: [opa, opb, opc], guards: [] })
+  assert_eq(stages.length(), 3, msg="单段：每条算子一个阶段")
+  assert_true(
+    !same_buf(stages[0].after, stages[1].after),
+    msg="判别力自证：a 与 b 的输出必须不同，否则'报错基底'量不出来",
+  )
+  assert_true(
+    same_buf(stages[2].basis, stages[0].after),
+    msg="stage:1 的 reported basis 必须是 a 的输出（报成底图就是数字全错而渲染对）",
+  )
+  assert_true(
+    !same_buf(stages[2].basis, stages[1].after),
+    msg="不许退化成'报成前一条的输出'（那不是它求值的图）",
+  )
+}
