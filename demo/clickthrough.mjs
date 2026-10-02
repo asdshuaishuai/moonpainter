@@ -81,6 +81,13 @@ check(
   Object.keys(globalThis).filter((k) => k.startsWith('__')).length,
 );
 
+// **与浏览器从同一状态出发**：浏览器在 main 里 bootstrap（装载示例场景）。
+// 不先做这一步的话，第一个调用 `bootstrap()` 的处理器会把下面的测试文档整个
+// 换成示例场景——那时四条断言会一起错，而现象看着像"pick 报错了层"。
+globalThis.__headless_boot();
+await new Promise((r) => setTimeout(r, 0));
+check('初始化：示例场景装进来了（说明驱动器与浏览器同状态）', layers().length === 4, layers().length);
+
 // 干净起点：确定性画布（引擎的会话在 headless 自检里已经开好）
 exec('new 300 200 uuid=ct');
 check('起点：0 层', layers().length === 0, JSON.stringify(layers()));
@@ -139,6 +146,25 @@ globalThis.__shape_ready('rect', '5,5,1,1');
 await flush();
 check('太小的框：不建层', layers().length === n2, layers().length);
 check('太小的框：状态栏说"太小了"', /太小了/.test(status()), status());
+
+// ④b 吸管：一下点击**取色 + 选中该点图层**（人类侧唯一一条"点哪儿选哪儿"）
+globalThis.__pick_at('105,105');
+await flush();
+{
+  const inside = layers().find((x) => x.kind === 'polygon') || {};
+  const props = String(el('pprops').innerHTML);
+  check('吸管：点在多边形里 → 属性面板切到那一层', props.includes(inside.id), 'props 里没有 ' + inside.id);
+  check('吸管：状态栏说选中了哪一层', /已选中/.test(status()), status());
+  check('吸管：命中时不该误报"这一点没有层"', !/没有层/.test(status()), status());
+  globalThis.__pick_at('295,195'); // 画布右下角空白
+  await flush();
+  check('吸管：点在空白处 → 说"这一点没有层"（空集也要说话）', /没有层/.test(status()), status());
+  check(
+    '吸管：点在空白处不该清掉已有选中态',
+    String(el('pprops').innerHTML).includes(inside.id),
+    '选中态丢了：props 里没有 ' + inside.id,
+  );
+}
 
 // ⑤ 属性面板那几个入口（改名/改坐标/标签）走的是"回读另一半再整对发"的路
 const pid = (layers().find((x) => x.kind === 'polygon') || {}).id;

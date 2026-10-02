@@ -73,7 +73,10 @@ echo "== 5/9 人类面点击穿透（真的 demo.js + 最小 DOM 壳，直接调
 # 这里用哑 DOM 壳加载构建产物，调 `__poly_finish`/`__shape_ready`/`__rename`
 # 这些页面处理器，再从引擎把状态**读回来**逐条断言。
 # 它验的是「处理器 → do_* → 引擎」这条链；**DOM 本身的正确性仍需浏览器**。
-CT_OUT=$(node clickthrough.mjs)
+# `|| true`：驱动器非零退出时，`set -e` 会在下面的解析**之前**把脚本干掉，
+# 于是失败**一声不响**（实测只看到一行步骤标题）。判据必须自己说话，
+# 由下面的 python 打印每条不过的断言并决定退出码。
+CT_OUT=$(node clickthrough.mjs || true)
 echo "$CT_OUT" | python3 -c "
 import json, sys
 # 驱动器会打出**两行** JSON：demo.js 自己的 headless 自检（import 时执行 main）

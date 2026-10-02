@@ -104,13 +104,33 @@ fn do_pick(coords : String) -> Unit {
   if parts.length() != 2 {
     return
   }
-  let r = eng("sample \{parts[0]} \{parts[1]}")
+  let x = parts[0]
+  let y = parts[1]
+  // 一下点击做两件事：`sample` 取色 + `pick` 认这一点的层是谁，并把那一层
+  // **选中**。此前只有取色，于是"看到想要的颜色/元素，点一下把它选上接着改"
+  // 这个最自然的动作做不到——`pick` 这条命令也就只有 AI 够得到（README 名单
+  // 里那条理由写着"名字撞车，人类用 sample"，其实缺的是**这个动作**）。
+  let r = eng("sample \{x} \{y}")
   let color = eng_s(r, "color")
+  let pr = eng("pick \{x} \{y}")
+  let id = match json_get(pr, "id") {
+    Some(Json::String(s)) => s
+    _ => ""
+  }
+  let at = if id != "" {
+    g_sel.val = id
+    "（层 \{id} 已选中）"
+  } else {
+    "（这一点没有层）"
+  }
   if color != "" {
     js_set_brush_color(color)
-    let layer = eng_s(r, "layer")
-    let at = if layer != "" { "（层 \{layer}）" } else { "" }
-    js_status_bar("💧 取色 \{color}\{at} — 已设为笔刷颜色")
+  }
+  refresh_ui()
+  if color != "" {
+    js_status_bar("💧 取色 \{color} \{at} — 已设为笔刷颜色")
+  } else {
+    js_status_bar("💧 \{at}")
   }
 }
 
@@ -1982,6 +2002,7 @@ fn main {
     // 顺带把引擎入口暴露出去，好让驱动器把状态**读回来**断言。
     register_globals()
     js_expose_exec(fn(line : String) { engine_exec_line(line) })
+    js_expose_boot(fn() { bootstrap() })
     println(result.stringify())
   } else {
     // 浏览器：同步初始化（无 async 运行时依赖）

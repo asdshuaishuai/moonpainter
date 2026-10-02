@@ -434,7 +434,10 @@
                                 # build_demo.sh#html-wiring 兜名字都已注册；
                                 # build_demo.sh#clickthrough 用哑 DOM 壳加载真的
                                 # demo.js 调处理器，再从引擎读回状态断言
-                                # （**DOM 本身仍需浏览器**，壳只保证跑得下去）。
+                                # （**DOM 本身仍需浏览器**，壳只保证跑得下去）；
+                                # 驱动器必须先走页面初始化——**验收工具与
+                                # 被验对象不同状态时，报出来的现象会指向
+                                # 别的地方**（经过见 PLAN 三十三）。
                                 # build_demo.sh#doc-tools 文档工具数 + 边界自洽：README 与 AGENTS 里
                                 # 写的工具数必须与 paint_tool_defs 一致；README
                                 # 里 unreachable 标记之间那份"AI 够不着"的名单

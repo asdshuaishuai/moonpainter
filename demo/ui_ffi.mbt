@@ -450,6 +450,16 @@ extern "js" fn js_expose_exec(f : (String) -> String) -> Unit =
   #| (f) => { globalThis.__headless_exec = f; }
 
 ///|
+/// **headless（Node）专用**的第二个钩子：把**页面初始化**也暴露给驱动器。
+/// 浏览器是在 `main` 里 `bootstrap()` 的（引擎复位 + 装载示例场景 + 首次渲染），
+/// Node 分支没有 DOM 可注入、但**初始化本身与 DOM 无关**——驱动器必须与浏览器
+/// 从同一个状态出发，否则第一个调用 `bootstrap()` 的处理器会把它自己的测试
+/// 文档整个换成示例场景（实测被坑：吸管点在第一处时文档被重置，四条后续断言
+/// 全跟着错，而报出来的现象看着像"pick 报错了层"）。
+extern "js" fn js_expose_boot(boot : () -> Unit) -> Unit =
+  #| (boot) => { globalThis.__headless_boot = boot; }
+
+///|
 /// 逐点绘制的预览（空串 = 隐藏）。点是**画布坐标**，换算成显示坐标由 JS 做
 /// （缩放/适配窗口都在那一侧）。
 extern "js" fn js_poly_preview(pts : String) -> Unit =
