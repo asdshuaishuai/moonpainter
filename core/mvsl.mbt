@@ -31,7 +31,14 @@ pub const MVSL_IR_VERSION : Int = 1
 ///|
 /// render contract version：渲染契约（色彩+数值+算子语义）总版本。
 /// 旧引擎遇更高版本直接拒绝打开。
-pub const RENDER_CONTRACT_VERSION : Int = 1
+///
+/// 为什么是 2：契约 2 加入了**蒙版毛边**（`LayerMask.roughen`）。它是"老引擎
+/// 会画错"的语义（老引擎读不到这个字段 → 把带毛边的蒙版画成**光滑边**，
+/// 静默错渲），所以用到它的文档必须在 manifest 里声明 2（写入口是
+/// `@core.required_render_contract`，**按文档实际用到的能力**声明，不是一律
+/// 写上限——一律写上限等于让版本闸失去分辨力，老引擎将打不开任何新容器）。
+/// 读入端照旧：`render_contract > RENDER_CONTRACT_VERSION` 一律拒绝。
+pub const RENDER_CONTRACT_VERSION : Int = 2
 
 ///|
 /// 选择子算法版本（kernel/window/环距约定都属于算法的一部分）。

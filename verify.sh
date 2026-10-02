@@ -82,7 +82,7 @@ if echo "$WASM_CHECK" | grep -q "Warning"; then
 fi
 run_quiet moon test --target wasm-gc
 
-echo "== 4/12 CLI 子进程端到端 =="
+echo "== 4/12 CLI 子进程端到端（含蒙版参数面：毛边 / 部分更新 / 容器契约档位） =="
 # 生成最小 2×2 RGBA PNG（python3 标准库，zlib+struct 手工构造）作为位图资产
 PNG_B64=$(python3 -c "
 import zlib, struct, base64
@@ -104,7 +104,7 @@ printf '%s\n' \
   'session-open full_image' \
   'new 320 240 uuid=verify-001' \
   'add-rect x=0 y=0 w=320 h=240 fill=#1B2A41FF name=bg tag=background' \
-  'add-ellipse x=100 y=50 w=120 h=120 lgrad=#FF7A45FF,#2E6FE8FF,0,0,1,1 blend=screen name=orb' \
+  'add-ellipse x=100 y=50 w=120 h=120 lgrad=#FF7A45FF,#2E6FE8FF,0,0,1,1 blend=screen id=orb name=orb' \
   "add-image x=210 y=160 w=70 h=50 b64=$PNG_B64 name=badge" \
   'flip orb none' \
   'lint' \
@@ -114,6 +114,11 @@ printf '%s\n' \
   ':exit' \
   | moon run --target native cli > "$OUT/cli.log"
 tail -3 "$OUT/cli.log"
+# 这条链里**不许有任何命令报错**：此前 `flip orb none` 一直在报「层不存在：orb」
+# （`name=` 不是 id），而这一步只断言了 add-image/lint/save-mpd —— 一条静默失败的
+# 命令在端到端门禁里躺了很久，画面碰巧一样所以没人发现。门禁的每一行都要么被断言、
+# 要么被这条"全链无 error"罩住。
+grep -q '"error"' "$OUT/cli.log" && { echo "FAIL: CLI e2e 链里有命令报错（未断言的失败）"; grep '"error"' "$OUT/cli.log"; exit 1; }
 grep -q '"op":"add-image"' "$OUT/cli.log" || { echo "FAIL: add-image 未成功"; exit 1; }
 grep -q '"op":"lint","violations":0' "$OUT/cli.log" || { echo "FAIL: lint 非零违规"; exit 1; }
 grep -q '"op":"save-mpd"' "$OUT/cli.log" || { echo "FAIL: save-mpd 未成功"; cat "$OUT/cli.log"; exit 1; }
@@ -130,6 +135,64 @@ printf '%s\n' \
   | moon run --target native cli > "$OUT/grad.log"
 grep -q '渐变端点必须落在 0..1' "$OUT/grad.log" || { echo "FAIL: 像素坐标写进渐变端点未被拒绝（静默变成纯色）"; exit 1; }
 grep -q '0.375' "$OUT/grad.log" || { echo "FAIL: 拒绝信息未给出换算建议"; exit 1; }
+
+# 蒙版参数面（毛边 + 部分更新 + 容器契约档位）：这三件事都在**真 CLI 进程**里
+# 走一遍——单元测试证明得了函数，证明不了"命令面真的把它接上了、容器真的声明了"。
+# ① `set-mask` 是**部分更新**：只给 feather，其余五个字段必须原样保留
+#    （此前"只改羽化"得 remove-mask + add-mask，而 add-mask 是全量建立 →
+#     没重复写的 radius/roughen 会被悄悄重置成 0）；
+# ② 毛边真的进渲染：同一份文档有/无 roughen 的 render sha 必须不同，
+#    而同样的输入跑两次必须逐位相同（噪声里不许有随机数/时间戳）；
+# ③ 用到毛边的容器按实际能力声明 render_contract=2（老引擎据此**拒绝打开**，
+#    而不是把它画成光滑边）——而没有毛边的那份容器照旧声明 1（第 7 步断言）。
+printf '%s\n' \
+  'session-open full_image' \
+  'new 32 32 uuid=verify-rough' \
+  'add-rect x=0 y=0 w=32 h=32 fill=#FF0000FF id=r name=r' \
+  'add-mask r kind=rect x=6 y=6 w=20 h=20 radius=4 feather=2 roughen=3' \
+  'set-mask r feather=7' \
+  'query-layer r' \
+  'render 32' \
+  'render 32' \
+  "save-mpd $OUT/rough.mpd" \
+  ':exit' \
+  | moon run --target native cli > "$OUT/rough.log"
+grep -q '"error"' "$OUT/rough.log" && { echo "FAIL: 蒙版 e2e 链里有命令报错"; grep '"error"' "$OUT/rough.log"; exit 1; }
+grep -q '"op":"set-mask"' "$OUT/rough.log" || { echo "FAIL: set-mask 未成功"; exit 1; }
+# 精确锚住数值（子串匹配会被 `"roughen":3.5` / `"x":60` 骗过——铁律 11）
+grep -Eq '"x":6[,}]' "$OUT/rough.log" || { echo "FAIL: 未给的 x 被 set-mask 改掉了（部分更新退化成全量替换）"; exit 1; }
+grep -Eq '"w":20[,}]' "$OUT/rough.log" || { echo "FAIL: 未给的 w 被改掉"; exit 1; }
+grep -Eq '"radius":4[,}]' "$OUT/rough.log" || { echo "FAIL: 未给的 radius 被改掉"; exit 1; }
+grep -Eq '"roughen":3[,}]' "$OUT/rough.log" || { echo "FAIL: 未给的 roughen 被改掉"; exit 1; }
+grep -Eq '"feather":7[,}]' "$OUT/rough.log" || { echo "FAIL: 给的 feather 没生效"; exit 1; }
+ROUGH_A=$(sed -n 's/.*"render_sha256":"\([0-9a-f]*\)".*/\1/p' "$OUT/rough.log" | head -1)
+ROUGH_B=$(sed -n 's/.*"render_sha256":"\([0-9a-f]*\)".*/\1/p' "$OUT/rough.log" | sed -n 2p)
+if [ -z "$ROUGH_A" ] || [ -z "$ROUGH_B" ]; then echo "FAIL: render 回包缺 render_sha256"; exit 1; fi
+[ "$ROUGH_A" = "$ROUGH_B" ] || { echo "FAIL: 毛边渲染不可复现（噪声里有随机源）"; exit 1; }
+printf '%s\n' \
+  'session-open full_image' \
+  'new 32 32 uuid=verify-smooth' \
+  'add-rect x=0 y=0 w=32 h=32 fill=#FF0000FF id=r name=r' \
+  'add-mask r kind=rect x=6 y=6 w=20 h=20 radius=4 feather=7' \
+  'render 32' \
+  ':exit' \
+  | moon run --target native cli > "$OUT/smooth.log"
+grep -q '"error"' "$OUT/smooth.log" && { echo "FAIL: 光滑边对照链里有命令报错"; grep '"error"' "$OUT/smooth.log"; exit 1; }
+SMOOTH_SHA=$(sed -n 's/.*"render_sha256":"\([0-9a-f]*\)".*/\1/p' "$OUT/smooth.log" | head -1)
+if [ -z "$SMOOTH_SHA" ]; then echo "FAIL: 光滑边对照缺 render_sha256"; exit 1; fi
+[ "$ROUGH_A" != "$SMOOTH_SHA" ] || { echo "FAIL: roughen 存下来却没进渲染（毛边与光滑边逐位相同）"; exit 1; }
+RC=$(unzip -p "$OUT/rough.mpd" manifest.json | sed -n 's/.*"render_contract":\([0-9]*\).*/\1/p')
+[ "$RC" = "2" ] || { echo "FAIL: 用到毛边的容器应声明 render_contract=2，实际 $RC"; exit 1; }
+# 重开必须**先过 vision 闸**（`open-mpd` 不是旁路）；重开后逐位对账：
+# 指纹必须与保存时一致、毛边幅度必须还在（容器是唯一事实源，不是"存了个数字"）。
+SAVE_FP=$(sed -n 's/.*"op":"set-mask","id":"r","fingerprint":"\([0-9a-f]*\)".*/\1/p' "$OUT/rough.log" | tail -1)
+if [ -z "$SAVE_FP" ]; then echo "FAIL: 保存侧缺指纹"; exit 1; fi
+printf '%s\n' "session-open full_image" "open-mpd $OUT/rough.mpd" "query-layer r" ":exit" \
+  | moon run --target native cli > "$OUT/rough_open.log"
+grep -q '"op":"open-mpd"' "$OUT/rough_open.log" || { echo "FAIL: 声明契约 2 的容器自己被拒了"; exit 1; }
+grep -q '"error"' "$OUT/rough_open.log" && { echo "FAIL: 重开链里有命令报错"; grep '"error"' "$OUT/rough_open.log"; exit 1; }
+grep -Eq '"roughen":3[,}]' "$OUT/rough_open.log" || { echo "FAIL: 毛边蒙版没随容器往返"; exit 1; }
+grep -Eq '"feather":7[,}]' "$OUT/rough_open.log" || { echo "FAIL: set-mask 改的羽化没随容器往返"; exit 1; }
 
 echo "== 5/12 独立外部验证（系统 unzip，非引擎自证） =="
 unzip -t "$OUT/verify.mpd" > /dev/null && echo "unzip -t: 容器完整性 OK"
@@ -274,7 +337,9 @@ printf '%s\n' \
 grep -q '"error":"断言未通过（2 条）' "$OUT/mvsl_bad.log" || { echo "FAIL: 侵犯保护区的程序未被断言拦下"; exit 1; }
 # 编辑表随容器往返（状态不是历史：重开后必须原样在编辑表里）
 unzip -p "$OUT/mvsl.mpd" meta/mvsl.json | grep -q '"hue_deg":120' || { echo "FAIL: 容器缺编辑表"; exit 1; }
-unzip -p "$OUT/mvsl.mpd" manifest.json | grep -q '"render_contract":1' || { echo "FAIL: manifest 缺 MVSL 版本块"; exit 1; }
+# 这份文档没有毛边蒙版 → 声明的是**最低档** 1（不是引擎上限 2）：
+# 版本闸按"文档实际用到的能力"声明，老引擎只拒绝真正需要新契约的容器。
+unzip -p "$OUT/mvsl.mpd" manifest.json | grep -q '"render_contract":1' || { echo "FAIL: manifest 缺 MVSL 版本块（或声明档位不对）"; exit 1; }
 
 # 图层级作用域 `layer=`：只改指定的那一层。
 # 两层同色，左半 l1 被引用、右半 l2 没有——所以"左半变、右半不变"是精确判据，

@@ -282,6 +282,46 @@ test "lint 兜住调整层的三种「装了不干活」（命令面拦两种，
   assert_true(text2.contains("不接受数值"), msg="手改的用不上的 value 要报：\{text2}")
 }
 
+test "lint 兜住手改容器里的退化蒙版（入口拒绝什么，lint 必须报什么）" {
+  // 蒙版参数的命令面已拦（`add-mask`/`set-mask` 共用 `@core.mask_param_error`），
+  // 这里兜住**手改 design.json / 旧版本产物**。三条都是"给了参数但不生效"：
+  //   ①尺寸非正：覆盖区为空 → invert=false 时整层被悄悄藏掉；
+  //   ②③④负的 radius/feather/roughen：渲染器各自折成 0，画面与"没给"一样，
+  //        而指纹变了、query-layer 也照旧报出来。
+  let doc = @core.new_document("lint-mask-deg", 32, 32)
+  let dl = @core.default_layer("d1", "hand-edited", 0.0, 0.0, 20.0, 20.0)
+  let ok : @core.LayerMask = {
+    kind: @core.ShapeKind::Rect,
+    x: 0.0,
+    y: 0.0,
+    w: 10.0,
+    h: 10.0,
+    radius: 2.0,
+    feather: 1.0,
+    roughen: 1.0,
+    invert: false,
+  }
+  doc.layers.push({ ..dl, mask: Some(ok) })
+  // 正控：正常蒙版一个字都不报（判据两头都要咬得住）
+  let t0 = (@agent.lint_doc(doc)).join(" | ")
+  assert_true(!t0.contains("mask"), msg="正常蒙版不该报：\{t0}")
+  // ① 尺寸非正
+  doc.layers[0] = { ..doc.layers[0], mask: Some({ ..ok, w: 0.0 }) }
+  let t1 = (@agent.lint_doc(doc)).join(" | ")
+  assert_true(t1.contains("mask 层 d1"), msg="退化蒙版要报：\{t1}")
+  assert_true(t1.contains("尺寸"), msg="要说清是尺寸问题：\{t1}")
+  assert_true(t1.contains("w=0"), msg="要带上实际收到的值：\{t1}")
+  // ②③④ 三个负参数（错误里要带上字段名，值也报出来）
+  doc.layers[0] = { ..doc.layers[0], mask: Some({ ..ok, radius: 0.0 - 1.0 }) }
+  assert_true((@agent.lint_doc(doc)).join(" | ").contains("radius"), msg="负 radius 要报")
+  doc.layers[0] = { ..doc.layers[0], mask: Some({ ..ok, feather: 0.0 - 2.0 }) }
+  assert_true((@agent.lint_doc(doc)).join(" | ").contains("feather"), msg="负 feather 要报")
+  doc.layers[0] = { ..doc.layers[0], mask: Some({ ..ok, roughen: 0.0 - 3.5 }) }
+  let t4 = (@agent.lint_doc(doc)).join(" | ")
+  assert_true(t4.contains("roughen"), msg="负 roughen 要报：\{t4}")
+  assert_true(t4.contains("-3.5"), msg="错误要带上实际值（不只字段名）：\{t4}")
+}
+
 test "数值参数的「值面」第六批：非数与越界都不许静默退默认" {
   // 上一轮推平了调整算子的 value（越界 / 用不上的 value）。这里问同一件事的
   // 另一半：**笔宽与字号**，以及"给了但根本不是数"这种输入。

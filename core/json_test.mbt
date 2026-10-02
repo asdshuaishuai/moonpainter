@@ -20,6 +20,7 @@ fn make_sample() -> @core.Document {
       h: 90.5,
       radius: 8.0,
       feather: 3.5,
+      roughen: 2.25,
       invert: true,
     }),
   }
@@ -126,6 +127,7 @@ test "往返后结构与语义字段保真" {
       assert_eq(m.h, 90.5)
       assert_eq(m.radius, 8.0)
       assert_eq(m.feather, 3.5)
+      assert_eq(m.roughen, 2.25, msg="毛边幅度必须往返保真（默认值样本会掩盖解析错误）")
       assert_eq(m.invert, true)
     }
     None => abort("bg 层的蒙版在往返里丢了")
@@ -166,6 +168,115 @@ test "坏 JSON / 坏 format / 前向版本 全部精确拒绝" {
     Err(msg) => assert_true(msg.length() > 0)
     Ok(_) => abort("未来版本不该通过")
   }
+}
+
+///|
+test "蒙版 kind 认不出来必须报错，不许静默当成「没有蒙版」" {
+  // 原来的行为：`mask_of` 遇到不认识的 kind 返回 `None` —— 引擎说"打开成功"，
+  // 然后把整层**当没有蒙版**画出来（整层露出），而指纹又对不上。三个信号
+  // 互相矛盾，且没有任何一个字告诉调用方问题出在蒙版上。
+  // 这同时是新增蒙版种类的**兼容前提**：旧引擎读到不认识的 kind 必须失败得响。
+  //
+  // 输入由 canonical 写出器产出后再做**定点替换**（而不是手写整份层的 JSON）
+  // ——手写漏一个必填字段，测的就成了"层字段不完整"，与蒙版毫无关系。
+  let good = @core.doc_to_json(make_sample())
+  let marker = ",\"mask\":{\"kind\":\"rect\","
+  assert_true(good.contains(marker), msg="样本里应能定位到蒙版片段：\{good}")
+  // ① 不认识的 kind → 报错，且错误里要说清收到的值、合法取值、以及怎么摘掉
+  let bad = good.replace(old=marker, new=",\"mask\":{\"kind\":\"triangle\",")
+  match @core.doc_from_json(bad) {
+    Err(msg) => {
+      assert_true(msg.contains("triangle"), msg="错误要回显收到的 kind：\{msg}")
+      assert_true(msg.contains("rect"), msg="错误要给出合法取值：\{msg}")
+      assert_true(msg.contains("remove-mask"), msg="错误要指路怎么摘掉：\{msg}")
+    }
+    Ok(_) => abort("不认识的蒙版 kind 不该通过")
+  }
+  // ② 蒙版对象缺 kind → 同样报错（不是"没有蒙版"）
+  let nokind = good.replace(old=marker, new=",\"mask\":{")
+  match @core.doc_from_json(nokind) {
+    Err(msg) => assert_true(msg.contains("kind"), msg="错误要指出缺 kind：\{msg}")
+    Ok(_) => abort("缺 kind 的蒙版不该通过")
+  }
+  // ③ 正控：样本自己照旧打得开，且 roughen 真的读进来（不是常量）
+  match @core.doc_from_json(good) {
+    Ok(d) =>
+      match d.layers[0].mask {
+        Some(m) => {
+          assert_eq(m.roughen, 2.25)
+          assert_true(m.kind is @core.ShapeKind::Rect)
+        }
+        None => abort("正常蒙版不该丢")
+      }
+    Err(e) => abort("正常蒙版不该被拒：\{e}")
+  }
+  // ④ "mask": null 仍是"没有蒙版"（空集也要说话：不是错误）
+  let plain = @core.new_document("u-nomask", 8, 8)
+  plain.layers.push(@core.default_layer("l1", "a", 0.0, 0.0, 4.0, 4.0))
+  let text = @core.doc_to_json(plain)
+  assert_true(text.contains("\"mask\":null"), msg="没有蒙版应写 null：\{text}")
+  match @core.doc_from_json(text) {
+    Ok(d) =>
+      match d.layers[0].mask {
+        None => assert_true(true)
+        Some(_) => abort("mask=null 应解析成没有蒙版")
+      }
+    Err(e) => abort("mask=null 不该被拒：\{e}")
+  }
+}
+
+///|
+test "required_render_contract：按文档实际用到的能力声明，别一律写最高档" {
+  // 容器 manifest 里的 render_contract 是**版本闸**：读到高于自身支持的版本
+  // 一律拒绝打开。若写入端一律写引擎支持的上限，闸就失去分辨力（老引擎打不开
+  // 任何新容器）；若一律写 1，用到毛边蒙版的文档会被老引擎**静默画成光滑边**。
+  let d = @core.new_document("u-rc", 16, 16)
+  d.layers.push(@core.default_layer("l1", "a", 0.0, 0.0, 8.0, 8.0))
+  assert_eq(@core.required_render_contract(d), 1, msg="没有蒙版 → 老契约")
+  let plain : @core.LayerMask = {
+    kind: @core.ShapeKind::Rect,
+    x: 0.0,
+    y: 0.0,
+    w: 8.0,
+    h: 8.0,
+    radius: 2.0,
+    feather: 3.0,
+    roughen: 0.0,
+    invert: false,
+  }
+  d.layers[0] = { ..d.layers[0], mask: Some(plain) }
+  assert_eq(@core.required_render_contract(d), 1, msg="只有老语义（圆角/羽化）→ 仍是老契约")
+  d.layers[0] = { ..d.layers[0], mask: Some({ ..plain, roughen: 2.0 }) }
+  assert_eq(
+    @core.required_render_contract(d),
+    @core.RENDER_CONTRACT_VERSION,
+    msg="用到毛边 → 声明到当前契约档",
+  )
+}
+
+///|
+test "mask_param_error：一句话说清「装不上/不生效」的四种情形（入口与 lint 共用）" {
+  let ok : @core.LayerMask = {
+    kind: @core.ShapeKind::Rect,
+    x: 0.0,
+    y: 0.0,
+    w: 10.0,
+    h: 10.0,
+    radius: 0.0,
+    feather: 0.0,
+    roughen: 0.0,
+    invert: false,
+  }
+  assert_eq(@core.mask_param_error(ok), "", msg="合法蒙版不许报错（判据两头都要咬）")
+  // 尺寸非正：覆盖区为空 → invert=false 时整层被藏掉
+  assert_true(@core.mask_param_error({ ..ok, w: 0.0 }).contains("尺寸"), msg="w=0 要报尺寸")
+  assert_true(@core.mask_param_error({ ..ok, h: -1.0 }).contains("尺寸"), msg="h<0 要报尺寸")
+  // 三个"给负数 = 渲染器各自折成 0"的参数
+  assert_true(@core.mask_param_error({ ..ok, radius: -1.0 }).contains("radius"))
+  assert_true(@core.mask_param_error({ ..ok, feather: -1.0 }).contains("feather"))
+  assert_true(@core.mask_param_error({ ..ok, roughen: -1.0 }).contains("roughen"))
+  // 错误信息要带上实际收到的值（值也进指纹，"报了字段不报值"没法自查）
+  assert_true(@core.mask_param_error({ ..ok, roughen: -2.5 }).contains("-2.5"))
 }
 
 ///|

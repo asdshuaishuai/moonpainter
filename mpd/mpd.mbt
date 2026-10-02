@@ -82,9 +82,15 @@ fn manifest_json(m : MpdDoc) -> String {
   // MVSL 语义三决定 + 三个算法版本 pin（PLAN-MVSL §1.7）：
   // 选择子求值基准、算子有序性、色彩语义版本必须随容器走，
   // 旧引擎遇不认识的 render_contract 一律拒绝，不静默错渲。
+  //
+  // `render_contract` 写的是**这份文档实际要求的最低档**
+  // （`@core.required_render_contract`），不是引擎支持的上限：
+  // 只用到老语义的文档照旧写 1（老引擎照旧打得开），用到毛边蒙版的文档写 2，
+  // 于是老引擎**拒绝打开**而不是把它画成光滑边（静默错渲）。
+  let rc = @core.required_render_contract(d)
   sb.write_string(",\"mvsl\":{")
   sb.write_string("\"ir\":\{@core.MVSL_IR_VERSION}")
-  sb.write_string(",\"render_contract\":\{@core.RENDER_CONTRACT_VERSION}")
+  sb.write_string(",\"render_contract\":\{rc}")
   sb.write_string(",\"selector_algo\":\"\{@core.SELECTOR_ALGO_VERSION}\"")
   sb.write_string(",\"color_semantics\":\"\{@core.COLOR_SEMANTICS_VERSION}\"")
   sb.write_string(",\"op_semantics\":\"\{@core.OP_SEMANTICS_VERSION}\"")

@@ -359,34 +359,114 @@ test "自由文本的空格：引号包裹，下划线保持字面（一个用�
 
 
 ///|
-test "set-mask 只改 invert：几何参数必须被拒绝，不许静默无效" {
-  // 这里曾经静默接受任何 tokens[2]（认不出 `true`/`1`/`invert=true` 就当
-  // false）。于是照旧字典传 `set-mask r x=0 y=10 w=20 h=10` 会**什么都不改
-  // 却返回 ok**（指纹一字未变），还会把原有的 invert 重置掉。
-  // 铁律 3：不支持就报明确错误，不降级、不糊弄。
+/// 从 `query-layer` 的回包里取蒙版字段值（**精确解析**，不用子串匹配：
+/// `"roughen":0` 会被 `"roughen":0.0279` 骗过——铁律 11）。
+fn mask_num(s : @agent.Session, id : String, key : String) -> Double {
+  let q = run(s, "query-layer \{id}")
+  let root = match @core.parse_json(q) {
+    Ok(v) => v
+    Err(e) => abort("query-layer 回包不是 JSON：\{e}（\{q}）")
+  }
+  let layer = match root.get("layer") {
+    Some(l) => l
+    None => abort("query-layer 回包缺 layer：\{q}")
+  }
+  let mask = match layer.get("mask") {
+    Some(m) => m
+    None => abort("query-layer 没报蒙版：\{q}")
+  }
+  match mask.get(key) {
+    Some(v) =>
+      match v.as_num() {
+        Some(d) => d
+        None => abort("蒙版 \{key} 不是数字：\{q}")
+      }
+    None => abort("蒙版缺少字段 \{key}：\{q}")
+  }
+}
+
+///|
+test "set-mask 是全参数的部分更新：只改给的键，其余原样保留" {
+  // 历史：`set-mask` 只认 `true|false`（invert），几何只能 remove-mask +
+  // add-mask 重做。而 add-mask 是**全量**建立（缺省即 0），于是"只把羽化
+  // 从 4 调到 12"会把没重复写的 radius/roughen **悄悄重置成 0**——一次小
+  // 调整把另外几个参数吃掉，还不报错。
   let s = @agent.Session::new()
   let _ = run(s, "session-open full_image")
   let _ = run(s, "new 40 20")
   let _ = run(s, "add-rect x=0 y=0 w=40 h=20 fill=#FF0000FF id=r")
-  let _ = run(s, "add-mask r kind=rect x=0 y=0 w=20 h=20")
-  // 几何参数被拒绝，且错误里指路正确做法
-  let bad = run(s, "set-mask r x=0 y=10 w=40 h=10")
-  assert_true(bad.contains("\"error\""), msg="几何参数应被拒绝，实际：\{bad}")
-  assert_true(bad.contains("remove-mask"), msg="错误应指路 remove-mask + add-mask：\{bad}")
-  // 被拒绝的调用不该留下编辑历史（快照在校验之后）
-  let before = run(s, "edits")
-  let _ = run(s, "set-mask r w=1")
-  let after = run(s, "edits")
-  assert_eq(after, before, msg="被拒绝的 set-mask 不该留下编辑历史")
-  // 真正的 invert 仍能改，且 query-layer 看得到（可观测性）
-  let ok = run(s, "set-mask r true")
-  assert_true(ok.contains("\"op\":\"set-mask\""), msg=ok)
-  let q = run(s, "query-layer r")
-  assert_true(q.contains("\"invert\":true"), msg="query-layer 应报告蒙版 invert：\{q}")
-  // add-mask 的几何也要能被看见
-  assert_true(q.contains("\"mask\":{\"kind\":\"rect\""), msg="query-layer 应报告蒙版几何：\{q}")
+  let a = run(s, "add-mask r kind=rect x=2 y=3 w=20 h=15 radius=6 feather=4 roughen=2 invert=true")
+  assert_true(a.contains("\"op\":\"add-mask\""), msg=a)
+  // 五个非默认值都真的存下来了（可观测性：query-layer 回读）
+  assert_eq(mask_num(s, "r", "x"), 2.0)
+  assert_eq(mask_num(s, "r", "y"), 3.0)
+  assert_eq(mask_num(s, "r", "w"), 20.0)
+  assert_eq(mask_num(s, "r", "h"), 15.0)
+  assert_eq(mask_num(s, "r", "radius"), 6.0)
+  assert_eq(mask_num(s, "r", "feather"), 4.0)
+  assert_eq(mask_num(s, "r", "roughen"), 2.0)
+  assert_true(run(s, "query-layer r").contains("\"invert\":true"), msg="invert 应被记住")
+  // 只改 feather：其余六个字段一个都不能动
+  let b = run(s, "set-mask r feather=12")
+  assert_true(b.contains("\"op\":\"set-mask\""), msg=b)
+  assert_eq(mask_num(s, "r", "feather"), 12.0)
+  assert_eq(mask_num(s, "r", "x"), 2.0, msg="未给的 x 必须保留")
+  assert_eq(mask_num(s, "r", "y"), 3.0, msg="未给的 y 必须保留")
+  assert_eq(mask_num(s, "r", "w"), 20.0, msg="未给的 w 必须保留")
+  assert_eq(mask_num(s, "r", "h"), 15.0, msg="未给的 h 必须保留")
+  assert_eq(mask_num(s, "r", "radius"), 6.0, msg="未给的 radius 必须保留")
+  assert_eq(mask_num(s, "r", "roughen"), 2.0, msg="未给的 roughen 必须保留")
+  assert_true(run(s, "query-layer r").contains("\"invert\":true"), msg="未给的 invert 必须保留")
+  // 几何本身也真的改得动（位置/尺寸/形状/invert 各改一次）
+  let _ = run(s, "set-mask r x=5 y=6 w=30 h=8")
+  assert_eq(mask_num(s, "r", "w"), 30.0)
+  assert_eq(mask_num(s, "r", "x"), 5.0)
+  let _ = run(s, "set-mask r kind=ellipse")
+  assert_true(run(s, "query-layer r").contains("\"mask\":{\"kind\":\"ellipse\""), msg="换形状应生效")
+  let _ = run(s, "set-mask r false")
+  assert_true(run(s, "query-layer r").contains("\"invert\":false"), msg="历史写法 set-mask <id> true|false 仍要能用")
 }
 
+///|
+test "set-mask 的校验面：非法值/未知键/空改动/没蒙版，一个都不许静默" {
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 40 20")
+  let _ = run(s, "add-rect x=0 y=0 w=40 h=20 fill=#FF0000FF id=r")
+  // ① 层上还没有蒙版 → 报错指路 add-mask（不许"回 ok 而指纹不变"）
+  let nomask = run(s, "set-mask r feather=4")
+  assert_true(nomask.contains("\"error\""), msg="没有蒙版时 set-mask 必须报错：\{nomask}")
+  assert_true(nomask.contains("add-mask"), msg="应指路 add-mask：\{nomask}")
+  let _ = run(s, "add-mask r kind=rect x=0 y=0 w=20 h=20 feather=1")
+  // ② 未知键 → 报合法清单（`kv_args` 是静默的，靠 check_kv_args 拦）
+  let badkey = run(s, "set-mask r radus=5")
+  assert_true(badkey.contains("\"error\""), msg="拼错的键必须被拒：\{badkey}")
+  assert_true(badkey.contains("roughen"), msg="错误应回显合法键清单：\{badkey}")
+  // ③ 给了但不是数 / 认不出的布尔值 → 报错，不许悄悄按默认/0 处理
+  assert_true(run(s, "set-mask r feather=abc").contains("\"error\""), msg="非数必须被拒")
+  assert_true(run(s, "set-mask r invert=maybe").contains("\"error\""), msg="认不出的布尔值必须被拒")
+  // ④ 值非法（共用 `@core.mask_param_error`）：尺寸非正 / 负的 radius、feather、roughen
+  for bad in ["w=0", "h=-3", "radius=-1", "feather=-2", "roughen=-4"] {
+    let r = run(s, "set-mask r \{bad}")
+    assert_true(r.contains("\"error\""), msg="\{bad} 应被拒绝，实际：\{r}")
+  }
+  // ⑤ 一个要改的参数都没给 → 报错（否则是一次静默空操作）
+  assert_true(run(s, "set-mask r").contains("\"error\""), msg="没有任何参数必须被拒")
+  // ⑥ 认不出的裸词（既不是键=值，也不是历史 true|false）
+  let badword = run(s, "set-mask r yes")
+  assert_true(badword.contains("\"error\""), msg="认不出的裸词必须被拒：\{badword}")
+  // 被拒绝的调用都不该动到蒙版，也不该留下编辑历史（快照在校验之后）
+  assert_eq(mask_num(s, "r", "feather"), 1.0, msg="被拒的调用不许改动蒙版")
+  assert_eq(mask_num(s, "r", "w"), 20.0)
+  let before = run(s, "edits")
+  let _ = run(s, "set-mask r feather=-2")
+  let _ = run(s, "set-mask r radus=1")
+  assert_eq(run(s, "edits"), before, msg="被拒绝的 set-mask 不该留下编辑历史")
+  // 正控：合法的一次改动必须成功（判据两头都要咬得住）
+  assert_true(run(s, "set-mask r feather=9").contains("\"op\":\"set-mask\""), msg="合法调用必须成功")
+  let _ = run(s, "add-mask r kind=rect x=0 y=0 w=10 h=20 feather=1 invert=true")
+  assert_true(run(s, "query-layer r").contains("\"mask\":{\"kind\":\"rect\""), msg="add-mask 的几何要能被回读")
+}
 
 ///|
 test "蒙版反选的读-改-写往返（前端「蒙版反选」按钮依赖的两步）" {

@@ -466,12 +466,7 @@ MUTS = [
         "R40",
         "add-mask 不校验参数（radus= 拼错静默给硬边直角蒙版）",
         "agent/session.mbt",
-        r"""  match check_kv_args(
-    tokens,
-    2,
-    ["kind", "x", "y", "w", "h", "radius", "feather", "invert"],
-    "add-mask",
-  ) {
+        r"""  match check_kv_args(tokens, 2, mask_keys(), "add-mask") {
     Ok(_) => ()
     Err(e) => return err(e)
   }""",
@@ -758,66 +753,24 @@ MUTS = [
         "R18",
         "蒙版羽化解析恒 0（软边蒙版重开后变硬边）",
         "core/json.mbt",
-        """              kind: Rect,
-              x: num_f(mv, "x"),
-              y: num_f(mv, "y"),
-              w: num_f(mv, "w"),
-              h: num_f(mv, "h"),
-              radius: num_f(mv, "radius"),
-              feather: num_f(mv, "feather"),
-              invert: bool_field(mv, "invert"),""",
-        """              kind: Rect,
-              x: num_f(mv, "x"),
-              y: num_f(mv, "y"),
-              w: num_f(mv, "w"),
-              h: num_f(mv, "h"),
-              radius: num_f(mv, "radius"),
-              feather: 0.0,
-              invert: bool_field(mv, "invert"),""",
+        """        feather: num_f(raw, "feather"),""",
+        """        feather: 0.0,""",
         "killed",
     ),
     (
         "R19",
         "蒙版圆角解析恒 0（圆角蒙版重开后变直角）",
         "core/json.mbt",
-        """              kind: Rect,
-              x: num_f(mv, "x"),
-              y: num_f(mv, "y"),
-              w: num_f(mv, "w"),
-              h: num_f(mv, "h"),
-              radius: num_f(mv, "radius"),
-              feather: num_f(mv, "feather"),
-              invert: bool_field(mv, "invert"),""",
-        """              kind: Rect,
-              x: num_f(mv, "x"),
-              y: num_f(mv, "y"),
-              w: num_f(mv, "w"),
-              h: num_f(mv, "h"),
-              radius: 0.0,
-              feather: num_f(mv, "feather"),
-              invert: bool_field(mv, "invert"),""",
+        """        radius: num_f(raw, "radius"),""",
+        """        radius: 0.0,""",
         "killed",
     ),
     (
         "R20",
         "蒙版反选解析恒 false（反选蒙版重开后反回来）",
         "core/json.mbt",
-        """              kind: Rect,
-              x: num_f(mv, "x"),
-              y: num_f(mv, "y"),
-              w: num_f(mv, "w"),
-              h: num_f(mv, "h"),
-              radius: num_f(mv, "radius"),
-              feather: num_f(mv, "feather"),
-              invert: bool_field(mv, "invert"),""",
-        """              kind: Rect,
-              x: num_f(mv, "x"),
-              y: num_f(mv, "y"),
-              w: num_f(mv, "w"),
-              h: num_f(mv, "h"),
-              radius: num_f(mv, "radius"),
-              feather: num_f(mv, "feather"),
-              invert: false,""",
+        """        invert: bool_field(raw, "invert"),""",
+        """        invert: false,""",
         "killed",
     ),
     (
@@ -934,13 +887,10 @@ MUTS = [
     ),
     (
         "Q3",
-        "set-mask 退回静默接受：认不出的参数当成 false（几何改不动却报 ok）",
+        "set-mask 的布尔解析退回静默：认不出的值当成 false（改了没反应却报 ok）",
         "agent/session.mbt",
-        r"""    other =>
-      return err(
-        "set-mask 只改 invert（true|false）；几何修改请用 remove-mask + add-mask，got \{other}",
-      )""",
-        r"""    _ => false""",
+        r"""    Some(other) => Err("蒙版 invert 应为 true|false，got \{other}")""",
+        r"""    Some(_) => Ok(false)""",
         "killed",
     ),
     (
@@ -1422,6 +1372,81 @@ MUTS = [
     Ok(r) => r
     Err(e) => return err(e)
   }""",
+        "killed",
+    ),
+    (
+        "U13",
+        "渲染器忽略蒙版毛边（roughen 存下来但没人读：画面与光滑边逐位相同）",
+        "render/scene.mbt",
+        """  if mask.roughen > 0.0 {""",
+        """  if false {""",
+        "killed",
+    ),
+    (
+        "U14",
+        "毛边噪声变成常数（边界不再被啃动，只剩「存了参数」）",
+        "render/scene.mbt",
+        """  amp * (v * 2.0 - 1.0)
+}""",
+        """  amp * 0.0
+}""",
+        "killed",
+    ),
+    (
+        "U15",
+        "set-mask 变成全量替换：没给的字段被悄悄重置成 0（小调整吃掉别的参数）",
+        "agent/session.mbt",
+        """  let x = match mask_arg_d(m, "x", old.x) {""",
+        """  let x = match mask_arg_d(m, "x", 0.0) {""",
+        "killed",
+    ),
+    (
+        "U16",
+        "set-mask 改一个不存在的蒙版静默成功（回 ok 而指纹一字未变）",
+        "agent/session.mbt",
+        r"""    None =>
+      return err("层 \{id} 本来就没有蒙版，set-mask 没东西可改（用 add-mask 添加）")""",
+        r'''    None =>
+      return "{\"ok\":true,\"op\":\"set-mask\",\"id\":\"\{id}\"}"''',
+        "killed",
+    ),
+    (
+        "U17",
+        "蒙版的取值判据不看 roughen 为负（给了负数却不报，渲染器折成 0）",
+        "core/document.mbt",
+        """  if m.roughen < 0.0 {""",
+        """  if false {""",
+        "killed",
+    ),
+    (
+        "U18",
+        "容器一律声明最高 render_contract（版本闸失去分辨力：老引擎打不开任何新容器）",
+        "mpd/mpd.mbt",
+        """  let rc = @core.required_render_contract(d)""",
+        """  let rc = @core.RENDER_CONTRACT_VERSION""",
+        "killed",
+    ),
+    (
+        "U19",
+        "蒙版 kind 认不出来不报错（静默按矩形解析：打开成功、形状是错的、指纹对不上）",
+        "core/json.mbt",
+        r"""    other => {
+      return Err(
+        "蒙版 kind 未知：\{other}（认得的是 rect、ellipse；要摘掉蒙版用 remove-mask）",
+      )
+    }""",
+        """    _ => Rect""",
+        "killed",
+    ),
+    (
+        "U20",
+        "lint 不报手改容器里的退化蒙版（负 roughen / 非正尺寸没人说）",
+        "agent/ops.mbt",
+        r"""        let me = @core.mask_param_error(mk)
+        if me != "" {
+          v.push("P2 mask 层 \{l.id}：\{me}")
+        }""",
+        """        let _ = @core.mask_param_error(mk)""",
         "killed",
     ),
 ]

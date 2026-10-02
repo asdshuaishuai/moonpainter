@@ -98,10 +98,10 @@ pub fn list_tools() -> Array[AgentTool] {
     "meta",
   )
   add("set-adjust", "set-adjust <id> [op=<算子>] [value=<数>]：原地改调整层的算子/数值（**层序不变**——删了重加会把它推到栈顶，作用范围跟着变）。算子与范围同 add-adjust：" + adjust_op_doc(), "meta")
-  add("add-mask", "add-mask <id> kind=rect|ellipse x= y= w= h= [radius=<圆角 px，仅矩形，默认 0>] [feather=<边缘羽化 px，默认 0=硬边；过渡带在蒙版内侧>] [invert=true]：蒙版坐标是**画布坐标**（x/y/w/h 用像素，不随图层 move/rotate 走）", "meta")
+  add("add-mask", "add-mask <id> " + mask_key_doc() + "：蒙版坐标是**画布坐标**（x/y/w/h 用像素，不随图层 move/rotate 走）", "meta")
   add(
     "set-mask",
-    "set-mask <id> true|false：**只改蒙版的 invert**（几何 x/y/w/h/radius 不可改，要改用 remove-mask + add-mask）",
+    "set-mask <id> [kind=rect|ellipse] [x=] [y=] [w=] [h=] [radius=] [feather=] [roughen=] [invert=true|false]：**部分更新**，只改给的参数、其余原样保留（历史写法 `set-mask <id> true|false` 等价于只给 invert=）",
     "meta",
   )
   add("remove-mask", "remove-mask <id>：移除蒙版（层不存在、或本来没有蒙版 → 报错，不静默成功）", "meta")

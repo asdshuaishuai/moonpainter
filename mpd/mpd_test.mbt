@@ -131,6 +131,57 @@ test "manifest 的 counts 如实报告（layers/assets/params 不许互换或写
 }
 
 ///|
+test "manifest 的 render_contract 按文档**实际用到的能力**声明（不是引擎上限）" {
+  // 这个字段是**版本闸**：读到高于自身支持的版本一律拒绝打开（测试在下面
+  // 用 99 模拟旧引擎）。写入端若一律写引擎上限，闸就失去分辨力——老引擎
+  // 打不开任何新容器；若一律写 1，用到毛边蒙版的文档会被老引擎**静默画成
+  // 光滑边**。所以它必须由文档内容决定（`@core.required_render_contract`）。
+  let m = sample_mpd()
+  let packed = match @mpd.pack(m) {
+    Ok(b) => b
+    Err(e) => abort("pack 失败: \{e}")
+  }
+  let z = @codec.Zip::open(packed)
+  assert_true(
+    z.read_text("manifest.json").contains("\"render_contract\":1"),
+    msg="只用到老语义的文档必须照旧声明 1：\{z.read_text("manifest.json")}",
+  )
+  // 给某一层加毛边蒙版 → 声明升到当前契约档，容器照旧能开（新引擎支持它）
+  let doc = m.doc
+  let l0 = doc.layers[0]
+  let mk : @core.LayerMask = {
+    kind: @core.ShapeKind::Rect,
+    x: 0.0,
+    y: 0.0,
+    w: 10.0,
+    h: 10.0,
+    radius: 0.0,
+    feather: 0.0,
+    roughen: 3.0,
+    invert: false,
+  }
+  doc.layers[0] = { ..l0, mask: Some(mk) }
+  let packed2 = match @mpd.pack(m) {
+    Ok(b) => b
+    Err(e) => abort("pack 失败: \{e}")
+  }
+  let z2 = @codec.Zip::open(packed2)
+  let man2 = z2.read_text("manifest.json")
+  let want = "\"render_contract\":" + @core.RENDER_CONTRACT_VERSION.to_string()
+  assert_true(man2.contains(want), msg="用到毛边必须声明当前档（\{want}）：\{man2}")
+  match @mpd.unpack(packed2) {
+    Ok(back) =>
+      match back.doc.layers[0].mask {
+        Some(got) => assert_eq(got.roughen, 3.0, msg="毛边幅度必须随容器往返")
+        None => abort("毛边蒙版在容器往返里丢了")
+      }
+    Err(e) => abort("新引擎应打得开自己写的容器：\{e}")
+  }
+  // 还原（避免后续断言看到被改过的样本）
+  doc.layers[0] = l0
+}
+
+///|
 test "MVSL：编辑表随容器往返，版本块自洽（list 条目 + manifest 声明）" {
   let m = sample_mpd()
   m.mvsl = sample_mvsl_program()

@@ -305,7 +305,7 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
     ),
     make_tool(
       "add_mask",
-      "给图层加几何蒙版（蒙版外不渲染）。改几何 = remove_mask + add_mask",
+      "给图层加几何蒙版（蒙版外不渲染）。任何参数都可用 set_mask 原地改",
       [
         ("id", "string:req:图层 id"),
         ("kind", "string:req:rect 或 ellipse"),
@@ -318,13 +318,28 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
           "feather",
           "number:边缘羽化（像素，默认 0=硬边）。过渡带在**蒙版内侧**：边界处覆盖 0，向内 feather 像素处到满覆盖。矩形与椭圆都吃",
         ),
+        (
+          "roughen",
+          "number:边缘毛化幅度（像素，默认 0=光滑边）。按画布坐标的确定性噪声扰动边界，得到手绘/撕裂纸边那种不规则轮廓；可与 feather 叠加（先毛化再羽化）",
+        ),
         ("invert", "string:true 则反选（蒙版内反而不渲染）"),
       ],
     ),
     make_tool(
       "set_mask",
-      "只改蒙版反选；几何不可改（用 remove_mask + add_mask 重做）",
-      [("id", "string:req:图层 id"), ("invert", "string:req:true 或 false")],
+      "原地改蒙版参数（**部分更新**：只给要改的，其余保留）",
+      [
+        ("id", "string:req:图层 id"),
+        ("kind", "string:rect 或 ellipse（换形状）"),
+        ("x", "number:蒙版左上 x（像素，画布坐标）"),
+        ("y", "number:蒙版左上 y（像素，画布坐标）"),
+        ("w", "number:蒙版宽（像素）"),
+        ("h", "number:蒙版高（像素）"),
+        ("radius", "number:圆角（像素，仅 rect）"),
+        ("feather", "number:边缘羽化（像素，0=硬边）"),
+        ("roughen", "number:边缘毛化幅度（像素，0=光滑边）"),
+        ("invert", "string:true 反选 / false 正常"),
+      ],
     ),
     make_tool(
       "remove_mask",
@@ -640,10 +655,21 @@ pub fn tool_line(name : String, args : Json) -> String {
     "add_mask" => {
       let id = arg_of(args, "id")
       let kind = arg_of(args, "kind")
-      let tail = args_to_tail(args, ["x", "y", "w", "h", "radius", "feather", "invert"])
+      let tail = args_to_tail(
+        args,
+        ["x", "y", "w", "h", "radius", "feather", "roughen", "invert"],
+      )
       "add-mask \{id} kind=\{kind} \{tail}"
     }
-    "set_mask" => "set-mask \{arg_of(args, "id")} \{arg_of(args, "invert")}"
+    "set_mask" => {
+      // 参数面从这里整条拼出去（含 `invert`）：工具面能改的正是引擎 `set-mask`
+      // 认的那些键，别在这里手写第二份键清单（漂移一次就是"改了没反应"）。
+      let tail = args_to_tail(
+        args,
+        ["kind", "x", "y", "w", "h", "radius", "feather", "roughen", "invert"],
+      )
+      "set-mask \{arg_of(args, "id")} \{tail}"
+    }
     "remove_mask" => "remove-mask \{arg_of(args, "id")}"
     "add_text" => {
       let x = arg_of(args, "x")

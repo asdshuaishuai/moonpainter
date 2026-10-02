@@ -515,7 +515,7 @@ fn mask_json(m : LayerMask?) -> String {
         Ellipse => "ellipse"
         _ => "rect"
       }
-      "{\"kind\":\"\{kind}\",\"x\":\{fmt_num(mask.x)},\"y\":\{fmt_num(mask.y)},\"w\":\{fmt_num(mask.w)},\"h\":\{fmt_num(mask.h)},\"radius\":\{fmt_num(mask.radius)},\"feather\":\{fmt_num(mask.feather)},\"invert\":\{mask.invert}}"
+      "{\"kind\":\"\{kind}\",\"x\":\{fmt_num(mask.x)},\"y\":\{fmt_num(mask.y)},\"w\":\{fmt_num(mask.w)},\"h\":\{fmt_num(mask.h)},\"radius\":\{fmt_num(mask.radius)},\"feather\":\{fmt_num(mask.feather)},\"roughen\":\{fmt_num(mask.roughen)},\"invert\":\{mask.invert}}"
     }
   }
 }
@@ -728,40 +728,49 @@ fn fill_of(v : JValue) -> Result[Fill, String] {
 }
 
 ///|
-fn mask_of(v : JValue) -> LayerMask? {
-  match v.get("mask") {
-    Some(mv) =>
-      match str_field(mv, "kind") {
-        Some("rect") =>
-          Some(
-            {
-              kind: Rect,
-              x: num_f(mv, "x"),
-              y: num_f(mv, "y"),
-              w: num_f(mv, "w"),
-              h: num_f(mv, "h"),
-              radius: num_f(mv, "radius"),
-              feather: num_f(mv, "feather"),
-              invert: bool_field(mv, "invert"),
-            },
-          )
-        Some("ellipse") =>
-          Some(
-            {
-              kind: Ellipse,
-              x: num_f(mv, "x"),
-              y: num_f(mv, "y"),
-              w: num_f(mv, "w"),
-              h: num_f(mv, "h"),
-              radius: num_f(mv, "radius"),
-              feather: num_f(mv, "feather"),
-              invert: bool_field(mv, "invert"),
-            },
-          )
-        _ => None
-      }
-    None => None
+/// 蒙版解析。**不认识的 kind 一律报错，不是"当作没有蒙版"**。
+///
+/// 后者是这里原来的行为，而它是一条静默错渲：手改容器把 `kind` 打错一个字母，
+/// 引擎会说"打开成功"并把整层**当没有蒙版**画出来（层全露），指纹也对不上——
+/// 三个信号互相矛盾。同 `kind_of`/算子解析的纪律：认不出来就**失败得响**。
+/// 这也是新增蒙版种类的**兼容前提**：旧引擎读到不认识的 kind 会拒绝打开，
+/// 而不是静默画出另一张图。
+fn mask_of(v : JValue) -> Result[LayerMask?, String] {
+  let raw = match v.get("mask") {
+    Some(mv) => mv
+    None => return Ok(None)
   }
+  if raw is JNull {
+    return Ok(None)
+  }
+  let kind_s = match str_field(raw, "kind") {
+    Some(k) => k
+    None => return Err("蒙版缺 kind（认得的是 rect、ellipse；要摘掉蒙版用 remove-mask）")
+  }
+  let kind = match kind_s {
+    "rect" => Rect
+    "ellipse" => Ellipse
+    other => {
+      return Err(
+        "蒙版 kind 未知：\{other}（认得的是 rect、ellipse；要摘掉蒙版用 remove-mask）",
+      )
+    }
+  }
+  Ok(
+    Some(
+      {
+        kind,
+        x: num_f(raw, "x"),
+        y: num_f(raw, "y"),
+        w: num_f(raw, "w"),
+        h: num_f(raw, "h"),
+        radius: num_f(raw, "radius"),
+        feather: num_f(raw, "feather"),
+        roughen: num_f(raw, "roughen"),
+        invert: bool_field(raw, "invert"),
+      },
+    ),
+  )
 }
 
 ///|
@@ -856,7 +865,10 @@ fn layer_of(v : JValue) -> Result[Layer, String] {
     Ok(n) => Some(n)
     Err(_) => None
   }
-  let mask = mask_of(v)
+  let mask = match mask_of(v) {
+    Ok(m) => m
+    Err(e) => return Err(e)
+  }
   let adjust = adjust_of(v)
   let fill = match v.get("fill") {
     Some(f) => fill_of(f)

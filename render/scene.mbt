@@ -1933,12 +1933,79 @@ fn mask_inner_dist(mask : @core.LayerMask, dx : Double, dy : Double) -> Double {
 }
 
 ///|
+/// 毛边的**晶格间距**（像素）：值噪声按这个间距铺点、再平滑插值。
+/// 固定常数而不是参数，是为了让"毛化幅度"只有一个可调量（`roughen`）——
+/// 两个可调量会互相掩盖对方是否生效。
+const MASK_ROUGH_PITCH : Double = 4.0
+
+///|
+/// 一个与平台无关的确定性整数哈希 → [0,1)。
+///
+/// **为什么不是随机数**：渲染产物要按 sha 对账（铁律 7），任何时间戳/随机种子
+/// 都会让同一文档渲染出两张不同的图。这里全部用掩到 24 位的整数乘法
+/// （乘积 < 2^47，不依赖 Int 是 32 位还是 64 位，也不依赖溢出行为），
+/// 所以 native 与 wasm-gc 给出**逐位相同**的毛边。
+fn mask_hash01(ix : Int, iy : Int) -> Double {
+  let mut h : Int64 = (ix & 0xFFFF).to_int64() * 4093L
+  h = h + (iy & 0xFFFF).to_int64() * 8191L
+  h = h & 0xFFFFFFL
+  h = h * 2654435L
+  h = h ^ (h >> 13)
+  h = h & 0xFFFFFFL
+  h = h * 1274126L
+  h = h ^ (h >> 15)
+  let u = h & 0xFFFFFFL
+  u.to_double() / 16777216.0
+}
+
+///|
+/// 向负无穷取整（`Double::to_int` 是向零截断，负数会落到错误的晶格上）。
+fn mask_floor_i(v : Double) -> Int {
+  let t = v.to_int()
+  if v < 0.0 && t.to_double() != v {
+    t - 1
+  } else {
+    t
+  }
+}
+
+///|
+/// 蒙版毛边的**边缘偏移量**（像素，`[-amp, amp]`）：画布坐标上的值噪声，
+/// 双线性 + smoothstep 插值。
+///
+/// 它是**画布坐标的纯函数**——不依赖蒙版位置、图层变换、调用顺序，也不含
+/// 随机数：同一份文档、同一个点，永远给出同一个偏移。取景（crop/zoom）不改
+/// 语义，理由与选择子相同（蒙版坐标本来就是画布坐标）。
+fn mask_edge_offset(amp : Double, px : Double, py : Double) -> Double {
+  let gx = px / MASK_ROUGH_PITCH
+  let gy = py / MASK_ROUGH_PITCH
+  let ix = mask_floor_i(gx)
+  let iy = mask_floor_i(gy)
+  let fx = gx - ix.to_double()
+  let fy = gy - iy.to_double()
+  let sx = fx * fx * (3.0 - 2.0 * fx)
+  let sy = fy * fy * (3.0 - 2.0 * fy)
+  let v00 = mask_hash01(ix, iy)
+  let v10 = mask_hash01(ix + 1, iy)
+  let v01 = mask_hash01(ix, iy + 1)
+  let v11 = mask_hash01(ix + 1, iy + 1)
+  let a = v00 + (v10 - v00) * sx
+  let b = v01 + (v11 - v01) * sx
+  let v = a + (b - a) * sy
+  amp * (v * 2.0 - 1.0)
+}
+
+///|
 /// 蒙版覆盖度：画布坐标 (px,py) 在层蒙版内=1 外=0（invert 反选）。
 /// 矩形蒙版按 `radius` 切圆角；`radius <= 0` 时**走原先的硬直角分支**。
 ///
 /// `feather <= 0` 时**整段走硬边分支**，与"还没有 feather 这个参数"之前
 /// 的行为逐位相同；`feather > 0` 时按内距做线性软过渡（边界处 0，向内
 /// `feather` 像素处到 1）。
+///
+/// `roughen <= 0` 时**整段走没有毛边的老分支**（同样的逐位兼容承诺）；
+/// `roughen > 0` 时先按画布坐标的确定性噪声扰动内距，再走同一套阈值/软过渡
+/// —— 于是"毛边 + 羽化"是"先毛化再羽化"，而不是两种互斥模式。
 fn mask_cover_at(l : @core.Layer, px : Double, py : Double) -> Double {
   let mask = match l.mask {
     Some(m) => m
@@ -1946,6 +2013,24 @@ fn mask_cover_at(l : @core.Layer, px : Double, py : Double) -> Double {
   }
   let dx = px - mask.x
   let dy = py - mask.y
+  if mask.roughen > 0.0 {
+    // 毛边路径：内距（圆角矩形/椭圆都算）减去噪声偏移，再做软/硬阈值。
+    let d = mask_inner_dist(mask, dx, dy) - mask_edge_offset(mask.roughen, px, py)
+    let rough_cover = if mask.feather > 0.0 {
+      if d <= 0.0 {
+        0.0
+      } else if d >= mask.feather {
+        1.0
+      } else {
+        d / mask.feather
+      }
+    } else if d > 0.0 {
+      1.0
+    } else {
+      0.0
+    }
+    return if mask.invert { 1.0 - rough_cover } else { rough_cover }
+  }
   let cover = if mask.feather > 0.0 {
     let d = mask_inner_dist(mask, dx, dy)
     if d <= 0.0 {

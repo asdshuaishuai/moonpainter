@@ -805,6 +805,21 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
         )
       }
     }
+    // 蒙版参数：命令面已拦（add-mask/set-mask 都过 `@core.mask_param_error`），
+    // 这里兜住**手改容器 / 旧版本产物**。判据与入口是**同一句**
+    // （`@core.mask_param_error`），所以"入口拒绝什么"与"lint 报什么"不可能分叉。
+    // 为什么值得报：尺寸非正的蒙版会把整层**悄悄**藏掉（invert 后整层露出），
+    // 负的 radius/feather/roughen 则被渲染器各自折成 0 —— 三者都是"给了参数
+    // 但不生效"，而 `query-layer` 照旧把它报出来、指纹照旧变了。
+    match l.mask {
+      Some(mk) => {
+        let me = @core.mask_param_error(mk)
+        if me != "" {
+          v.push("P2 mask 层 \{l.id}：\{me}")
+        }
+      }
+      None => ()
+    }
     // 所有「某 kind 才有意义」的字段走同一张表。此前这里只有三条手写 if
     // （text / radius / points），而同类字段还有五个（font_size / adjust /
     // asset_hash / dabs / children）——**特例化的检查一定漏**。

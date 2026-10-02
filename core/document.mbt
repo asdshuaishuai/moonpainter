@@ -135,6 +135,10 @@ pub(all) struct Stroke {
 /// （DESIGN §8 有实测记录）。`radius` 是矩形蒙版的圆角半径
 /// （`<=0` 为直角；超过半边长按半边长夹住）。`feather` 是边缘软过渡宽度
 /// （像素，`0` 为硬边——与"还没有 feather"之前的行为逐位相同）。
+/// `roughen` 是**边缘毛化幅度**（像素，`0` = 光滑边=历史行为）：在阈值化之前
+/// 用一个**确定性**的值噪声扰动边界的内距，得到手绘/撕裂纸边那种不规则轮廓。
+/// 噪声是画布坐标的纯函数（不含时间、随机数、迭代序——铁律 7），所以
+/// 同一文档反复渲染逐位一致、取景不改语义。
 pub(all) struct LayerMask {
   kind : ShapeKind // Rect 或 Ellipse
   x : Double
@@ -143,7 +147,58 @@ pub(all) struct LayerMask {
   h : Double
   radius : Double
   feather : Double // 边缘软过渡宽度（像素）；0 = 硬边（历史行为）
+  /// 边缘毛化幅度（像素）；0 = 光滑边（历史行为）
+  roughen : Double
   invert : Bool
+}
+
+///|
+/// 蒙版参数的**取值判据**（一处实现，入口与 lint 共用）。
+///
+/// 返回 "" = 合法，否则是给人看的错因。**一句话说清"这条蒙版装不上/装了也不
+/// 干活"**：尺寸非正 → 覆盖区为空（`invert=false` 时整层被藏掉）；负的
+/// radius/feather/roughen 没有任何意义（渲染器内部会各自折成 0，于是"给了
+/// 参数但不生效"）。
+///
+/// 为什么要共用：入口拒绝（`add-mask`/`set-mask`）与 lint 兜住（手改容器、
+/// 旧版本产物）是**两个出口、一个判断**——两处各写一份，先烂的一定是没人读的
+/// 那处（本仓库的旧账）。
+pub fn mask_param_error(m : LayerMask) -> String {
+  if m.w <= 0.0 || m.h <= 0.0 {
+    return "蒙版尺寸必须为正：w=\{fmt_num(m.w)} h=\{fmt_num(m.h)}（覆盖区为空，这层会被整层藏掉/整层露出）"
+  }
+  if m.radius < 0.0 {
+    return "蒙版 radius 不能为负：\{fmt_num(m.radius)}（0 = 直角）"
+  }
+  if m.feather < 0.0 {
+    return "蒙版 feather 不能为负：\{fmt_num(m.feather)}（0 = 硬边）"
+  }
+  if m.roughen < 0.0 {
+    return "蒙版 roughen 不能为负：\{fmt_num(m.roughen)}（0 = 光滑边）"
+  }
+  ""
+}
+
+///|
+/// 这份文档**要求的最低渲染契约版本**（容器据此声明自己需要什么渲染器）。
+///
+/// 存在的理由：新增的渲染语义若只加在数据里，**旧引擎会静默按老语义画**
+/// （`roughen` 被忽略 = 边缘悄悄变光滑），而"静默错渲"是本项目明令禁止的。
+/// 容器 manifest 的 `render_contract` 是既有的版本闸（读到高于自身支持的版本
+/// 一律拒绝打开），所以只要**写的时候按实际用到的能力声明**，旧引擎就会在
+/// 打开时失败得响。
+///
+/// 目前只有一档需要升级：
+///   * 2 = 用到蒙版毛边（`roughen > 0`）
+/// 别在这里写"总是 2"——那等于把所有容器都标成新契约，闸就失去了分辨力。
+pub fn required_render_contract(doc : Document) -> Int {
+  for l in doc.layers {
+    match l.mask {
+      Some(m) => if m.roughen > 0.0 { return RENDER_CONTRACT_VERSION }
+      None => ()
+    }
+  }
+  1
 }
 
 ///|

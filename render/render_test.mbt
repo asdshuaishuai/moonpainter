@@ -316,7 +316,7 @@ test "pick：只报「真的在那里画了东西」的层（与 paint_layer 同
   d4.layers.push(
     {
       ..@core.default_layer("m", "m", 0.0, 0.0, 60.0, 60.0),
-      mask: Some(@core.LayerMask::{ kind: @core.ShapeKind::Rect, x: 0.0, y: 0.0, w: 10.0, h: 10.0, radius: 0.0, feather: 0.0, invert: false }),
+      mask: Some(@core.LayerMask::{ kind: @core.ShapeKind::Rect, x: 0.0, y: 0.0, w: 10.0, h: 10.0, radius: 0.0, feather: 0.0, roughen: 0.0, invert: false }),
     },
   )
   assert_true(@render.pick(d4, 40.0, 40.0) is None, msg="蒙版外的点不算「在那里」")
@@ -415,4 +415,94 @@ test "to_canvas 是 to_local 的逆（旋转 + 双向翻转都往返一致）" {
   let c2 = @render.to_canvas(l2, 1.0, 2.0)
   assert_eq(c2.0, 6.0)
   assert_eq(c2.1, 8.0)
+}
+
+
+///|
+test "毛边蒙版进真渲染管线：边界被啃动、深处不动、pick 与渲染同一把尺子" {
+  // 白盒那几条测的是 `mask_cover_at`，这条测**它真的被渲染管线用上**：
+  // 同一份文档只改 `roughen`，渲染产物必须不同（不是"存了但没人读"），
+  // 而且差别只出现在蒙版边界附近（不能把整块啃穿）。
+  let w = 48
+  let h = 48
+  let mk = fn(rough : Double) -> @core.Document {
+    let d = @core.new_document("u-rough", w, h)
+    let m : @core.LayerMask = {
+      kind: @core.ShapeKind::Rect,
+      x: 8.0,
+      y: 8.0,
+      w: 32.0,
+      h: 32.0,
+      radius: 0.0,
+      feather: 0.0,
+      roughen: rough,
+      invert: false,
+    }
+    d.layers.push(
+      {
+        ..@core.default_layer("r", "r", 0.0, 0.0, w.to_double(), h.to_double()),
+        mask: Some(m),
+      },
+    )
+    d
+  }
+  let env = @render.RenderEnv::new()
+  let smooth = @render.render_doc(mk(0.0), env)
+  let rough = @render.render_doc(mk(3.0), env)
+  let mut changed = 0
+  let mut deep_bad = 0
+  let mut y = 0
+  while y < h {
+    let mut x = 0
+    while x < w {
+      let a = @codec.rgba_get(smooth, x, y)
+      let b = @codec.rgba_get(rough, x, y)
+      if a != b {
+        changed = changed + 1
+      }
+      // 离边界 (>3px) 的内部点：两版都必须是不透明的红（蒙版内满覆盖）
+      let px = x.to_double() + 0.5
+      let py = y.to_double() + 0.5
+      if px >= 12.0 && px <= 36.0 && py >= 12.0 && py <= 36.0 && a != b {
+        deep_bad = deep_bad + 1
+      }
+      x = x + 1
+    }
+    y = y + 1
+  }
+  assert_true(changed > 20, msg="毛边必须真的改变渲染产物，实际只改了 \{changed} 个像素")
+  assert_eq(deep_bad, 0, msg="毛边只许啃边界（幅度 3 < 4），深处不许变")
+  // 确定性：同一份文档渲染两次逐位一致（噪声里不许有随机数/时间戳）
+  let again = @render.render_doc(mk(3.0), env)
+  assert_eq(
+    @base.sha256_hex(@codec.png_encode(rough)),
+    @base.sha256_hex(@codec.png_encode(again)),
+    msg="毛边渲染必须可复现",
+  )
+  // `pick` 走的是同一个 `mask_cover_at`（一处实现）：在**被啃掉**的那个像素上
+  // pick 必须说"这里没有东西"，与渲染产物一致——判据不许比渲染器松。
+  let mut flipped_at : (Int, Int) = (0 - 1, 0 - 1)
+  let mut fy = 0
+  while fy < h && flipped_at.0 < 0 {
+    let mut fx = 0
+    while fx < w && flipped_at.0 < 0 {
+      let a = @codec.rgba_get(smooth, fx, fy)
+      let b = @codec.rgba_get(rough, fx, fy)
+      // 平滑版有墨、毛边版被啃成透明（透明 = 全 0 alpha，画布底是白 → 找"变了"的边界点）
+      if a != b {
+        flipped_at = (fx, fy)
+      }
+      fx = fx + 1
+    }
+    fy = fy + 1
+  }
+  assert_true(flipped_at.0 >= 0, msg="应能找到至少一个被毛边改动的像素")
+  let rough_pick = @render.pick(mk(3.0), flipped_at.0.to_double(), flipped_at.1.to_double())
+  let ink = @codec.rgba_get(rough, flipped_at.0, flipped_at.1)
+  let has_ink = ((ink >> 24) & 0xFF) != 0
+  assert_eq(
+    rough_pick is Some(_),
+    has_ink,
+    msg="pick 与渲染必须同一把尺子（同一像素上不能一个说有、一个说没有）",
+  )
 }

@@ -474,7 +474,7 @@ fn layer_summary(l : @core.Layer) -> String {
   match l.mask {
     Some(m) =>
       sb.write_string(
-        ",\"mask\":{\"kind\":\"\{kind_str(m.kind)}\",\"x\":\{@core.fmt_num(m.x)},\"y\":\{@core.fmt_num(m.y)},\"w\":\{@core.fmt_num(m.w)},\"h\":\{@core.fmt_num(m.h)},\"radius\":\{@core.fmt_num(m.radius)},\"feather\":\{@core.fmt_num(m.feather)},\"invert\":\{m.invert}}",
+        ",\"mask\":{\"kind\":\"\{kind_str(m.kind)}\",\"x\":\{@core.fmt_num(m.x)},\"y\":\{@core.fmt_num(m.y)},\"w\":\{@core.fmt_num(m.w)},\"h\":\{@core.fmt_num(m.h)},\"radius\":\{@core.fmt_num(m.radius)},\"feather\":\{@core.fmt_num(m.feather)},\"roughen\":\{@core.fmt_num(m.roughen)},\"invert\":\{m.invert}}",
       )
     None => ()
   }
@@ -1236,10 +1236,77 @@ fn cmd_set_adjust(s : Session, tokens : Array[String]) -> String {
 }
 
 ///|
+/// 蒙版参数的**唯一键清单**（`add-mask`/`set-mask` 的解析器 allow-list，
+/// 以及字典里的用法串）。两处各写一份就会漂移——而漂移的那一半正是 LLM
+/// 唯一的说明书（它照字典发参数，字典没写 / 写错 → 一直发错）。
+fn mask_keys() -> Array[String] {
+  ["kind", "x", "y", "w", "h", "radius", "feather", "roughen", "invert"]
+}
+
+///|
+/// 字典里的蒙版参数用法串（从键清单生成，顺序即清单顺序）。
+pub fn mask_key_doc() -> String {
+  let mut s = "kind=rect|ellipse"
+  for k in mask_keys() {
+    let part = match k {
+      "kind" => ""
+      "radius" => " [radius=<圆角 px，仅矩形，默认 0>]"
+      "feather" => " [feather=<边缘羽化 px，默认 0=硬边；过渡带在蒙版内侧>]"
+      "roughen" => " [roughen=<边缘毛化 px，默认 0=光滑边>]"
+      "invert" => " [invert=true]"
+      _ => " " + k + "=<像素>"
+    }
+    s = s + part
+  }
+  s
+}
+
+///|
+/// 蒙版参数的**部分更新**读取器（`set-mask` 与 `add-mask` 共用一把尺子）。
+///
+/// 给了就必须是数字且报得出错因（`arg_d` 的纪律：**非数不许静默退默认**）；
+/// 没给就沿用现值。
+fn mask_arg_d(m : Map[String, String], key : String, cur : Double) -> Result[Double, String] {
+  match m.get(key) {
+    None => Ok(cur)
+    Some(v) =>
+      match to_d(v) {
+        Some(d) => Ok(d)
+        None => Err("蒙版 \{key}=\{v} 不是数字")
+      }
+  }
+}
+
+///|
+/// 蒙版 kind 的读取器（与 JSON 侧同一句判断：只认 rect|ellipse）。
+fn mask_arg_kind(
+  m : Map[String, String],
+  cur : @core.ShapeKind,
+) -> Result[@core.ShapeKind, String] {
+  match m.get("kind") {
+    None => Ok(cur)
+    Some("rect") => Ok(@core.ShapeKind::Rect)
+    Some("ellipse") => Ok(@core.ShapeKind::Ellipse)
+    Some(other) => Err("蒙版 kind 应为 rect|ellipse，got \{other}")
+  }
+}
+
+///|
+/// 蒙版 invert 的读取器：**认不出就报错**（`invert=maybe` 不许悄悄当 false）。
+fn mask_arg_bool(m : Map[String, String], cur : Bool) -> Result[Bool, String] {
+  match m.get("invert") {
+    None => Ok(cur)
+    Some("true") | Some("1") => Ok(true)
+    Some("false") | Some("0") => Ok(false)
+    Some(other) => Err("蒙版 invert 应为 true|false，got \{other}")
+  }
+}
+
+///|
 fn cmd_add_mask(s : Session, tokens : Array[String]) -> String {
   if tokens.length() < 2 {
     return err(
-      "用法：add-mask <id> kind=rect|ellipse x= y= w= h= [radius=<圆角 px，仅矩形，默认 0>] [feather=<边缘羽化 px，默认 0=硬边>] [invert=true]",
+      "用法：add-mask <id> kind=rect|ellipse x= y= w= h= [radius=<圆角 px，仅矩形，默认 0>] [feather=<边缘羽化 px，默认 0=硬边>] [roughen=<边缘毛化 px，默认 0=光滑边>] [invert=true]",
     )
   }
   let doc = match require_doc(s) {
@@ -1252,116 +1319,167 @@ fn cmd_add_mask(s : Session, tokens : Array[String]) -> String {
   }
   // 蒙版的 `radius` 当年正是"静默接受任何 tokens[2]"那类 bug 的发源地
   // （见 set-mask 的注释）；这里同样把"没认出来"变成错误。
-  match check_kv_args(
-    tokens,
-    2,
-    ["kind", "x", "y", "w", "h", "radius", "feather", "invert"],
-    "add-mask",
-  ) {
+  match check_kv_args(tokens, 2, mask_keys(), "add-mask") {
     Ok(_) => ()
     Err(e) => return err(e)
   }
   let m = kv_args(tokens, 2)
-  let kind = match m.get("kind") {
-    Some("ellipse") => @core.ShapeKind::Ellipse
-    Some("rect") => @core.ShapeKind::Rect
-    Some(other) => return err("蒙版 kind 应为 rect|ellipse，got \{other}")
-    None => return err("add-mask 需要 kind=rect|ellipse")
+  let kind = match mask_arg_kind(m, @core.ShapeKind::Rect) {
+    Ok(k) => k
+    Err(e) => return err(e)
   }
-  let x = match to_d(m.get("x").unwrap_or("0")) {
-    Some(v) => v
-    None => return err("x 非法")
+  // `w=`/`h=` 是**必给**参数（没有尺寸的蒙版没有意义），先分"缺了"与"值非法"，
+  // 后者交给 `@core.mask_param_error`（与 lint 同一句判据）。
+  if m.get("w") is None {
+    return err("add-mask 需要 w=")
   }
-  let y = match to_d(m.get("y").unwrap_or("0")) {
-    Some(v) => v
-    None => return err("y 非法")
+  if m.get("h") is None {
+    return err("add-mask 需要 h=")
   }
-  let w = match to_d(m.get("w").unwrap_or("0")) {
-    Some(v) => if v > 0.0 { v } else { return err("蒙版 w 必须为正") }
-    None => return err("add-mask 需要 w=")
+  let mut cand : @core.LayerMask = {
+    kind,
+    x: 0.0,
+    y: 0.0,
+    w: 0.0,
+    h: 0.0,
+    radius: 0.0,
+    feather: 0.0,
+    roughen: 0.0,
+    invert: false,
   }
-  let h = match to_d(m.get("h").unwrap_or("0")) {
-    Some(v) => if v > 0.0 { v } else { return err("蒙版 h 必须为正") }
-    None => return err("add-mask 需要 h=")
+  // radius/feather/roughen 都曾"非法值静默变 0"：`radius=abc` 不报错、`radius=-5`
+  // 也收。它们现在真的参与渲染（圆角/羽化/毛边），静默降级会让"看起来加了效果"
+  // 和"效果根本没生效"难以区分——这正是它们藏了这么久的原因。
+  for key in ["x", "y", "w", "h", "radius", "feather", "roughen"] {
+    let cur = 0.0
+    let v = match mask_arg_d(m, key, cur) {
+      Ok(v) => v
+      Err(e) => return err(e)
+    }
+    cand = match key {
+      "x" => { ..cand, x: v }
+      "y" => { ..cand, y: v }
+      "w" => { ..cand, w: v }
+      "h" => { ..cand, h: v }
+      "radius" => { ..cand, radius: v }
+      "feather" => { ..cand, feather: v }
+      _ => { ..cand, roughen: v }
+    }
   }
-  // radius 曾经是"非法值静默变 0"——`radius=abc` 不报错、`radius=-5` 也收。
-  // 现在它真的参与渲染了（圆角矩形），静默降级会让"看起来加了圆角"和
-  // "圆角根本没生效"难以区分（这正是它藏了这么久的原因）。
-  let radius = match m.get("radius") {
-    Some(v) =>
-      match to_d(v) {
-        Some(d) =>
-          if d < 0.0 {
-            return err("蒙版 radius 不能为负：\{v}")
-          } else {
-            d
-          }
-        None => return err("radius=\{v} 不是数字")
-      }
-    None => 0.0
+  let inv = match mask_arg_bool(m, false) {
+    Ok(b) => b
+    Err(e) => return err(e)
   }
-  // feather 与 radius 同样"不静默降级"：它直接决定蒙版边缘是硬的还是软的，
-  // 悄悄当 0 会让"羽化没生效"和"羽化很小"分不出来。
-  let feather = match m.get("feather") {
-    Some(v) =>
-      match to_d(v) {
-        Some(d) =>
-          if d < 0.0 {
-            return err("蒙版 feather 不能为负：\{v}")
-          } else {
-            d
-          }
-        None => return err("feather=\{v} 不是数字")
-      }
-    None => 0.0
-  }
-  let invert = match m.get("invert") {
-    Some("true") | Some("1") => true
-    _ => false
+  cand = { ..cand, invert: inv }
+  // 取值判据只有一句（`@core.mask_param_error`，lint 也用它）
+  let why = @core.mask_param_error(cand)
+  if why != "" {
+    return err(why)
   }
   snapshot(s, doc, "add-mask \{id}")
-  let _ = update_layer(doc.layers, id, fn(l) {
-    { ..l, mask: Some({ kind, x, y, w, h, radius, feather, invert }) }
-  })
+  let _ = update_layer(doc.layers, id, fn(l) { { ..l, mask: Some(cand) } })
   "{\"ok\":true,\"op\":\"add-mask\",\"id\":\"\{id}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
 }
 
 ///|
+/// `set-mask <id> [kind=] [x=] [y=] [w=] [h=] [radius=] [feather=] [roughen=] [invert=]`
+/// —— 蒙版参数的**部分更新**（只给要改的那些，其余原样保留）。
+///
+/// 为什么要有它：`add-mask` 是**全量**建立（缺省即默认 0）。于是"只想把羽化
+/// 从 4 调到 12"若走 `remove-mask` + `add-mask`，**没重复写的 radius 会被悄悄
+/// 重置成 0**、roughen 归零——一次小调整把另外几个参数吃掉，而且不报错。
+/// 同 `set-adjust`/`set-text`/`set-style points` 那条"改得动吗"纪律：能设的
+/// 名字必须能原地改。
+///
+/// 兼容：`set-mask <id> true|false` 是历史写法（等价于只给 `invert=`），照旧
+/// 接受；认不出的一律拒绝并给用法，不做静默降级。
 fn cmd_set_mask(s : Session, tokens : Array[String]) -> String {
-  // set-mask **只改 invert**（几何修改走 remove-mask + add-mask）。
-  //
-  // 这里曾经静默接受任何 tokens[2]：认不出 `true`/`1`/`invert=true` 就当
-  // false。于是照字典传 `x= y= w= h=` 会**什么都不改却返回 ok**（指纹一字
-  // 未变），还会把原有的 invert 重置掉——踩了铁律 3"不支持就报明确错误"。
-  // 现在认不出就拒绝，并指路几何修改的正确做法。
   if tokens.length() < 3 {
-    return err("用法：set-mask <id> true|false（只改反选；几何修改用 remove-mask + add-mask）")
+    return err(
+      "用法：set-mask <id> [kind=rect|ellipse] [x=] [y=] [w=] [h=] [radius=] [feather=] [roughen=] [invert=true|false]（至少给一个；历史写法 `set-mask <id> true|false` 等价于只给 invert=）",
+    )
   }
   let doc = match require_doc(s) {
     Ok(d) => d
     Err(e) => return err(e)
   }
   let id = tokens[1]
-  let inv = match tokens[2] {
-    "true" | "1" | "invert=true" => true
-    "false" | "0" | "invert=false" => false
-    other =>
+  let l = match @core.find_layer(doc.layers, id) {
+    Some(l) => l
+    None => return err("层不存在：\{id}")
+  }
+  // 改一个不存在的蒙版不许静默成功（同 `remove-mask` 那条纪律：删不存在的
+  // 东西也不许静默成功）。此前这里 `update_layer` 原样返回，回包是 ok 而指纹
+  // 一字未变——调用方以为自己改了。
+  let old = match l.mask {
+    Some(m) => m
+    None =>
+      return err("层 \{id} 本来就没有蒙版，set-mask 没东西可改（用 add-mask 添加）")
+  }
+  // 位置参数（历史写法）先归一成 `invert=`，再走同一套解析。
+  let toks : Array[String] = [tokens[0], tokens[1]]
+  for i in 2..<tokens.length() {
+    let t = tokens[i]
+    if t.contains("=") || t == "true" || t == "false" || t == "1" || t == "0" {
+      toks.push(if t.contains("=") { t } else { "invert=\{t}" })
+    } else {
       return err(
-        "set-mask 只改 invert（true|false）；几何修改请用 remove-mask + add-mask，got \{other}",
+        "set-mask 的参数要么是 `键=值`，要么是历史写法的 true|false；认不出 \{t}（改动整块几何用 remove-mask + add-mask）",
       )
+    }
+  }
+  match check_kv_args(toks, 2, mask_keys(), "set-mask") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }
+  let m = kv_args(toks, 2)
+  if m.length() == 0 {
+    return err("set-mask 至少要给一个要改的参数（例如 feather=12）")
+  }
+  let kind = match mask_arg_kind(m, old.kind) {
+    Ok(k) => k
+    Err(e) => return err(e)
+  }
+  let x = match mask_arg_d(m, "x", old.x) {
+    Ok(v) => v
+    Err(e) => return err(e)
+  }
+  let y = match mask_arg_d(m, "y", old.y) {
+    Ok(v) => v
+    Err(e) => return err(e)
+  }
+  let w = match mask_arg_d(m, "w", old.w) {
+    Ok(v) => v
+    Err(e) => return err(e)
+  }
+  let h = match mask_arg_d(m, "h", old.h) {
+    Ok(v) => v
+    Err(e) => return err(e)
+  }
+  let radius = match mask_arg_d(m, "radius", old.radius) {
+    Ok(v) => v
+    Err(e) => return err(e)
+  }
+  let feather = match mask_arg_d(m, "feather", old.feather) {
+    Ok(v) => v
+    Err(e) => return err(e)
+  }
+  let roughen = match mask_arg_d(m, "roughen", old.roughen) {
+    Ok(v) => v
+    Err(e) => return err(e)
+  }
+  let invert = match mask_arg_bool(m, old.invert) {
+    Ok(b) => b
+    Err(e) => return err(e)
+  }
+  let neu : @core.LayerMask = { kind, x, y, w, h, radius, feather, roughen, invert }
+  let why = @core.mask_param_error(neu)
+  if why != "" {
+    return err(why)
   }
   snapshot(s, doc, "set-mask \{id}")
-  let ok = update_layer(doc.layers, id, fn(l) {
-    match l.mask {
-      Some(m) => { ..l, mask: Some({ ..m, invert: inv }) }
-      None => l
-    }
-  })
-  if ok {
-    "{\"ok\":true,\"op\":\"set-mask\",\"id\":\"\{id}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
-  } else {
-    err("层不存在：\{id}")
-  }
+  let _ = update_layer(doc.layers, id, fn(l) { { ..l, mask: Some(neu) } })
+  "{\"ok\":true,\"op\":\"set-mask\",\"id\":\"\{id}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
 }
 
 ///|
