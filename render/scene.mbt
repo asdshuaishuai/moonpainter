@@ -415,10 +415,6 @@ fn solid_rect_interior(
   if l.rotation_deg != 0.0 || l.flip_h || l.flip_v || l.corner_radius > 0.0 {
     return None
   }
-  match l.mask {
-    Some(_) => return None
-    None => ()
-  }
   if l.stroke.width > 0.0 {
     return None
   }
@@ -430,7 +426,26 @@ fn solid_rect_interior(
   if ix1 <= ix0 || iy1 <= iy0 {
     return None
   }
-  Some((ix0, iy0, ix1, iy1))
+  // 有蒙版时还得"覆盖恒为 1"——两个盒取交。蒙版盒取不到（`invert`/退化/太小）
+  // 就整块放弃：那一层退回通用路径，画面不变，只是慢。
+  match l.mask {
+    None => Some((ix0, iy0, ix1, iy1))
+    Some(m) =>
+      match mask_full_box(m) {
+        None => None
+        Some((mx0, my0, mx1, my1)) => {
+          let ax0 = if mx0 > ix0 { mx0 } else { ix0 }
+          let ay0 = if my0 > iy0 { my0 } else { iy0 }
+          let ax1 = if mx1 < ix1 { mx1 } else { ix1 }
+          let ay1 = if my1 < iy1 { my1 } else { iy1 }
+          if ax1 <= ax0 || ay1 <= ay0 {
+            None
+          } else {
+            Some((ax0, ay0, ax1, ay1))
+          }
+        }
+      }
+  }
 }
 
 ///|
@@ -450,6 +465,65 @@ fn clamp_int(v : Double, lo : Int, hi : Int) -> Int {
 /// 边界余量。见 `solid_rect_interior`：只用来把"卡在 ulp 边界上"的像素让给
 /// 通用路径，1e-6 远大于 1e4 量级坐标的 ulp（~1e-12），又不影响任何真实几何。
 const INTERIOR_EPS : Double = 1.0e-6
+
+///|
+/// 蒙版覆盖**恒为 1.0** 的像素盒（画布坐标、半开区间；`px`/`py` 是**像素中心**，
+/// 因为 `mask_cover_at` 就是按中心求值的）。
+///
+/// 为什么能算出来：`soft_cover(t, Linear)` 在 `t ≥ 1.0` 时**精确**返回 1.0，
+/// 而蒙版内距的算式是三支之一（见 `mask_inner_dist`）：
+///   * 矩形（含圆角）：`inner_dist = 内距`；
+///   * 椭圆：`inner_dist = (1 - ρ) × min(w,h)/2`；
+/// 毛边噪声 `mask_edge_offset` 被 `roughen` 界住（`amp × (v*2-1)`，`v ∈ [0,1]`
+/// ⇒ `offset ∈ [-roughen, +roughen]`）。所以取
+/// `t = feather + roughen + ε`，凡 `inner_dist ≥ t` 的像素**必然** cover == 1.0：
+///   * `d = inner_dist - offset ≥ t - roughen = feather + ε > feather` ⇒ 软覆盖 1.0；
+///   * `feather == 0` 时 `d ≥ ε > 0` ⇒ 硬覆盖 1.0（且 `inner_dist > 0` 已严格在形内，
+///     与"硬边只判在不在形状里"的边界约定（半开区间）不冲突）。
+/// ⚠️ 这里给的是**盒**（内接矩形）而不是精确区域——**只会小不会大**是安全的
+/// （小的那一圈退回通用路径，画面一样）；大了就是把 cover < 1 的像素按 1.0 合成，
+/// 那是**静默加亮**。椭圆那一支用"内接正方形"（半轴 / √2）再配 `t` 里的 ε 余量。
+/// `invert` 直接把区域变成"形状外"（无界），不在此路。
+fn mask_full_box(m : @core.LayerMask) -> (Int, Int, Int, Int)? {
+  if m.invert {
+    return None
+  }
+  if m.w <= 0.0 || m.h <= 0.0 {
+    return None
+  }
+  let t = m.feather + m.roughen + INTERIOR_EPS
+  let (a0, a1, b0, b1) = match m.kind {
+    @core.ShapeKind::Ellipse => {
+      let short = if m.w < m.h { m.w } else { m.h }
+      let half = short / 2.0
+      let rho = 1.0 - t / half
+      let hx = rho * m.w / 2.0 * INV_SQRT2
+      let hy = rho * m.h / 2.0 * INV_SQRT2
+      (m.w / 2.0 - hx, m.w / 2.0 + hx, m.h / 2.0 - hy, m.h / 2.0 + hy)
+    }
+    // 其它 kind 走 `mask_inner_dist` 的圆角矩形支（与它同一套语义）。
+    _ => {
+      let r = if m.radius > 0.0 { m.radius } else { 0.0 }
+      (r + t, m.w - r - t, r + t, m.h - r - t)
+    }
+  }
+  if a1 <= a0 || b1 <= b0 {
+    return None
+  }
+  // 局部盒 → 像素中心盒：`px - m.x ∈ [a0, a1]` ⇒ `px ∈ [ceil(m.x+a0), floor(m.x+a1)]`
+  let bx0 = clamp_int((m.x + a0).ceil(), -1000000000, 1000000000)
+  let by0 = clamp_int((m.y + b0).ceil(), -1000000000, 1000000000)
+  let bx1 = clamp_int((m.x + a1).floor(), -1000000000, 1000000000)
+  let by1 = clamp_int((m.y + b1).floor(), -1000000000, 1000000000)
+  if bx1 < bx0 || by1 < by0 {
+    return None
+  }
+  Some((bx0, by0, bx1 + 1, by1 + 1))
+}
+
+///|
+/// `1/√2`：椭圆那一支求"内接正方形"用。
+const INV_SQRT2 : Double = 0.7071067811865476
 
 ///|
 /// 整块内部按**常量源色**合成（`compose_src` 与通用路径同一处）。

@@ -1793,6 +1793,14 @@ MUTS = [
         "killed",
     ),
     (
+        "Q27",
+        "蒙版「覆盖恒为 1」的盒忽略 feather+roughen（羽化带里的像素被按全覆盖合成：整层静默加亮）",
+        "render/scene.mbt",
+        "  let t = m.feather + m.roughen + INTERIOR_EPS",
+        "  let t = INTERIOR_EPS",
+        "killed",
+    ),
+    (
         "Q26",
         "实心矩形的快速内部判宽 1 像素（边界像素按全覆盖合成：画面多出一条硬边）",
         "render/scene.mbt",

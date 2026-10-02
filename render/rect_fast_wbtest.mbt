@@ -78,23 +78,8 @@ test "实心矩形快速路径：前提齐了才有内部，六个负控一个�
     ("flip_h", { ..base, flip_h: true }),
     ("flip_v", { ..base, flip_v: true }),
     ("圆角", { ..base, corner_radius: 3.0 }),
-    (
-      "蒙版",
-      {
-        ..base,
-        mask: Some(@core.LayerMask::{
-          kind: @core.ShapeKind::Rect,
-          x: 0.0,
-          y: 0.0,
-          w: 64.0,
-          h: 64.0,
-          radius: 0.0,
-          feather: 0.0,
-          roughen: 0.0,
-          invert: false,
-        }),
-      },
-    ),
+    ("蒙版取反（覆盖恒 1 的区域在形状外，无界）", { ..base, mask: Some(rect_mask(0.0, 0.0, 64.0, 64.0, 0.0, 0.0, true)) }),
+    ("蒙版太小/羽化太大（根本没有覆盖恒 1 的像素）", { ..base, mask: Some(rect_mask(20.0, 20.0, 1.0, 1.0, 4.0, 0.0, false)) }),
     ("描边", { ..base, stroke: { ..base.stroke, width: 2.0 } }),
     (
       "渐变",
@@ -166,6 +151,157 @@ test "实心矩形快速路径：与通用路径逐位一致（翻转镜像当�
         msg="dx=\{dx} dw=\{dw}：快速路径与通用路径差了 \{diff} 个像素",
       )
       dw = dw + 0.5
+    }
+    dx = dx + 0.5
+  }
+}
+
+///|
+/// 蒙版构造助手（矩形；`feather`/`roughen`/`invert` 都显式给）。
+fn rect_mask(
+  x : Double,
+  y : Double,
+  w : Double,
+  h : Double,
+  feather : Double,
+  roughen : Double,
+  invert : Bool,
+) -> @core.LayerMask {
+  @core.LayerMask::{
+    kind: @core.ShapeKind::Rect,
+    x,
+    y,
+    w,
+    h,
+    radius: 0.0,
+    feather,
+    roughen,
+    invert,
+  }
+}
+
+///|
+test "实心矩形快速路径：蒙版「覆盖恒为 1」的盒——每个像素都真的 cover==1，且不小得离谱" {
+  let base = {
+    ..@core.default_layer("r1", "r1", 10.3, 7.7, 20.25, 15.5),
+    fill: @core.Fill::Solid(0xFF3366CC),
+  }
+  // 覆盖整幅画布、无羽化 ⇒ 蒙版不额外约束（盒 = 矩形自己的内部）
+  let full = { ..base, mask: Some(rect_mask(0.0, 0.0, 64.0, 64.0, 0.0, 0.0, false)) }
+  assert_eq(
+    solid_rect_interior(full, full.fill, 0, 0, 64, 64),
+    Some((11, 8, 30, 23)),
+  )
+  // 蒙版右边界切进层内（w=25、feather=4 ⇒ 覆盖恒 1 只到 x=20）⇒ 盒被切到 21
+  let cut = { ..base, mask: Some(rect_mask(0.0, 0.0, 25.0, 64.0, 4.0, 0.0, false)) }
+  assert_eq(solid_rect_interior(cut, cut.fill, 0, 0, 64, 64), Some((11, 8, 21, 23)))
+  // 毛边也要算进阈值：roughen=3 时盒再内缩 3 像素（否则噪声会把 cover 压到 1 以下）
+  let rough = { ..base, mask: Some(rect_mask(0.0, 0.0, 25.0, 64.0, 4.0, 3.0, false)) }
+  assert_eq(
+    solid_rect_interior(rough, rough.fill, 0, 0, 64, 64),
+    Some((11, 8, 18, 23)),
+  )
+
+  // **决定性判据**：返回的盒里**每个**像素的蒙版覆盖必须真的是 1.0
+  // （这里直接调 `mask_cover_at`——它就是快速路径假设的那句话）。
+  let cases : Array[@core.Layer] = [
+    full,
+    cut,
+    rough,
+    // 椭圆蒙版：内接正方形 + ε 余量，同样是"只会小"的保守盒
+    {
+      ..base,
+      mask: Some({
+        ..rect_mask(0.0, 0.0, 64.0, 64.0, 6.0, 0.0, false),
+        kind: @core.ShapeKind::Ellipse,
+      }),
+    },
+    // 圆角矩形蒙版
+    {
+      ..base,
+      mask: Some({ ..rect_mask(0.0, 0.0, 64.0, 64.0, 2.0, 1.0, false), radius: 9.0 }),
+    },
+    // 小椭圆蒙版：盒由**椭圆**决定（不是被层的内部裁掉），于是"覆盖恒 1"这条
+    // 断言就真的沿着椭圆边缘在跑 —— 椭圆那一支的 √2 内接盒子才被钉住
+    {
+      ..base,
+      mask: Some({
+        ..rect_mask(8.0, 6.0, 24.0, 20.0, 0.0, 0.0, false),
+        kind: @core.ShapeKind::Ellipse,
+      }),
+    },
+  ]
+  for l in cases {
+    match solid_rect_interior(l, l.fill, 0, 0, 64, 64) {
+      None => ()
+      Some((ix0, iy0, ix1, iy1)) => {
+        let mut y = iy0
+        while y < iy1 {
+          let mut x = ix0
+          while x < ix1 {
+            let c = mask_cover_at(l, x.to_double(), y.to_double())
+            assert_eq(
+              c,
+              1.0,
+              msg="盒里 (\{x},\{y}) 的蒙版覆盖是 \{c}，不是 1 —— 快速路径会静默加亮",
+            )
+            x = x + 1
+          }
+          y = y + 1
+        }
+        // 不判窄得离谱：盒的面积至少要装得下（真区域的一大块），
+        // 否则"快速路径"名存实亡（保守到空盒也能过上面那条）
+        let area = (ix1 - ix0) * (iy1 - iy0)
+        let layer_area = 20 * 15
+        assert_true(
+          area >= layer_area / 4,
+          msg="蒙版覆盖恒 1 的盒只有 \{area} 像素（层内部约 \{layer_area}）——保守过头了",
+        )
+      }
+    }
+  }
+}
+
+///|
+test "实心矩形快速路径 + 蒙版：与通用路径逐位一致（翻转镜像当对照）" {
+  let env = RenderEnv::new()
+  let mut dx = 0.0
+  while dx < 1.0 {
+    let rect = {
+      ..@core.default_layer("r1", "r1", 10.3 + dx, 7.7, 20.25, 15.5),
+      fill: @core.Fill::Solid(0x803366CC),
+      opacity: 0.5,
+    }
+    // 大软蒙版（覆盖恒 1 的区域盖住层内部 ⇒ 走快速路径）+ 一个**切进层里**的
+    // 蒙版（一部分走快速路径、一部分走通用路径，两段必须在同一张图上接得严丝合缝）
+    for m in [
+      rect_mask(0.0, 0.0, 64.0, 64.0, 7.0, 0.0, false),
+      rect_mask(0.0, 0.0, 22.0, 64.0, 5.0, 2.0, false),
+    ] {
+      let masked = { ..rect, mask: Some(m) }
+      let mirrored = { ..masked, flip_h: true, flip_v: true }
+      assert_true(
+        solid_rect_interior(masked, masked.fill, 0, 0, 64, 64) is Some(_),
+        msg="这个蒙版该能走快速路径（否则这条对拍白比）",
+      )
+      assert_true(
+        solid_rect_interior(mirrored, mirrored.fill, 0, 0, 64, 64) is None,
+        msg="对照没有退出快速路径 —— 比的是自己跟自己",
+      )
+      let a = render_layers(fast_doc("a", masked), env)
+      let b = render_layers(fast_doc("b", mirrored), env)
+      let mut diff = 0
+      let mut j = 0
+      while j < 64 * 64 {
+        if a.pixels[j] != b.pixels[j] {
+          diff = diff + 1
+        }
+        j = j + 1
+      }
+      assert_true(
+        diff == 0,
+        msg="dx=\{dx} 蒙版 w=\{m.w} feather=\{m.feather} roughen=\{m.roughen}：快速路径与通用路径差了 \{diff} 个像素",
+      )
     }
     dx = dx + 0.5
   }
