@@ -948,8 +948,16 @@ fn cmd_rotate(s : Session, tokens : Array[String]) -> String {
     Some(v) => v
     None => return err("deg=\{tokens[2]} 不是数字")
   }
-  if @core.find_layer(doc.layers, id) is None {
-    return err("层不存在：\{id}")
+  let rl = match @core.find_layer(doc.layers, id) {
+    Some(l) => l
+    None => return err("层不存在：\{id}")
+  }
+  // 写不生效的字段要在**入口**拒（铁律 6）。判据与 lint 同一张表
+  // （`kind_only_write_error`，传**候选层**）：值非默认 + 这个 kind 不读它 ⇒ 拒；
+  // 于是 `rotate t1 0` 自动放行（写默认值 = 清字段，旧容器靠它洗回来）。
+  match kind_only_write_error({ ..rl, rotation_deg: deg }, "rotation_deg") {
+    Some(e) => return err(e)
+    None => ()
   }
   snapshot(s, doc, "rotate \{id} \{@core.fmt_num(deg)}")
   let _ = update_layer(doc.layers, id, fn(l) { { ..l, rotation_deg: deg } })
@@ -973,8 +981,17 @@ fn cmd_flip(s : Session, tokens : Array[String]) -> String {
     "none" => (false, false)
     _ => return err("flip 方向应为 h/v/both/none")
   }
-  if @core.find_layer(doc.layers, id) is None {
-    return err("层不存在：\{id}")
+  let fl = match @core.find_layer(doc.layers, id) {
+    Some(l) => l
+    None => return err("层不存在：\{id}")
+  }
+  // 同 rotate：候选层上问，`flip x1 none` 自动放行。
+  let fcand = { ..fl, flip_h: fh, flip_v: fv }
+  for f in ["flip_h", "flip_v"] {
+    match kind_only_write_error(fcand, f) {
+      Some(e) => return err(e)
+      None => ()
+    }
   }
   snapshot(s, doc, "flip \{id} \{tokens[2]}")
   let _ = update_layer(doc.layers, id, fn(l) { { ..l, flip_h: fh, flip_v: fv } })
@@ -1425,8 +1442,14 @@ fn cmd_add_mask(s : Session, tokens : Array[String]) -> String {
     Err(e) => return err(e)
   }
   let id = tokens[1]
-  if @core.find_layer(doc.layers, id) is None {
-    return err("层不存在：\{id}")
+  let ml = match @core.find_layer(doc.layers, id) {
+    Some(l) => l
+    None => return err("层不存在：\{id}")
+  }
+  // 蒙版在组上不生效（组直通、自身无面）⇒ 入口拒；其余 kind 都读它。
+  match kind_only_write_error({ ..ml, mask: Some(mask_write_probe()) }, "mask") {
+    Some(e) => return err(e)
+    None => ()
   }
   // 蒙版的 `radius` 当年正是"静默接受任何 tokens[2]"那类 bug 的发源地
   // （见 set-mask 的注释）；这里同样把"没认出来"变成错误。
@@ -1518,6 +1541,10 @@ fn cmd_set_mask(s : Session, tokens : Array[String]) -> String {
   let l = match @core.find_layer(doc.layers, id) {
     Some(l) => l
     None => return err("层不存在：\{id}")
+  }
+  match kind_only_write_error({ ..l, mask: Some(mask_write_probe()) }, "mask") {
+    Some(e) => return err(e)
+    None => ()
   }
   // 改一个不存在的蒙版不许静默成功（同 `remove-mask` 那条纪律：删不存在的
   // 东西也不许静默成功）。此前这里 `update_layer` 原样返回，回包是 ok 而指纹

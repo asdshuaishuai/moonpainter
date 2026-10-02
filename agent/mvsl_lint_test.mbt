@@ -254,25 +254,197 @@ test "lint：空组与空文本层是「装了却什么都不干」，必须报"
 }
 
 ///|
-test "lint：组上的蒙版不生效（收得下、画面逐位不变）必须报" {
-  // 实测：`group g1 l1` 之后 `add-mask g1 x=0 y=0 w=5 h=10` 回 ok、`lint`
-  // 报 0 违规、渲染 sha256 **逐位不变**——渲染器对组只递归子层、组自身无面。
-  // 正控：同样一条蒙版装在**普通层**上不许被报（否则这条判据会把正常用法
-  // 也一起骂了，而"漏报与误报都是 bug"）。
-  let s = scene("lint-group-mask")
-  let _ = run(s, "add-rect x=0 y=0 w=10 h=10 fill=#00FF00FF name=A")
-  let _ = run(s, "add-mask l1 x=0 y=0 w=5 h=10")
-  let r0 = run(s, "lint")
-  assert_true(!r0.contains("上的蒙版不生效"), msg="普通层上的蒙版不该被报：\{r0}")
-  let _ = run(s, "group g1 l1")
-  let r1 = run(s, "lint")
-  assert_true(!r1.contains("上的蒙版不生效"), msg="普通的组（无蒙版）不该被报：\{r1}")
-  let _ = run(s, "add-mask g1 x=0 y=0 w=5 h=10")
-  let r2 = run(s, "lint")
-  assert_true(
-    r2.contains("上的蒙版不生效"),
-    msg="组上的蒙版必须被报（渲染器根本不读它）：\{r2}",
+test "lint：变换/混合/蒙版的读点矩阵（表里每一格都要报，且一格都不许多报）" {
+  // 实测（**非退化探针**：非白底 + 左右不对称的位图 + 30° 旋转）：
+  //   rotate/flip/blend 只在 **有面的层（几何/位图）** 上被读；
+  //   text/raster/adjust/group 上写进去回 ok、指纹变、画面**逐位不变**；
+  //   mask 除了 group 都读（adjust 是上一轮接上的）。
+  // 命令面现在直接拒（下面第二条测试），这里兜住手改容器与**旧容器**。
+  let b = @core.default_layer("k0", "k", 0.0, 0.0, 64.0, 64.0)
+  let probe_mask = @core.LayerMask::{
+    kind: @core.ShapeKind::Rect,
+    x: 0.0,
+    y: 0.0,
+    w: 8.0,
+    h: 8.0,
+    radius: 0.0,
+    feather: 0.0,
+    roughen: 0.0,
+    invert: false,
+  }
+  // ① 不读它的 kind：每格都必须报
+  let bad = @core.new_document("lint-matrix-bad", 64, 64)
+  bad.layers.push({
+    ..b,
+    id: "g1",
+    kind: @core.ShapeKind::Group,
+    children: [@core.default_layer("kid", "k", 0.0, 0.0, 4.0, 4.0)],
+    rotation_deg: 45.0,
+    flip_h: true,
+    flip_v: true,
+    blend: @core.BlendMode::Multiply,
+    mask: Some(probe_mask),
+  })
+  bad.layers.push(
+    {
+      ..b,
+      id: "t1",
+      kind: @core.ShapeKind::Text,
+      text: "Hi",
+      font_size: 24.0,
+      rotation_deg: 45.0,
+      flip_h: true,
+      blend: @core.BlendMode::Multiply,
+    },
   )
+  bad.layers.push(
+    {
+      ..b,
+      id: "r1",
+      kind: @core.ShapeKind::Raster,
+      dabs: [@core.Dab::{ x: 1.0, y: 1.0, r: 2.0, color: 0xFF0000FF, erase: false }],
+      rotation_deg: 45.0,
+      blend: @core.BlendMode::Multiply,
+    },
+  )
+  bad.layers.push(
+    {
+      ..b,
+      id: "a1",
+      kind: @core.ShapeKind::Adjust,
+      adjust: Some(@core.Adjust::{ op: @core.AdjustOp::Invert, value: 1.0 }),
+      rotation_deg: 45.0,
+      blend: @core.BlendMode::Multiply,
+    },
+  )
+  let items = @agent.lint_doc(bad)
+  let j = items.join(" | ")
+  for needle in ["rotation_deg=45", "flip_h=true", "flip_v=true", "blend=multiply", "mask=已设置"] {
+    assert_true(j.contains(needle), msg="表里的 \{needle} 必须被报：\{j}")
+  }
+  // 格数也要对：group 5 格 + text 3 格 + raster 2 格 + adjust 2 格 = 12。
+  // 只查"含某个词"会被"多报/少报但恰好含这些词"骗过。
+  let mut hits = 0
+  for it in items {
+    if it.contains("却带着") {
+      hits = hits + 1
+    }
+  }
+  assert_eq(hits, 12, msg="读点矩阵应报 12 格，实报 \{hits}：\{j}")
+
+  // ② 正控：**读它的 kind** 上带着同样的字段，一格都不许报（漏报与误报都是 bug）
+  let ok = @core.new_document("lint-matrix-ok", 64, 64)
+  ok.layers.push({
+    ..b,
+    id: "rect1",
+    kind: @core.ShapeKind::Rect,
+    rotation_deg: 45.0,
+    flip_h: true,
+    flip_v: true,
+    blend: @core.BlendMode::Multiply,
+    mask: Some(probe_mask),
+  })
+  ok.layers.push({
+    ..b,
+    id: "img1",
+    kind: @core.ShapeKind::Image,
+    asset_hash: "h1",
+    rotation_deg: 45.0,
+    flip_h: true,
+    blend: @core.BlendMode::Multiply,
+    mask: Some(probe_mask),
+  })
+  // text/raster/adjust 只允许 mask（它们真的读蒙版）；各自的 kind 专属字段照给，
+  // 但**不给别的 kind 的专属字段**——那些会命中表里别的行（那是对的行为，
+  // 但会把这条正控的断言搅浑）。
+  ok.layers.push({
+    ..b,
+    id: "t2",
+    kind: @core.ShapeKind::Text,
+    text: "Hi",
+    font_size: 24.0,
+    mask: Some(probe_mask),
+  })
+  ok.layers.push({
+    ..b,
+    id: "r2",
+    kind: @core.ShapeKind::Raster,
+    dabs: [@core.Dab::{ x: 1.0, y: 1.0, r: 2.0, color: 0xFF0000FF, erase: false }],
+    mask: Some(probe_mask),
+  })
+  ok.layers.push({
+    ..b,
+    id: "a2",
+    kind: @core.ShapeKind::Adjust,
+    adjust: Some(@core.Adjust::{ op: @core.AdjustOp::Invert, value: 1.0 }),
+    mask: Some(probe_mask),
+  })
+  let okj = @agent.lint_doc(ok).join(" | ")
+  // 只断言**这五格**没被报（别的行可能因为别的字段开火，那是对的）
+  for needle in ["rotation_deg", "flip_h", "flip_v", "blend=", "mask=已设置"] {
+    assert_true(!okj.contains(needle), msg="读它的 kind 上不许报 \{needle}（误报也是 bug）：\{okj}")
+  }
+}
+
+///|
+test "写不生效的字段在入口就拒；写默认值（清字段）必须放行" {
+  // 铁律 6：不支持就报明确错误，不降级。判据与 lint 共用同一张表，传**候选层**，
+  // 于是"写默认值 = 清字段"自动放行——旧容器里的死数据靠它洗回来。
+  // ⚠️ 层 id 全部显式给：`scene()` 自己会加一个背景层，靠自动编号会让
+  // "rotate 的是哪一层"整个错位（第一版就因此把矩形当成了文本层）。
+  let s = scene("matrix-entry")
+  let _ = run(s, "add-rect x=0 y=0 w=10 h=10 fill=#00FF00FF name=R id=r0")
+  let _ = run(s, "add-text x=0 y=0 w=40 h=16 text=Hi name=T id=t0")
+  let _ = run(s, "add-paint name=P id=p0")
+  let _ = run(s, "brush layer=p0 pts=8,8;20,20 r=4 color=#FF0000FF")
+  let _ = run(s, "add-rect x=0 y=0 w=20 h=20 fill=#0000FFFF name=B id=r1")
+  let _ = run(s, "add-adjust op=invert name=A id=a0")
+  // 不生效的组合：一个都不能悄悄成功（text/raster/adjust 各自三条）
+  for bad in [
+    "rotate t0 30", "flip t0 h", "set-style t0 blend=multiply",
+    "rotate p0 30", "flip p0 v", "set-style p0 blend=screen",
+    "rotate a0 30", "flip a0 h", "set-style a0 blend=multiply",
+  ] {
+    let r = run(s, bad)
+    assert_true(
+      r.contains("不生效") && r.contains("渲染器只对"),
+      msg="`\{bad}` 必须被拒并说清读点：\{r}",
+    )
+  }
+  // 组：连同蒙版一起拒（mask 在 group 上也不被读）
+  let _ = run(s, "group g1 r0")
+  for bad in [
+    "rotate g1 45", "flip g1 both", "set-style g1 blend=multiply",
+    "add-mask g1 x=0 y=0 w=5 h=10", "set-mask g1 invert=true",
+  ] {
+    let r = run(s, bad)
+    assert_true(r.contains("不生效"), msg="组上的 `\{bad}` 必须被拒：\{r}")
+  }
+  // 清字段的写法要放行（否则旧容器里存着死数据的层再也洗不回来）
+  for ok in [
+    "rotate t0 0", "flip t0 none", "set-style t0 blend=normal", "rotate g1 0", "flip g1 none",
+  ] {
+    let r = run(s, ok)
+    assert_true(r.contains("\"ok\":true"), msg="`\{ok}` 是清字段，必须放行：\{r}")
+  }
+  // 正控：**读它的 kind** 上同样四条命令必须照旧成功（位图也读，一起控住）
+  for ok in [
+    "rotate r1 45", "flip r1 h", "set-style r1 blend=multiply", "add-mask r1 x=0 y=0 w=5 h=10",
+  ] {
+    let r = run(s, ok)
+    assert_true(r.contains("\"ok\":true"), msg="矩形层上的 `\{ok}` 必须成功：\{r}")
+  }
+  // 蒙版在 text/raster/adjust 上是**真的生效**的（上一轮实测），不许被拒
+  for ok in [
+    "add-mask t0 x=0 y=0 w=20 h=16", "add-mask p0 x=0 y=0 w=20 h=20",
+    "add-mask a0 x=0 y=0 w=20 h=20",
+  ] {
+    let r = run(s, ok)
+    assert_true(r.contains("\"ok\":true"), msg="`\{ok}` 必须成功（这些 kind 读蒙版）：\{r}")
+  }
+  // 与死字段无关的更新不许被误伤（门禁只在"写那个字段"的分支里问）
+  let r = run(s, "set-style t0 opacity=0.5")
+  assert_true(r.contains("\"ok\":true"), msg="文本层改透明度必须成功：\{r}")
 }
 
 ///|

@@ -494,7 +494,16 @@ pub fn apply_style_kv(
   match m.get("blend") {
     Some(v) => {
       match parse_blend(v) {
-        Ok(b) => nl = { ..nl, blend: b }
+        // 组上的 blend 渲染器根本不读（直通层、自身无面）：实测写进去画面逐位
+        // 不变。`normal` 是默认值 ⇒ 与 rotate/flip 同一口径，放行它当"清字段"。
+        Ok(b) => {
+          let cand = { ..nl, blend: b }
+          match kind_only_write_error(cand, "blend") {
+            Some(e) => return Err(e)
+            None => ()
+          }
+          nl = cand
+        }
         Err(e) => return Err(e)
       }
     }
@@ -552,7 +561,14 @@ pub fn apply_style_kv(
   }
   match m.get("rot") {
     Some(v) => match to_d(v) {
-      Some(r) => nl = { ..nl, rotation_deg: r }
+      Some(r) => {
+        let cand = { ..nl, rotation_deg: r }
+        match kind_only_write_error(cand, "rotation_deg") {
+          Some(e) => return Err(e)
+          None => ()
+        }
+        nl = cand
+      }
       None => return Err("rot \{v} 不是数字")
     }
     None => ()
@@ -732,10 +748,107 @@ fn kind_only_fields() -> Array[KindOnly] {
         if l.children.length() > 0 { "\{l.children.length()} 个子层" } else { "" }
       },
     },
+    // ↓ 下面五行是「变换/混合/蒙版」的**读点矩阵**：实测（非退化探针：非白底 +
+    //   左右不对称的位图 + 30° 旋转）它们在 text/raster/adjust/group 上
+    //   **不被读**——写进去回 ok、指纹变、画面逐位不变。
+    //   ⚠️ 探针必须非退化，否则会得出反结论：整块纯色方块的 rotate/flip 是
+    //   **恒等变换**（第一版就是这样把 image 判成"不读"的），multiply 压在
+    //   白底上也是恒等（第一版把 blend 判成"全都不读"）。
+    {
+      field: "rotation_deg",
+      reader: "有面的层（几何/位图）",
+      kinds: ["rect", "ellipse", "polygon", "line", "image"],
+      dead: fn(l) {
+        if l.rotation_deg != 0.0 {
+          "rotation_deg=\{@core.fmt_num(l.rotation_deg)}"
+        } else {
+          ""
+        }
+      },
+    },
+    {
+      field: "flip_h",
+      reader: "有面的层（几何/位图）",
+      kinds: ["rect", "ellipse", "polygon", "line", "image"],
+      dead: fn(l) { if l.flip_h { "flip_h=true" } else { "" } },
+    },
+    {
+      field: "flip_v",
+      reader: "有面的层（几何/位图）",
+      kinds: ["rect", "ellipse", "polygon", "line", "image"],
+      dead: fn(l) { if l.flip_v { "flip_v=true" } else { "" } },
+    },
+    {
+      field: "blend",
+      reader: "有面的层（几何/位图）",
+      kinds: ["rect", "ellipse", "polygon", "line", "image"],
+      dead: fn(l) {
+        if !(l.blend is @core.BlendMode::Normal) {
+          "blend=\{blend_str(l.blend)}"
+        } else {
+          ""
+        }
+      },
+    },
+    {
+      field: "mask",
+      reader: "除组以外的层",
+      kinds: ["rect", "ellipse", "polygon", "line", "image", "text", "raster", "adjust"],
+      dead: fn(l) {
+        match l.mask {
+          Some(_) => "mask=已设置"
+          None => ""
+        }
+      },
+    },
   ]
 }
 
+///|
+/// **往一个层上写某个字段之前**问一句：这个字段在这层上渲染器读不读？
+/// （`Some(理由)` = 不读，命令面必须拒——铁律 6：不支持就报明确错误，不降级。）
+///
+/// 判据与 `lint_doc` 共用**同一张表** `kind_only_fields`：值非默认 + kind 不在
+/// 允许集合 = 死数据。传进来的 `l` 必须是**已经带上新值的候选层**，于是
+/// "写默认值 = 清字段"自动放行（`rotate t1 0`、`flip t1 none`、
+/// `blend=normal` 的 `dead` 都是空串）——手改容器/旧容器里的死数据靠它们洗回来。
+///
+/// 措辞要给**出路**：说清渲染器在哪读它、怎么清。
+///|
+/// 蒙版写入门禁的**占位蒙版**：`kind_only_fields` 里 mask 那一格只问"这层读不读
+/// 蒙版"，不关心参数（参数归 `mask_param_error`），所以问一句不必把整份蒙版造出来。
+fn mask_write_probe() -> @core.LayerMask {
+  {
+    kind: @core.ShapeKind::Rect,
+    x: 0.0,
+    y: 0.0,
+    w: 1.0,
+    h: 1.0,
+    radius: 0.0,
+    feather: 0.0,
+    roughen: 0.0,
+    invert: false,
+  }
+}
+
+///|
+fn kind_only_write_error(l : @core.Layer, field : String) -> String? {
+  for c in kind_only_fields() {
+    if c.field == field {
+      let why = (c.dead)(l)
+      if why != "" && !c.kinds.contains(kind_str(l.kind)) {
+        return Some(
+          "\{kind_str(l.kind)} 层 \{l.id} 上的 \{field} 不生效：渲染器只对 \{c.reader} 读 \{c.field}，写进去也不会改变任何像素。要清掉这个字段请写默认值（蒙版用 remove-mask）",
+        )
+      }
+      return None
+    }
+  }
+  None
+}
+
 /// 收集重复 id / 越界 / 非法值等 P0–P2 违规（lint 命令）。
+///|
 pub fn lint_doc(doc : @core.Document) -> Array[String] {
   let v : Array[String] = []
   // P0 画布限额
@@ -903,16 +1016,7 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
       if l.children.length() == 0 {
         v.push("P2 noop 组 \{l.id} 没有任何成员（直通合成里什么都不做）")
       }
-      // 组上的蒙版：渲染器对组只递归子层、组自身无面（`paint_layer` 那条
-      // `Group => for c in l.children`），所以蒙版**不生效**。实测：给组装蒙版
-      // 回 ok、`lint` 报 0 违规、渲染 sha256 **逐位不变** —— 同"装了却什么都不干"。
-      // 想限定整组只影响一块，得先把组合成到自己的缓冲再整体乘覆盖度
-      // （渲染架构改动，见 DESIGN 边界节），在那之前这条必须报出来。
-      if l.mask is Some(_) {
-        v.push(
-          "P2 noop 组 \{l.id} 上的蒙版不生效（渲染器只递归子层、组自身无面）：画面与该蒙版无关",
-        )
-      }
+
     }
     if l.kind is @core.ShapeKind::Text {
       if l.text == "" {

@@ -1281,8 +1281,11 @@ test "group-add / group-remove：已有层进出已有组，组的属性与成�
   let _ = run(s, "add-rect x=0 y=0 w=100 h=100 fill=#FF0000FF id=below")
   let _ = run(s, "add-rect x=0 y=0 w=10 h=10 fill=#00FF00FF id=g1c1")
   let _ = run(s, "group g1 g1c1")
-  // 给组挂上"重组会丢"的那些属性
-  let _ = run(s, "set-style g1 opacity=0.5 blend=multiply tag=hero name=\"My Group\"")
+  // 给组挂上"重组会丢"的那些属性。⚠️ 这里**不能**再带 `blend=multiply`：
+  // 组上的 blend 渲染器根本不读（直通层、自身无面），现在入口直接拒
+  // （见 lint 那张 `group_inert_fields` 表）——而这条测试要验的是
+  // "group-add 之后属性还在"，用死数据验等于什么都没验。
+  let _ = run(s, "set-style g1 opacity=0.5 tag=hero name=\"My Group\"")
   // 组外再放一个蓝方块（待加入）
   let _ = run(s, "add-rect x=0 y=0 w=20 h=20 fill=#0000FFFF id=g2c2")
   let before = run(s, "list-layers")
@@ -1297,7 +1300,6 @@ test "group-add / group-remove：已有层进出已有组，组的属性与成�
   // ② 组的属性一个没丢（这正是 ungroup+group 做不到的）
   assert_true(g.contains("\"name\":\"My Group\""), msg=g)
   assert_true(g.contains("\"opacity\":0.5"), msg=g)
-  assert_true(g.contains("\"blend\":\"multiply\""), msg=g)
   assert_true(g.contains("\"tags\":[\"hero\"]"), msg=g)
   // ③ 新成员在组内**栈顶**（画在 g1c1 之上）：两个方块都盖住 (5,5)，
   //    pick 必须报后加进来的那个 —— 这是层序断言，不是结构断言
