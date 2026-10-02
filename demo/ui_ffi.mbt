@@ -216,11 +216,33 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #|   ov.id = 'crop-ov';
   #|   ov.style.cssText = 'position:absolute;border:1px dashed #6a9cff;box-shadow:0 0 0 9999px rgba(10,10,20,.55);display:none;pointer-events:none';
   #|   wrap.appendChild(ov);
+  #|   // 逐点绘制（折线/多边形）的预览：一张 SVG 覆盖层，点由前端存、这里只画
+  #|   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  #|   svg.id = 'poly-ov';
+  #|   svg.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;display:none';
+  #|   svg.innerHTML = "<polyline fill='rgba(106,156,255,.28)' stroke='#6a9cff' stroke-width='1.5' points=''/><circle r='3.5' fill='#fff' stroke='#6a9cff'/>";
+  #|   wrap.appendChild(svg);
+  #|   const pl = svg.querySelector('polyline');
+  #|   const pc = svg.querySelector('circle');
+  #|   window.__polyPreview = (pts) => {
+  #|     if (!pts) { svg.style.display = 'none'; return; }
+  #|     const r = img.getBoundingClientRect();
+  #|     const sx = r.width / (img.naturalWidth || 1), sy = r.height / (img.naturalHeight || 1);
+  #|     const arr = pts.split(';').filter(Boolean).map((q) => q.split(',').map(Number));
+  #|     pl.setAttribute('points', arr.map((p) => (p[0] * sx).toFixed(1) + ',' + (p[1] * sy).toFixed(1)).join(' '));
+  #|     const last = arr[arr.length - 1];
+  #|     if (last) {
+  #|       pc.setAttribute('cx', (last[0] * sx).toFixed(1));
+  #|       pc.setAttribute('cy', (last[1] * sy).toFixed(1));
+  #|       pc.style.display = '';
+  #|     } else { pc.style.display = 'none'; }
+  #|     svg.style.display = 'block';
+  #|   };
   #|   window.__hideCrop = () => { ov.style.display = 'none'; globalThis.__crop_ready(''); };
   #|   window.__hideMask = () => { maskStart = null; ov.style.display = 'none'; };
   #|   let drawing = false; let toolDown = 'move';
   #|   let lastPt = null; let lastSend = 0;
-  #|   let cropStart = null; let moveStart = null; let maskStart = null;
+  #|   let cropStart = null; let moveStart = null; let maskStart = null; let shapeStart = null;
   #|   const toDoc = (e) => {
   #|     const r = img.getBoundingClientRect();
   #|     const sx = (img.naturalWidth || 1) / r.width, sy = (img.naturalHeight || 1) / r.height;
@@ -254,6 +276,13 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #|       ov.style.width = '0px'; ov.style.height = '0px';
   #|     } else if (t === 'move') {
   #|       moveStart = [x, y];
+  #|     } else if (t === 'rect' || t === 'ellipse') {
+  #|       shapeStart = { dx, dy, x, y, kind: t };
+  #|       ov.style.display = 'block';
+  #|       ov.style.left = dx + 'px'; ov.style.top = dy + 'px';
+  #|       ov.style.width = '0px'; ov.style.height = '0px';
+  #|     } else if (t === 'line' || t === 'poly') {
+  #|       globalThis.__poly_click(x + ',' + y);
   #|     }
   #|   });
   #|   document.addEventListener('mousemove', (e) => {
@@ -276,6 +305,12 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #|       ov.style.top = Math.min(dy, maskStart.dy) + 'px';
   #|       ov.style.width = Math.abs(dx - maskStart.dx) + 'px';
   #|       ov.style.height = Math.abs(dy - maskStart.dy) + 'px';
+  #|     } else if (shapeStart) {
+  #|       const [dx, dy] = toDisp(e);
+  #|       ov.style.left = Math.min(dx, shapeStart.dx) + 'px';
+  #|       ov.style.top = Math.min(dy, shapeStart.dy) + 'px';
+  #|       ov.style.width = Math.abs(dx - shapeStart.dx) + 'px';
+  #|       ov.style.height = Math.abs(dy - shapeStart.dy) + 'px';
   #|     }
   #|   });
   #|   document.addEventListener('mouseup', (e) => {
@@ -310,6 +345,30 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #|       globalThis.__move_delta(String(x - moveStart[0]), String(y - moveStart[1]));
   #|       moveStart = null;
   #|     }
+  #|     if (shapeStart) {
+  #|       const [x, y] = toDoc(e);
+  #|       const x0 = Math.min(shapeStart.x, x), y0 = Math.min(shapeStart.y, y);
+  #|       const w = Math.abs(x - shapeStart.x), h = Math.abs(y - shapeStart.y);
+  #|       const k = shapeStart.kind;
+  #|       shapeStart = null;
+  #|       ov.style.display = 'none';
+  #|       // 太小算不算画，交给前端判（同一句话只有一处说）：这里只管把框报上去
+  #|       globalThis.__shape_ready(k, x0 + ',' + y0 + ',' + w + ',' + h);
+  #|     }
+  #|   });
+  #|   // 逐点绘制：双击 / 回车结束，Esc 放弃。双击本身会先落两个同坐标的点，
+  #|   // 前端去重（poly_add）——所以这里不需要额外防抖。
+  #|   img.addEventListener('dblclick', (e) => {
+  #|     const t = window.MPST ? window.MPST.tool : 'move';
+  #|     if (t !== 'line' && t !== 'poly') return;
+  #|     e.preventDefault();
+  #|     globalThis.__poly_finish();
+  #|   });
+  #|   document.addEventListener('keydown', (e) => {
+  #|     const t = window.MPST ? window.MPST.tool : 'move';
+  #|     if (t !== 'line' && t !== 'poly') return;
+  #|     if (e.key === 'Enter') { e.preventDefault(); globalThis.__poly_finish(); }
+  #|     else if (e.key === 'Escape') { e.preventDefault(); globalThis.__poly_cancel(); }
   #|   });
   #| }
 
@@ -381,6 +440,12 @@ extern "js" fn js_canvas_cursor(tool : String) -> Unit =
   #|   const img = document.getElementById('canvas-img');
   #|   if (img) img.className = 'tool-' + tool;
   #| }
+
+///|
+/// 逐点绘制的预览（空串 = 隐藏）。点是**画布坐标**，换算成显示坐标由 JS 做
+/// （缩放/适配窗口都在那一侧）。
+extern "js" fn js_poly_preview(pts : String) -> Unit =
+  #| (pts) => { if (window.__polyPreview) window.__polyPreview(pts); }
 
 ///|
 extern "js" fn js_hide_crop() -> Unit =

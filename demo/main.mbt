@@ -8,6 +8,10 @@ let g_sel : Ref[String] = Ref("")
 let g_ready : Ref[Bool] = Ref(false)
 /// 当前画笔层 id（首个 brush 使用时惰性创建/绑定）
 let g_paint : Ref[String] = Ref("")
+/// 逐点绘制（折线/多边形）已点的点，画布坐标（整数：画布事件本来就取整）。
+/// 空白键的 `points=` 只能建层时给——"逐点连击"是**人类**画多边形的唯一路子，
+/// 而前端此前只有单次拖拽的交互，于是折线/多边形整条能力只有 AI 够得到。
+let g_pts : Ref[Array[(Int, Int)]] = Ref([])
 /// 「换图」模式：非空 = 下一次文件选择要把这张图**原地换掉**（值是要换的层 id）。
 /// 复用同一个 `<input type=file>`：多一个输入框就多一条"选完文件不知道走哪条路"的路。
 let g_swap : Ref[String] = Ref("")
@@ -950,6 +954,174 @@ fn do_ungroup_sel(id : String) -> Unit {
 }
 
 ///|
+/// 严格整数解析：**非数不许静默退默认**。`parse_double_safe` 失败是回 0.0 的，
+/// 拿它当画布坐标，"读不出来"就变成"画在左上角"（而且回包还是 ok）。
+/// 画布事件本来就取整，所以这里只认十进制整数（可带负号）。
+fn strict_int(s : String) -> Int? {
+  let t = s.trim(char_set=" \t").to_owned()
+  let neg = t.has_prefix("-")
+  let body = if neg { t[1:].to_owned() } else { t }
+  if body.length() == 0 {
+    return None
+  }
+  let mut v = 0
+  for ch in body.iter() {
+    let n = ch.to_int()
+    if n < 48 || n > 57 {
+      return None
+    }
+    v = v * 10 + (n - 48)
+  }
+  Some(if neg { -v } else { v })
+}
+
+///|
+/// `"x0,y0,w,h"` → 四个整数（拖拽框）。**一个不合格就整体 None**，
+/// 不许"部分成功"（三个数对、一个错，画出来的是另一块地方）。
+fn box4(box : String) -> (Int, Int, Int, Int)? {
+  let parts : Array[StringView] = box.split(",").collect()
+  if parts.length() != 4 {
+    return None
+  }
+  match (
+    strict_int(parts[0].to_owned()),
+    strict_int(parts[1].to_owned()),
+    strict_int(parts[2].to_owned()),
+    strict_int(parts[3].to_owned()),
+  ) {
+    (Some(x), Some(y), Some(w), Some(h)) => Some((x, y, w, h))
+    _ => None
+  }
+}
+
+///|
+/// `"x,y"` → 一个点（逐点绘制）。
+fn xy2(s : String) -> (Int, Int)? {
+  let parts : Array[StringView] = s.split(",").collect()
+  if parts.length() != 2 {
+    return None
+  }
+  match (strict_int(parts[0].to_owned()), strict_int(parts[1].to_owned())) {
+    (Some(x), Some(y)) => Some((x, y))
+    _ => None
+  }
+}
+
+///|
+/// 点列 → `points=` 串（`x,y;x,y`）。局部坐标由调用方给（见 `pts_local`）。
+fn pts_str(pts : Array[(Int, Int)]) -> String {
+  let sb = StringBuilder::new()
+  for i, p in pts {
+    if i > 0 {
+      sb.write_string(";")
+    }
+    sb.write_string("\{p.0},\{p.1}")
+  }
+  sb.to_string()
+}
+
+///|
+/// 落一个点。与上一点**完全相同**就不加：双击的第二下会再落一个同坐标的点，
+/// 不去重就变成"一条零长度线段"（引擎会照单收下）。
+fn poly_add(pts : Array[(Int, Int)], x : Int, y : Int) -> Array[(Int, Int)] {
+  let n = pts.length()
+  if n > 0 && pts[n - 1].0 == x && pts[n - 1].1 == y {
+    pts
+  } else {
+    pts + [(x, y)]
+  }
+}
+
+///|
+/// 点列的包围盒 `(x0, y0, w, h)`。**宽高至少 1**：水平的折线（所有点同 y）
+/// 盒高是 0，而引擎的 `w/h > 0` 是硬下界（0 会被入口拒绝）——盒子取 1 像素，
+/// 点仍落在盒内（`pts_local` 相对盒原点，y 都是 0）。
+fn pts_box(pts : Array[(Int, Int)]) -> (Int, Int, Int, Int) {
+  match pts {
+    [] => (0, 0, 1, 1)
+    _ => {
+      let mut x0 = pts[0].0
+      let mut y0 = pts[0].1
+      let mut x1 = pts[0].0
+      let mut y1 = pts[0].1
+      for p in pts {
+        if p.0 < x0 {
+          x0 = p.0
+        }
+        if p.1 < y0 {
+          y0 = p.1
+        }
+        if p.0 > x1 {
+          x1 = p.0
+        }
+        if p.1 > y1 {
+          y1 = p.1
+        }
+      }
+      (x0, y0, max_int(1, x1 - x0), max_int(1, y1 - y0))
+    }
+  }
+}
+
+fn max_int(a : Int, b : Int) -> Int {
+  if a > b {
+    a
+  } else {
+    b
+  }
+}
+
+///|
+/// 点列 → 相对包围盒原点的局部点（引擎的 `points=` 是**本层 bbox 的局部坐标**，
+/// 与 `x/y/w/h` 一起决定它落在哪；这一步写错的表现是"形状整体位移"）。
+fn pts_local(pts : Array[(Int, Int)]) -> Array[(Int, Int)] {
+  let (x0, y0, _, _) = pts_box(pts)
+  pts.map(fn(p) { (p.0 - x0, p.1 - y0) })
+}
+
+///|
+/// 点数够不够（**与引擎同一把尺子**：折线 ≥2、多边形 ≥3，`in_polygon`/线段的
+/// 下界）。前端这道判只是为了在点第二个点之前就能说话，权威仍在引擎。
+fn shape_ready(kind : String, n : Int) -> Bool {
+  if kind == "line" {
+    n >= 2
+  } else {
+    n >= 3
+  }
+}
+
+///|
+/// 状态栏提示：还差几个点。**空集也要说话**（"已点 0 个点"不是废话，是人
+/// 唯一能确认工具真的切换了的反馈）。
+fn poly_hint(kind : String, n : Int) -> String {
+  let need = if kind == "line" { 2 } else { 3 }
+  let what = if kind == "line" { "折线" } else { "多边形" }
+  if n >= need {
+    "✏️ \{what}：已点 \{n} 个点 —— 双击画布或按回车结束（点越多边越多）"
+  } else {
+    "✏️ \{what}：已点 \{n} 个点，还差 \{need - n} 个（双击/回车结束，Esc 放弃）"
+  }
+}
+
+///|
+/// 一条形状命令行（纯函数，测试直接喂点列断言）。`fill`/`stroke` 由调用方按
+/// 工具取（多边形要填充、折线要描边），**不在这里偷偷给默认色**。
+fn shape_line(
+  kind : String,
+  pts : Array[(Int, Int)],
+  fill : String,
+  stroke : String,
+  sw : String
+) -> String {
+  let (x0, y0, w, h) = pts_box(pts)
+  if kind == "line" {
+    "add-line x=\{x0} y=\{y0} w=\{w} h=\{h} points=\{pts_str(pts_local(pts))} stroke=\{stroke} stroke_w=\{sw} name=折线"
+  } else {
+    "add-polygon x=\{x0} y=\{y0} w=\{w} h=\{h} points=\{pts_str(pts_local(pts))} fill=\{fill} name=多边形"
+  }
+}
+
+///|
 /// 提交一条**人类侧**命令：失败要把引擎的原话摆到状态栏上。
 /// 这一层是这轮补的——此前人类侧的入口大多是 `let _ = engine_exec_line(…)`，
 /// 失败了连"没反应"都算不上（画面不动，人以为自己点错了）。引擎的拒绝理由
@@ -962,6 +1134,86 @@ fn do_ui_cmd(line : String) -> Unit {
     refresh_ui()
   } else {
     js_status_bar("⚠ " + eng_s(j, "error"))
+  }
+}
+
+///|
+/// 拖拽出的矩形/椭圆（`__shape_ready(kind, "x0,y0,w,h")`）。太小就当没画：
+/// 一个 1×1 的层在画布上根本看不见，而它会改变指纹、进列表、被 lint 念。
+fn do_shape_ready(kind : String, box : String) -> Unit {
+  match box4(box) {
+    Some((x0, y0, w, h)) => {
+      if w < 2 || h < 2 {
+        js_status_bar("⚠ 太小了（\{w}x\{h}）：拖出一个大于 2 像素的框再松手")
+        return
+      }
+      let color = js_state_get("color")
+      let fill = if color == "" { "#FF3366FF" } else { color + "FF" }
+      // **命令名不许插值拼**（`"add-\{kind}"` 在源码里读不出是哪条命令，
+      // 对账脚本会把 add-rect/add-ellipse 都判成"人类够不着"——判据看不见
+      // 就等于没有入口）。两条命令各写一遍，参数部分共用。
+      let args = "x=\{x0} y=\{y0} w=\{w} h=\{h} fill=\{fill} name="
+      if kind == "ellipse" {
+        do_ui_cmd("add-ellipse " + args + "椭圆")
+      } else {
+        do_ui_cmd("add-rect " + args + "矩形")
+      }
+    }
+    None => js_status_bar("⚠ 画布坐标没读出来（\{box}）")
+  }
+}
+
+///|
+/// 逐点绘制落一个点（`__poly_click("x,y")`）。
+fn do_poly_click(xy : String) -> Unit {
+  match xy2(xy) {
+    Some((x, y)) => {
+      let kind = current_shape_tool()
+      g_pts.val = poly_add(g_pts.val, x, y)
+      js_poly_preview(pts_str(g_pts.val))
+      js_status_bar(poly_hint(kind, g_pts.val.length()))
+    }
+    None => js_status_bar("⚠ 画布坐标没读出来（\{xy}）")
+  }
+}
+
+///|
+/// 当前是折线还是多边形（默认多边形）——形态只由工具决定，别在别处再判一遍。
+fn current_shape_tool() -> String {
+  if js_state_get("tool") == "line" {
+    "line"
+  } else {
+    "poly"
+  }
+}
+
+///|
+/// 结束逐点绘制（双击 / 回车）：点数够就建层，不够就说还差几个。
+fn do_poly_finish() -> Unit {
+  let kind = current_shape_tool()
+  let pts = g_pts.val
+  if !shape_ready(kind, pts.length()) {
+    js_status_bar(poly_hint(kind, pts.length()))
+    return
+  }
+  let color = js_state_get("color")
+  let c = if color == "" { "#FF3366FF" } else { color + "FF" }
+  let sw = js_state_get("size")
+  let line = shape_line(kind, pts, c, c, if sw == "" { "2" } else { sw })
+  g_pts.val = []
+  js_poly_preview("")
+  do_ui_cmd(line)
+}
+
+///|
+/// 放弃未闭合的点（Esc / 切换工具）。**要说一声**：点了一半切走工具，
+/// 画面什么都不动而人以为"画上去了"是最坏的一种。
+fn do_poly_cancel() -> Unit {
+  let n = g_pts.val.length()
+  if n > 0 {
+    g_pts.val = []
+    js_poly_preview("")
+    js_status_bar("✏️ 已放弃 \{n} 个未闭合的点（折线/多边形要双击或回车结束）")
   }
 }
 
@@ -1352,7 +1604,7 @@ fn inject_css() -> Unit {
     #|.carea{background:#26262f;display:flex;align-items:center;justify-content:center;overflow:auto;position:relative}
     #|.cwrap{border:1px solid #444;box-shadow:0 4px 24px #0008;background:repeating-conic-gradient(#3a3a4e 0% 25%,#2a2a3e 0% 50%) 0 0/16px 16px}
     #|#canvas-img{display:block;max-width:100%;max-height:72vh}
-    #|#canvas-img.tool-brush,#canvas-img.tool-erase,#canvas-img.tool-pick,#canvas-img.tool-crop,#canvas-img.tool-text{cursor:crosshair}
+    #|#canvas-img.tool-brush,#canvas-img.tool-erase,#canvas-img.tool-pick,#canvas-img.tool-crop,#canvas-img.tool-text,#canvas-img.tool-rect,#canvas-img.tool-ellipse,#canvas-img.tool-line,#canvas-img.tool-poly{cursor:crosshair}
     #|.rpanel{background:#1b1b2e;border-left:1px solid #32324a;display:flex;flex-direction:column;overflow:hidden}
     #|.rscroll{flex:1;overflow-y:auto;display:flex;flex-direction:column}
     #|.ph{padding:7px 10px 5px;font-size:10px;font-weight:600;color:#667;text-transform:uppercase;letter-spacing:.8px;user-select:none}
@@ -1450,6 +1702,11 @@ pub fn app_html() -> String {
       #|<div class='t' data-tool='crop' title='裁剪' onclick='globalThis.__tool("crop")'>✂️</div>
       #|<div class='t' data-tool='mask' title='矩形蒙版（拖拽）' onclick='globalThis.__tool("mask")'>▭</div>
       #|<div class='t' data-tool='mask_e' title='椭圆蒙版（拖拽）' onclick='globalThis.__tool("mask_e")'>◯</div>
+      #|<div class='ts'></div>
+      #|<div class='t' data-tool='rect' title='矩形（拖拽）' onclick='globalThis.__tool("rect")'>▤</div>
+      #|<div class='t' data-tool='ellipse' title='椭圆（拖拽）' onclick='globalThis.__tool("ellipse")'>⬭</div>
+      #|<div class='t' data-tool='line' title='折线（逐点点击；双击或回车结束）' onclick='globalThis.__tool("line")'>╱</div>
+      #|<div class='t' data-tool='poly' title='多边形（逐点点击 ≥3 点；双击/回车闭合，Esc 放弃）' onclick='globalThis.__tool("poly")'>⬠</div>
       #|<div class='ts'></div>
       #|<div class='t' title='放大' onclick='globalThis.__zoom("1.25")'>🔍+</div>
       #|<div class='t' title='缩小' onclick='globalThis.__zoom("0.8")'>🔍−</div>
@@ -1587,6 +1844,10 @@ pub fn register_globals() -> Unit {
   js_reg1("__front", fn(id : String) { do_reorder(id, "front") })
   js_reg1("__back", fn(id : String) { do_reorder(id, "back") })
   js_reg1("__tool", fn(name : String) {
+    // 切换工具时把没闭合的点说清楚再放弃：静默丢掉已点的点，人会以为画上去了
+    if name != "line" && name != "poly" && g_pts.val.length() > 0 {
+      do_poly_cancel()
+    }
     js_set_tool(name)
     js_canvas_cursor(name)
     js_status_bar(
@@ -1596,6 +1857,10 @@ pub fn register_globals() -> Unit {
         "pick" => "💧 吸管：点击取色"
         "text" => "T 文本：点击画布输入"
         "crop" => "✂️ 裁剪：拖拽选区后应用"
+        "rect" => "▤ 矩形：拖拽一个框"
+        "ellipse" => "⬭ 椭圆：拖拽一个框"
+        "line" => poly_hint("line", 0)
+        "poly" => poly_hint("poly", 0)
         _ => "🖐 移动：图层面板选中后拖动"
       },
     )
@@ -1624,6 +1889,14 @@ pub fn register_globals() -> Unit {
   js_reg2s("__reparent", fn(id : String, target : String) { do_reparent(id, target) })
   // 人类侧的可改属性（这一批命令此前只有 AI 走得到，见 PLAN 三十）
   js_reg1("__img_swap", fn(id : String) { do_img_swap(id) })
+  js_reg2s("__shape_ready", fn(kind : String, box : String) { do_shape_ready(kind, box) })
+  js_reg1("__poly_click", fn(xy : String) { do_poly_click(xy) })
+  js_reg0("__poly_finish", fn() -> @js_async.Promise[Unit] {
+    @js_async.Promise::from_async(async fn() { do_poly_finish() })
+  })
+  js_reg0("__poly_cancel", fn() -> @js_async.Promise[Unit] {
+    @js_async.Promise::from_async(async fn() { do_poly_cancel() })
+  })
   js_reg2s("__rename", fn(id : String, v : String) { do_rename(id, v) })
   js_reg2s("__setx", fn(id : String, v : String) { do_set_axis(id, "x", v) })
   js_reg2s("__sety", fn(id : String, v : String) { do_set_axis(id, "y", v) })
