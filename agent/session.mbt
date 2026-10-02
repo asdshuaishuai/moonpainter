@@ -361,6 +361,13 @@ fn cmd_new(s : Session, tokens : Array[String]) -> String {
   if w.to_int64() * h.to_int64() > @mpd.LIMIT_MAX_PIXELS.to_int64() {
     return err("画布总像素超限")
   }
+  // 可渲染上限：放在 mpd 的容器契约（单边/总像素）之后——先报"容器接不接受"，
+  // 再报"渲染器画不画得出来"。此前这里**什么都不报**，于是 `new 5000 200`
+  // 回 ok，而渲染只画左上角 4096×4096、lint 报 0 违规（实测静默丢内容）。
+  let lim = @render.render_limit_error(w, h)
+  if lim != "" {
+    return err(lim)
+  }
   match check_kv_args(tokens, 3, ["uuid"], "new") {
     Ok(_) => ()
     Err(e) => return err(e)
@@ -402,6 +409,14 @@ fn cmd_set_canvas(s : Session, tokens : Array[String]) -> String {
   }
   if w.to_int64() * h.to_int64() > @mpd.LIMIT_MAX_PIXELS.to_int64() {
     return err("画布总像素超限")
+  }
+  // 同一句可渲染上限判据（与 new / lint 共用，见 @render.render_limit_error）。
+  // ⚠️ 这条尤其要紧：`set-canvas` 是**表装好之后**唯一能把画布改大的命令，
+  // 而编辑表的规模护栏按 `doc.width` 记账——画布大到渲染器只画一角时，
+  // 护栏算的代价与真正渲染的东西不是一回事。
+  let lim = @render.render_limit_error(w, h)
+  if lim != "" {
+    return err(lim)
   }
   snapshot(s, doc, "set-canvas \{w}x\{h}")
   doc.width = w

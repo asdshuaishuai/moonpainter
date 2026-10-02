@@ -21,8 +21,8 @@ pub fn list_tools() -> Array[AgentTool] {
   add("list-tools", "工具能力字典（本表）", "meta")
   add("help", "同 list-tools 的别名", "meta")
   // 文档
-  add("new", "new <w> <h> [uuid=..]：新建画布", "meta")
-  add("set-canvas", "set-canvas <w> <h>：改画布尺寸", "meta")
+  add("new", "new <w> <h> [uuid=..]：新建画布。**可渲染上限是单边 ≤4096**（容器能存到单边 30000，但渲染器只画左上角 4096×4096，超限的画布画出来的东西和你以为的不是一回事），所以超过 4096 会在入口被拒并说明原因", "meta")
+  add("set-canvas", "set-canvas <w> <h>：改画布尺寸（**只改画布，图层不会被移动或缩放**）。同样受**可渲染上限单边 ≤4096** 约束（超了拒绝，理由同 new）", "meta")
   add("list-layers", "层树总览（含嵌套 children）", "meta")
   add("query-layer", "query-layer <id>：单层详情", "meta")
   add("lint", "P0–P2 谓词检查（引用/几何/限额）", "both")

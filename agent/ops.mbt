@@ -703,6 +703,15 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
   if doc.width.to_int64() * doc.height.to_int64() > @mpd.LIMIT_MAX_PIXELS.to_int64() {
     v.push("P0 canvas 画布总像素超限")
   }
+  // P0 render 超出**可渲染上限**：命令面已拒（`new`/`set-canvas`），这里兜住
+  // 手改容器、别的工具产出的容器（旧引擎的截断也是 4096，产不出这种容器）。
+  // 与上面两条不同，这一条不是"参数非法"而是
+  // **"渲染会静默丢内容"**——容器是合法的、指纹是对的、命令全回 ok，
+  // 只有渲染少画一块。所以它必须能被单独报出来。
+  let rlim = @render.render_limit_error(doc.width, doc.height)
+  if rlim != "" {
+    v.push("P0 render 画布超出可渲染上限：\{rlim}")
+  }
   let seen : Map[String, Bool] = Map([])
   for l in @core.all_layers(doc.layers) {
     if seen.get(l.id) is Some(_) {

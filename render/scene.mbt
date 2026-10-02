@@ -10,7 +10,44 @@
 
 ///|
 /// 渲染上限（P0 护栏：防大画布内存失控，PLAN.md §9）。
+///
+/// ⚠️ 它同时是**能力上限**：超过这个边长的画布，渲染器**画不出来**。
+/// 在本轮之前它是一处**静默截断**——`doc.width=5000` 时渲染器只画左上角
+/// 4096×4096，`census` 把 canvas 报成 `[4096,200]`，而 `lint` 报 0 违规、
+/// 画布尺寸/指纹/容器全都按 5000 记账：**放在 x=4500 的图层一个像素都不
+/// 出现，且没有任何信号**（实测）。现在入口（`new`/`set-canvas`）直接拒绝、
+/// `lint` 兜住手改容器，见 `render_limit_error`。
 pub const RENDER_MAX_SIDE : Int = 4096
+
+///|
+/// **实际渲染尺寸**——"渲染多大"这件事的**唯一一处实现**。
+///
+/// 此前这段每边截断的写法在三个地方各抄了一遍（`impact_stages` 的两段式
+/// 分支、`render_layers`、`render_layers_rasterized`），是"同一个判断两处
+/// 实现，先烂的一定是没人读的那一处"的又一个温床。三处都改成调它。
+pub fn render_size(w : Int, h : Int) -> (Int, Int) {
+  let cw = if w > RENDER_MAX_SIDE { RENDER_MAX_SIDE } else { w }
+  let ch = if h > RENDER_MAX_SIDE { RENDER_MAX_SIDE } else { h }
+  (cw, ch)
+}
+
+///|
+/// **可渲染上限判据**：空串 = 放行。
+///
+/// 报错要把"会发生什么"说清楚（静默丢内容比"参数非法"严重得多，调用方得
+/// 知道画布并没有被拒绝、只是画不出来）：
+///   * 说清**只画左上角多大**、**超出部分会怎样**（一个像素都不出现）；
+///   * 说清**其余账目仍按原尺寸记**（尺寸/指纹/容器都不变）——这正是它
+///     静默的原因；
+///   * 给**可行的下一步**（缩画布，或先 `crop` 出要渲染的区域）。
+///
+/// 判据只有这一处；入口（`new`/`set-canvas`）与 `lint` 共用，不许各写一份。
+pub fn render_limit_error(w : Int, h : Int) -> String {
+  if w <= RENDER_MAX_SIDE && h <= RENDER_MAX_SIDE {
+    return ""
+  }
+  "画布 \{w}×\{h} 超过可渲染上限（单边 ≤ \{RENDER_MAX_SIDE}）：渲染只会画出**左上角 \{RENDER_MAX_SIDE}×\{RENDER_MAX_SIDE}** 那块，画布其余部分里的图层**一个像素都不会出现**，而画布尺寸、指纹、容器内容仍按 \{w}×\{h} 记账（所以这是静默丢内容，不是拒绝）。请把画布缩到单边 ≤ \{RENDER_MAX_SIDE}，或先用 crop 裁出要渲染的区域"
+}
 
 ///|
 /// 会话提供的位图资产（hash → 已解码画布）。
@@ -1064,12 +1101,7 @@ pub fn impact_stages(
       return Err("算子引用了不存在的图层：\{id}")
     }
   }
-  let w = if doc.width > RENDER_MAX_SIDE { RENDER_MAX_SIDE } else { doc.width }
-  let h = if doc.height > RENDER_MAX_SIDE {
-    RENDER_MAX_SIDE
-  } else {
-    doc.height
-  }
+  let (w, h) = render_size(doc.width, doc.height)
   let out = @codec.rgba_new(w, h)
   @codec.fill_rect_rgba(out, 0, 0, w, h, 0xFFFFFFFF)
   let list : Array[ImpactStage] = []
@@ -1134,12 +1166,7 @@ pub fn render_layers(
   doc : @core.Document,
   env : RenderEnv,
 ) -> @codec.RgbaBuf {
-  let w = if doc.width > RENDER_MAX_SIDE { RENDER_MAX_SIDE } else { doc.width }
-  let h = if doc.height > RENDER_MAX_SIDE {
-    RENDER_MAX_SIDE
-  } else {
-    doc.height
-  }
+  let (w, h) = render_size(doc.width, doc.height)
   let buf = @codec.rgba_new(w, h)
   @codec.fill_rect_rgba(buf, 0, 0, w, h, 0xFFFFFFFF)
   for l in doc.layers {
@@ -1208,12 +1235,7 @@ pub fn render_layers_rasterized(
   doc : @core.Document,
   env : RenderEnv,
 ) -> @codec.RgbaBuf {
-  let w = if doc.width > RENDER_MAX_SIDE { RENDER_MAX_SIDE } else { doc.width }
-  let h = if doc.height > RENDER_MAX_SIDE {
-    RENDER_MAX_SIDE
-  } else {
-    doc.height
-  }
+  let (w, h) = render_size(doc.width, doc.height)
   let out = @codec.rgba_new(w, h)
   @codec.fill_rect_rgba(out, 0, 0, w, h, 0xFFFFFFFF)
   for l in doc.layers {

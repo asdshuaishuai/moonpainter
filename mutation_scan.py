@@ -1575,6 +1575,73 @@ MUTS = [
 """,
         "killed",
     ),
+    # --- 第 49 轮：可渲染上限（画布 > 4096 此前被静默截断）---
+    (
+        "X1",
+        "可渲染上限判据失效（超限画布被放行 —— 又变成静默截断）",
+        "render/scene.mbt",
+        "  if w <= RENDER_MAX_SIDE && h <= RENDER_MAX_SIDE {",
+        "  if w <= RENDER_MAX_SIDE || h <= RENDER_MAX_SIDE {",
+        "killed",
+    ),
+    (
+        "X2",
+        "可渲染上限判据把边界写窄（4096 本身被拒）",
+        "render/scene.mbt",
+        "  if w <= RENDER_MAX_SIDE && h <= RENDER_MAX_SIDE {",
+        "  if w < RENDER_MAX_SIDE && h < RENDER_MAX_SIDE {",
+        "killed",
+    ),
+    (
+        "X3",
+        "入口 new 不判可渲染上限（5000 宽画布建得出来）",
+        "agent/session.mbt",
+        """  let lim = @render.render_limit_error(w, h)
+  if lim != "" {
+    return err(lim)
+  }
+  match check_kv_args(tokens, 3, ["uuid"], "new") {""",
+        """  let lim = @render.render_limit_error(w, h)
+  let _ = lim
+  match check_kv_args(tokens, 3, ["uuid"], "new") {""",
+        "killed",
+    ),
+    (
+        "X4",
+        "入口 set-canvas 不判可渲染上限（装表后能把画布改到 5000）",
+        "agent/session.mbt",
+        """  let lim = @render.render_limit_error(w, h)
+  if lim != "" {
+    return err(lim)
+  }
+  snapshot(s, doc, "set-canvas \{w}x\{h}")""",
+        """  let lim = @render.render_limit_error(w, h)
+  let _ = lim
+  snapshot(s, doc, "set-canvas \{w}x\{h}")""",
+        "killed",
+    ),
+    (
+        "X5",
+        "lint 不报超出可渲染上限的画布（手改容器没人说话）",
+        "agent/ops.mbt",
+        """  let rlim = @render.render_limit_error(doc.width, doc.height)
+  if rlim != "" {
+    v.push("P0 render 画布超出可渲染上限：\{rlim}")
+  }""",
+        """  let rlim = @render.render_limit_error(doc.width, doc.height)
+  let _ = rlim""",
+        "killed",
+    ),
+    (
+        "X6",
+        "渲染截断整个去掉（改一处实现时最容易顺手删掉的那句）",
+        "render/scene.mbt",
+        """  let cw = if w > RENDER_MAX_SIDE { RENDER_MAX_SIDE } else { w }
+  let ch = if h > RENDER_MAX_SIDE { RENDER_MAX_SIDE } else { h }
+  (cw, ch)""",
+        """  (w, h)""",
+        "killed",
+    ),
     ]
 
 

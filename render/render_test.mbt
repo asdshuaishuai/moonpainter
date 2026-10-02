@@ -506,3 +506,28 @@ test "毛边蒙版进真渲染管线：边界被啃动、深处不动、pick 与
     msg="pick 与渲染必须同一把尺子（同一像素上不能一个说有、一个说没有）",
   )
 }
+///|
+test "渲染上限：超过 4096 的画布被截到左上角（命令面已拒，这里守兜底那半）" {
+  // 命令面（`new`/`set-canvas`）现在直接拒绝超限画布，所以这种文档只剩两条
+  // 来路：手改容器、或旧版本产物。它到渲染器这时**仍然会被截断**——这是
+  // 有意的兜底（宁可裁掉也不要一次分配几 GB），但必须**可测**：
+  // 少了这一格，"把 render_size 的截断去掉"这条变异没人抓得住
+  // （现有测试里的画布全都 ≤ 4096，截断与不截断逐位相同）。
+  let doc = @core.new_document("render-size-clamp", 5000, 200)
+  let far = @core.default_layer("d1", "far", 4500.0, 0.0, 100.0, 100.0)
+  doc.layers.push(far)
+  let buf = @render.render_layers(doc, @render.RenderEnv::new())
+  assert_eq(buf.width, 4096, msg="宽必须截到上限")
+  assert_eq(buf.height, 200, msg="没超的那一边一个字都不许动")
+  // 恰好等于上限的文档必须**逐位不变**（不许把判据写成 `>=`）
+  let ok = @core.new_document("render-size-ok", 4096, 200)
+  let okbuf = @render.render_layers(ok, @render.RenderEnv::new())
+  assert_eq(okbuf.width, 4096, msg="4096 就是上限本身，必须放行")
+  // 纯函数的边界（与上面同源，一处实现）
+  let (w1, h1) = @render.render_size(5000, 200)
+  assert_true(w1 == 4096 && h1 == 200, msg="render_size 宽截断")
+  let (w2, h2) = @render.render_size(200, 5000)
+  assert_true(w2 == 200 && h2 == 4096, msg="render_size 高截断")
+  let (w3, h3) = @render.render_size(300, 400)
+  assert_true(w3 == 300 && h3 == 400, msg="没超的一边不许动")
+}

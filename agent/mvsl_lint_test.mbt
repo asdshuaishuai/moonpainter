@@ -361,3 +361,69 @@ test "lint：8 个 kind 专属字段逐格覆盖 —— 错的 kind 上带着死
     assert_true(!okj.contains(f), msg="对的 kind 上不该报 \{f}：\{okj}")
   }
 }
+
+///|
+test "lint：超出可渲染上限的画布必须报出来（此前是静默截断）" {
+  // 背景：`RENDER_MAX_SIDE = 4096` 此前是一处**静默截断**——`doc.width=5000`
+  // 时渲染器只画左上角 4096×4096，放在 x=4500 的图层**一个像素都不出现**，
+  // 而 `census` 把 canvas 报成 `[4096,200]`、`lint` 报 0 违规、画布尺寸与
+  // 指纹仍按 5000 记账（实测）。这一格守的是"兜住手改容器"那一半。
+  //
+  // 判据两头都要咬：**超限必须报**，**不超限一个字都不许报**
+  // （否则"把判据写成恒真"这条变异会被判抓住）。
+  let lim = @render.render_limit_error(4096, 4096)
+  assert_true(lim == "", msg="4096 是上限本身，必须放行：\{lim}")
+  let over_w = @render.render_limit_error(4097, 200)
+  assert_true(over_w != "", msg="宽超 1 像素就该报")
+  let over_h = @render.render_limit_error(200, 4097)
+  assert_true(over_h != "", msg="高超 1 像素就该报")
+  // 报错要把**两个数**都说出来（收到的尺寸 + 上限），只说"太大了"没法自查
+  assert_true(over_w.contains("4097"), msg="要回显实收宽度：\{over_w}")
+  assert_true(over_w.contains("4096"), msg="要回显上限：\{over_w}")
+
+  // 正控：恰好 4096 的文档，lint 不许报这一条
+  let ok = @core.new_document("lint-canvas-ok", 4096, 200)
+  let okl = @agent.lint_doc(ok).join(" | ")
+  assert_true(
+    !okl.contains("可渲染上限"),
+    msg="恰好 4096 的文档不该被报（判据写宽了）：\{okl}",
+  )
+  // 手改容器：直接构造 5000 宽的文档（`new`/`set-canvas` 已经建不出这种文档了）
+  let big = @core.new_document("lint-canvas-big", 5000, 200)
+  let l = @core.default_layer("d1", "far", 4500.0, 0.0, 100.0, 100.0)
+  big.layers.push(l)
+  let joined = @agent.lint_doc(big).join(" | ")
+  assert_true(joined.contains("可渲染上限"), msg="超限画布必须被报：\{joined}")
+  assert_true(joined.contains("5000"), msg="要回显实收画布宽：\{joined}")
+  assert_true(joined.contains("4096"), msg="要回显上限：\{joined}")
+  assert_true(joined.contains("P0"), msg="静默丢内容是最严重的一档：\{joined}")
+}
+
+///|
+test "入口：超限画布在 new / set-canvas 就拒绝（画布是唯一能改大的入口）" {
+  // `scene()` 已经建好一个文档，所以这里的"没有副作用"用**指纹**核对：
+  // `fingerprint` 是 canonical design.json（含 width/height）的哈希，文档结构
+  // 动一个字段它就变——比"看画布尺寸"更精确（而且没有单独回读画布的命令）。
+  let s = scene("canvas-limit")
+  let fp0 = run(s, "fingerprint")
+  let bad = run(s, "new 5000 200")
+  assert_true(bad.contains("可渲染上限"), msg="new 必须拒绝超限画布：\{bad}")
+  assert_true(bad.contains("5000"), msg="要回显实收尺寸：\{bad}")
+  assert_true(bad.contains("4096"), msg="要回显上限：\{bad}")
+  // 被拒的命令**不许有副作用**（不是"先建了再报错"）
+  let fp1 = run(s, "fingerprint")
+  assert_true(fp1 == fp0, msg="被拒的 new 不许改动文档：\{fp0} → \{fp1}")
+  // 正控：4096 恰好放行（不许把上限写成"< 4096"）
+  let ok = run(s, "new 4096 200")
+  assert_true(ok.contains("\"ok\":true"), msg="4096 必须放行：\{ok}")
+  let fp2 = run(s, "fingerprint")
+  // **判别力自证**：画布真的换了，指纹就必须变。少了这一条，上面那句
+  // "指纹没变"就可能是因为指纹根本不反映画布，而断言照旧绿。
+  assert_true(fp2 != fp1, msg="指纹必须反映画布尺寸变化：\{fp1} → \{fp2}")
+  // set-canvas 是**表装好之后**唯一能把画布改大的命令：同一句判据必须也在这里
+  let sc = run(s, "set-canvas 4097 200")
+  assert_true(sc.contains("可渲染上限"), msg="set-canvas 必须拒绝超限画布：\{sc}")
+  assert_true(sc.contains("4097"), msg="要回显实收尺寸：\{sc}")
+  let fp3 = run(s, "fingerprint")
+  assert_true(fp3 == fp2, msg="被拒的 set-canvas 不许改动画布：\{fp2} → \{fp3}")
+}
