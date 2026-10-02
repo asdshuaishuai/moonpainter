@@ -456,6 +456,12 @@ fn refresh_ui() -> Unit {
     sb.write_string("</span><span class='lkd'>")
     sb.write_string(lkd)
     sb.write_string("</span>")
+    // 空组给个记认：`group-remove` 把最后一个成员移走之后，组会**留在原地**
+    // （引擎不替你删——那才是静默动作），而 `lint` 把它算作"装了却什么都不干"。
+    // 人类侧看不到 lint，所以在列表上直接标出来，才谈得上"看得见、删得掉"。
+    if is_empty_group(l) {
+      sb.write_string("<span class='lkd' title='空组：lint 会报「装了却什么都不干」'>空</span>")
+    }
     // 有蒙版的层给个记认（否则用户看不出这层的可见范围被裁过）
     match json_get(l, "mask") {
       Some(m) =>
@@ -475,6 +481,89 @@ fn refresh_ui() -> Unit {
   let _ = doc_j
   js_status_bar("图层: \{count} │ 指纹: \{fp}")
   refresh_props()
+}
+
+///|
+/// 在 `list-layers` 的嵌套树里找某层的**父组 id**：根级层 → `Some("")`，
+/// 找不到 → `None`。`query-layer` 不报父级，而"加入/移出组"必须知道它现在挂在
+/// 谁身上——属性面板的「父级」选择器要用这个（人类侧唯一能回读层级的路径）。
+fn parent_group_of(layers : Array[Json], id : String, parent : String) -> String? {
+  for l in layers {
+    let lid = json_get_str(l, "id")
+    if lid == id {
+      return Some(parent)
+    }
+    match json_get(l, "children") {
+      Some(Json::Array(kids)) => {
+        match parent_group_of(kids, id, lid) {
+          Some(p) => return Some(p)
+          None => ()
+        }
+      }
+      _ => ()
+    }
+  }
+  None
+}
+
+///|
+/// 这个层是不是**空组**（组且一个成员都没有）。提成一处实现：图层列表的
+/// "空"标识与白盒测试共用——`group-remove` 移走最后一个成员之后组会留在原地，
+/// 而 `lint` 会把它算作"装了却什么都不干"。
+fn is_empty_group(l : Json) -> Bool {
+  if json_get_str(l, "kind") != "group" {
+    return false
+  }
+  match json_get(l, "children") {
+    Some(Json::Array(k)) => k.length() == 0
+    _ => true
+  }
+}
+
+///|
+fn find_id_deep(layers : Array[Json], id : String) -> Bool {
+  for l in layers {
+    if json_get_str(l, "id") == id {
+      return true
+    }
+    match json_get(l, "children") {
+      Some(Json::Array(kids)) => {
+        if find_id_deep(kids, id) {
+          return true
+        }
+      }
+      _ => ()
+    }
+  }
+  false
+}
+
+///|
+/// 收集**根级**的组：面板的「父级」下拉只列它们——`group-add` 的成员必须是根级层，
+/// 所以能当父级的也只有根级组（嵌套编组引擎侧不支持）。
+fn root_groups(layers : Array[Json]) -> Array[(String, String)] {
+  let out : Array[(String, String)] = []
+  for l in layers {
+    if json_get_str(l, "kind") == "group" {
+      out.push((json_get_str(l, "id"), json_get_str(l, "name")))
+    }
+  }
+  out
+}
+
+///|
+/// 一个新组的 id：`g1`、`g2`…取第一个没被占用的。**不许撞已有的 id**——
+/// `group` 撞 id 会直接报错，而人类点一下「编组」不该看到错误。
+fn fresh_group_id(layers : Array[Json]) -> String {
+  let mut k = 1
+  while k < 1000 {
+    let cand = "g\{k}"
+    if !find_id_deep(layers, cand) {
+      return cand
+    }
+    k = k + 1
+  }
+  "g\{js_now_ms()}"
 }
 
 fn refresh_props() -> Unit {
@@ -548,7 +637,66 @@ fn refresh_props() -> Unit {
   sb.write_string(id)
   sb.write_string("\")'>蒙版反选</button><button class='ghost' onclick='globalThis.__mask_clear(\"")
   sb.write_string(id)
-  sb.write_string("\")'>去蒙版</button></div>")
+  sb.write_string("\")'>去蒙版</button>")
+  // 分组：人类侧的入口。组 → 「解组」；非组 → 「编组」+「父级」下拉
+  // （根级 / 各根级组，覆盖 group-add 与 group-remove 两个方向）。
+  let lst = eng("list-layers")
+  let roots = match json_get(lst, "layers") {
+    Some(Json::Array(a)) => a
+    _ => []
+  }
+  let parent = match parent_group_of(roots, gid, "") {
+    Some(p) => p
+    None => ""
+  }
+  if gkind == "group" {
+    sb.write_string("<button class='ghost' onclick='globalThis.__ungroup_sel(\"")
+    sb.write_string(id)
+    sb.write_string("\")'>解组</button>")
+  } else {
+    sb.write_string("<button class='ghost' onclick='globalThis.__group_sel(\"")
+    sb.write_string(id)
+    sb.write_string("\")'>编组</button>")
+    sb.write_string("<select title='父级：根级或某个组' onchange='globalThis.__reparent(\"")
+    sb.write_string(id)
+    sb.write_string("\",this.value)'>")
+    sb.write_string("<option value=''")
+    if parent == "" {
+      sb.write_string(" selected")
+    }
+    sb.write_string(">根级</option>")
+    for g in root_groups(roots) {
+      sb.write_string("<option value='")
+      sb.write_string(g.0)
+      sb.write_string("'")
+      if parent == g.0 {
+        sb.write_string(" selected")
+      }
+      sb.write_string(">")
+      sb.write_string(g.0)
+      sb.write_string(" · ")
+      sb.write_string(g.1)
+      sb.write_string("</option>")
+    }
+    // 手改容器可能造出嵌套（引擎侧建不出来）：父级不在根级组里时也要显示真话
+    if parent != "" {
+      let mut known = false
+      for g in root_groups(roots) {
+        if g.0 == parent {
+          known = true
+        }
+      }
+      if !known {
+        sb.write_string("<option value='")
+        sb.write_string(parent)
+        sb.write_string("' selected>")
+        sb.write_string(parent)
+        sb.write_string("（嵌套）</option>")
+      }
+    }
+    sb.write_string("</select>")
+  }
+  sb.write_string("</div>")
   js_update_props(sb.to_string())
 }
 
@@ -615,6 +763,60 @@ fn do_del(id : String) -> Unit {
 
 fn do_reorder(id : String, where_ : String) -> Unit {
   let _ = engine_exec_line("reorder \{id} \{where_}")
+  eng_render(800)
+  refresh_ui()
+}
+
+///|
+/// 人类侧「编组」：把选中的**根级**层包进一个新组（`group` 的成员下界是 1 个）。
+/// 引擎的四条分组命令（`group`/`ungroup`/`group-add`/`group-remove`）此前只有
+/// AI 与命令行走得到，前端一个分组动作都没有——README 因此写过一句假的
+/// "人类前端可直接用"；这一轮把它变成真的。
+fn do_group_sel(id : String) -> Unit {
+  let j = eng("list-layers")
+  let layers = match json_get(j, "layers") {
+    Some(Json::Array(a)) => a
+    _ => []
+  }
+  let gid = fresh_group_id(layers)
+  let _ = engine_exec_line("group \{gid} \{id}")
+  g_sel.val = gid
+  eng_render(800)
+  refresh_ui()
+}
+
+///|
+fn do_ungroup_sel(id : String) -> Unit {
+  let _ = engine_exec_line("ungroup \{id}")
+  g_sel.val = ""
+  eng_render(800)
+  refresh_ui()
+}
+
+///|
+/// 「父级」下拉：`target == ""` = 移回根级，否则加进那个组。
+/// 从 A 组换到 B 组要**两条**引擎命令（`group-remove` 再 `group-add`——引擎没有
+/// "直接改嫁"的单条命令）；顺序是刻意的：先摘后加，第二步若失败层落在**根级**
+/// 而不是两边都不在，状态可读可救。
+fn do_reparent(id : String, target : String) -> Unit {
+  let j = eng("list-layers")
+  let layers = match json_get(j, "layers") {
+    Some(Json::Array(a)) => a
+    _ => []
+  }
+  let parent = match parent_group_of(layers, id, "") {
+    Some(p) => p
+    None => ""
+  }
+  if parent == target {
+    return
+  }
+  if parent != "" {
+    let _ = engine_exec_line("group-remove \{parent} \{id}")
+  }
+  if target != "" {
+    let _ = engine_exec_line("group-add \{target} \{id}")
+  }
   eng_render(800)
   refresh_ui()
 }
@@ -1053,6 +1255,9 @@ pub fn register_globals() -> Unit {
   js_reg2s("__mask_ready", fn(kind : String, rect : String) { do_mask_ready(kind, rect) })
   js_reg1("__mask_invert", fn(id : String) { do_mask_invert(id) })
   js_reg1("__mask_clear", fn(id : String) { do_mask_clear(id) })
+  js_reg1("__group_sel", fn(id : String) { do_group_sel(id) })
+  js_reg1("__ungroup_sel", fn(id : String) { do_ungroup_sel(id) })
+  js_reg2s("__reparent", fn(id : String, target : String) { do_reparent(id, target) })
   js_reg1("__crop_cancel", fn(_ : String) { do_crop_cancel() })
   js_reg2s("__af", fn(op : String, sign : String) {
     let s = js_state_get("strength")

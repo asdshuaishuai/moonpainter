@@ -144,6 +144,9 @@
    "把一个已有层加进**已有**组"做不到（只能 `ungroup`+`group` 整体重组，组的
    name/opacity/blend/tags/mask 全丢）——补了 `group-add`/`group-remove`。
    粒度缺口只能靠**问一遍常见动作**（"把 A 放进 B"、"换掉内容"）找出来。
+   **补完能力还要问"两侧都有入口吗"**：引擎四条分组命令当时只有 AI 走得到，
+   而 README 里我写的"人类前端可直接用"是**编的**（前端连一个分组按钮都没有）
+   ——名单/数字有门禁，名单旁边的理由没有；新写的散文要当代码审。
    **"盒子跟着内容走"是这一类的一般规则**（text 与 image 都栽过）：
    凡是"内容"（文字、位图）决定自己该占多大，盒子的算法就只有一处
    （`text_box` / `image_box`），`set-*` 重算它，显式 `w=`/`h=` 才固定；
@@ -473,7 +476,7 @@ moon run --target native cli    # stdin 行协议；help 查看全部 63 个命�
   **但引擎从未实现还原**，于是用户输入 "Hello World"，存进去和渲染出来的
   都是 `Hello_World`。现在 `_` 保持**字面下划线**（历史行为完全不变），
   含空格靠引号。新增自由文本参数时，走 `quote_arg`（demo/main.mbt）拼串。
-- demo 工具面是 agent 命令面的**手写子集**（当前 53 个）：引擎新增命令后，
+- demo 工具面是 agent 命令面的**手写子集**（当前 55 个）：引擎新增命令后，
   要用到就该同步加进 `paint_tools.mbt` 的 `paint_tool_defs` + `tool_cmd` +
   `catalog.mbt` 的 system prompt，否则"引擎有能力"不等于"产品里的 AI 用得上"。
   模型侧只写 JSON，base64 由 SDK 的 `b64_text` 转。

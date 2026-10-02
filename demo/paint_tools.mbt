@@ -109,6 +109,8 @@ fn tool_cmd(name : String) -> String? {
     "visible" => Some("visible")
     "group" => Some("group")
     "ungroup" => Some("ungroup")
+    "group_add" => Some("group-add")
+    "group_remove" => Some("group-remove")
     "tag" => Some("tag")
     "untag" => Some("untag")
     "add_paint_layer" => Some("add-paint")
@@ -266,6 +268,16 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
       [("gid", "string:req:新组 id"), ("ids", "string:req:成员 id 列表，逗号分隔")],
     ),
     make_tool("ungroup", "解组", [("gid", "string:req:组 id")]),
+    make_tool(
+      "group_add",
+      "把一个或多个**已有根级**图层加进**已有**的组（组的 name/opacity/blend/tags/mask 都不动）。新成员追加到组栈顶；成员必须是根级层且不是组（不支持嵌套编组）",
+      [("gid", "string:req:目标组 id"), ("ids", "string:req:成员 id 列表，逗号分隔")],
+    ),
+    make_tool(
+      "group_remove",
+      "把组的**直接**成员移回根级（落在该组的层序位置 = 组的下一层，与 ungroup 的落点一致）。解散整组用 ungroup",
+      [("gid", "string:req:组 id"), ("ids", "string:req:成员 id 列表，逗号分隔")],
+    ),
     make_tool("tag", "给图层打语义标签（如 hero/background/logo）。标签是容器里的元数据（进指纹、可回读），当前不参与渲染与选择子", [("id", "string:req:图层 id"), ("tag", "string:req:标签")]),
     make_tool("untag", "摘掉图层标签；tag 参数给 * 则清空该层全部标签。摘不存在/空的标签会报错，不会静默成功", [("id", "string:req:图层 id"), ("tag", "string:req:要摘的标签，* = 清空全部")]),
     make_tool(
@@ -699,6 +711,14 @@ pub fn tool_line(name : String, args : Json) -> String {
     "ungroup" => {
       let gid = arg_of(args, "gid")
       "ungroup \{gid}"
+    }
+    "group_add" => {
+      let ids = arg_of(args, "ids")
+      "group-add \{arg_of(args, "gid")} \{ids.replace(old=",", new=" ")}"
+    }
+    "group_remove" => {
+      let ids = arg_of(args, "ids")
+      "group-remove \{arg_of(args, "gid")} \{ids.replace(old=",", new=" ")}"
     }
     "tag" => "tag \{arg_of(args, "id")} \{arg_of(args, "tag")}"
     "untag" => "untag \{arg_of(args, "id")} \{arg_of(args, "tag")}"

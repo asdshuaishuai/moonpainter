@@ -366,3 +366,25 @@ test "调整层要能改值：set_adjust 原地改、不丢层序" {
   )
   assert_eq(p3, "set-adjust l2 op=contrast value=0.2")
 }
+
+///|
+test "分组工具：tool_line 拼得出 group-add / group-remove（成员逗号转空格）" {
+  // 引擎的四条分组命令此前只有 AI 走得到「group/ungroup」，「group-add/
+  // group-remove」两轮前才补上、这一轮接进工具面。工具名两张表的一致性
+  // 由 `paint_tools_wbtest` 全体巡逻，这里钉住**参数拼接**这一半：
+  // 成员列表在引擎侧是空白分隔的位置参数，模型给的是逗号分隔的一个字段。
+  assert_eq(
+    @demo.tool_line(
+      "group_add",
+      @demo.parse_json_safe("{\"gid\":\"g1\",\"ids\":\"l2,l3\"}"),
+    ),
+    "group-add g1 l2 l3",
+  )
+  assert_eq(
+    @demo.tool_line(
+      "group_remove",
+      @demo.parse_json_safe("{\"gid\":\"g1\",\"ids\":\"l2\"}"),
+    ),
+    "group-remove g1 l2",
+  )
+}

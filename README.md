@@ -32,7 +32,7 @@
 | 域 | 内容 |
 | :-- | :-- |
 | 画布 | `new` / `set-canvas` / `crop`。**容器允许单边 ≤30000、总量 ≤1e8 像素，但渲染器只能画单边 ≤4096**——超过的画布 `new`/`set-canvas` **直接拒绝**（报错说清"只会画左上角 4096×4096、其余图层一个像素都不会出现"，并给可行的下一步），`lint` 以 P0 兜住手改容器、以及**旧引擎（本仓库 81ff759 之前）产出的超限容器**——那时候 `new 5000 200` 是能建能存的，所以这种容器真实存在；`open-mpd` 因此**只知会不拒绝**（拒绝打开就等于用户连"打开自己的文件再 `crop` 到 4096"这条自救路都没有，报错里的 `notice` 字段会说清），`census` 也把两个数分开报（`canvas` = 文档记账尺寸、`render` = 实际渲染尺寸，不等即"能存但画不出来"）。**此前是静默截断**：`new 5000 200` 回 ok、画布尺寸/指纹/容器都按 5000 记账，而渲染只画左上角 4096×200 那块，`lint` 报 0 违规（实测放在 x=4500 的图层整个消失） |
-| 绘制 | 矩形（圆角）/椭圆/线段/多边形，纯色+线性渐变填充（颜色支持 `#RRGGBB[AA]`，**AA 真的参与混合**：50% 红压白 = `#FF7F7F`；**端点归一化到本层 bbox 的 0..1**；与同命令的像素参数 x/y/w/h 不同，写错会被入口拒绝并给出换算值），描边，7 种混合（normal/multiply/screen/overlay/darken/lighten/difference，W3C 合成公式），透明度，旋转（Taylor 三角）+ **翻转（flip h/v/both，先翻转后旋转）**，编组（直通；AI 侧 `group`/`ungroup`，**已有层进出已有组**走 `group-add`/`group-remove`——此前只能 `ungroup`+`group` 整体重组，组的 name/opacity/blend/tags/mask 全丢；新成员追加到组栈顶，移出的层落在**组的下一层**。⚠️ **人类前端没有分组动作**：那四条命令目前只有 AI/引擎命令行走得到），PNG 位图导入（8-bit RGB/RGBA/灰非交错；**盒子跟着内容走**：不给 `w=`/`h=` 时盒 = 资产像素尺寸，只给一边时另一边按原比例推——渲染器把资产**拉伸到盒子**，缺省 100×100 会把任意比例的图静默压扁）、**原地换图** `set-image`（只换像素，层序/蒙版/标签/透明度/翻转/旋转都不动——此前只能删了重加，那些全丢且层被推到栈顶） |
+| 绘制 | 矩形（圆角）/椭圆/线段/多边形，纯色+线性渐变填充（颜色支持 `#RRGGBB[AA]`，**AA 真的参与混合**：50% 红压白 = `#FF7F7F`；**端点归一化到本层 bbox 的 0..1**；与同命令的像素参数 x/y/w/h 不同，写错会被入口拒绝并给出换算值），描边，7 种混合（normal/multiply/screen/overlay/darken/lighten/difference，W3C 合成公式），透明度，旋转（Taylor 三角）+ **翻转（flip h/v/both，先翻转后旋转）**，编组（直通；**已有层进出已有组**走 `group-add`/`group-remove`——此前只能 `ungroup`+`group` 整体重组，组的 name/opacity/blend/tags/mask 全丢；新成员追加到组栈顶，移出的层落在**组的下一层**。**两侧都有入口**：AI 侧 `group`/`ungroup`/`group_add`/`group_remove`，人类侧属性面板的「编组」「解组」按钮与「父级」下拉（根级 ⇄ 某个组，只列**根级**组）——从 A 组换到 B 组是 `group-remove` 再 `group-add` 两步，先摘后加，第二步失败层落根级而不是丢失；移走最后一个成员后组**留在原地**（引擎不替你删——那才是静默动作），图层列表会把它标成「空」，因为 `lint` 会报它而人类看不到 lint），PNG 位图导入（8-bit RGB/RGBA/灰非交错；**盒子跟着内容走**：不给 `w=`/`h=` 时盒 = 资产像素尺寸，只给一边时另一边按原比例推——渲染器把资产**拉伸到盒子**，缺省 100×100 会把任意比例的图静默压扁）、**原地换图** `set-image`（只换像素，层序/蒙版/标签/透明度/翻转/旋转都不动——此前只能删了重加，那些全丢且层被推到栈顶） |
 | 图层蒙版 | 几何蒙版（矩形/椭圆 + **圆角 `radius`（仅矩形，超过半边长按半边长夹住）** + **边缘羽化 `feather`（按到边界的真实内距线性过渡，`0`=硬边）** + **边缘毛化 `roughen`（按画布坐标的确定性值噪声扰动边界，手绘/撕裂纸边那种不规则轮廓，`0`=光滑边；与 feather 叠加 = 先毛化再羽化）** + `invert` 反选，**蒙版外不渲染**）：人类前端可拖拽创建（工具条 ▭/◯），拖拽前用工具条上的滑块设**圆角**（仅矩形）与**羽化**，另有「蒙版反选 / 去蒙版」按钮，AI 可走 `add_mask` / `set_mask` / `remove_mask` 工具；**`set_mask` 是全参数的部分更新**（只给要改的键，其余原样保留——全量重建会把没重复写的 `radius`/`roughen` 悄悄重置成 0）；`query-layer` / `list-layers` 报告 `mask` 状态（否则加了蒙版看不出来）。用到 `roughen` 的容器在 manifest 里声明 `render_contract:2`，**旧引擎据此拒绝打开**而不是把它画成光滑边 |
 | 渲染 | 2×2 子采样 AA、取景渲染（归一化 viewport + 目标宽）、**overlay=1（层 bbox 序号线框 + 3×5 数字标注，像素↔结构对位辅助）**、pick 像素→层 id、直方图/覆盖统计、渲染确定性（golden sha256 锁定） |
 | 容器 | pack/unpack 全环、确定性 pack（两次打包字节一致）、原子落盘（tmp+rename）、八类拒绝路径全测试 |
@@ -127,7 +127,7 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
 - **视觉闭环**：`render` / `select_preview` / `mvsl_impact` 三个图像类工具把 PNG 以附件
   （`SuccessWithAttachments`）回传给多模态模型，AI 真的看图确认效果再继续
   （试选不看图 = 闭眼改色；影响证书不看图 = 发现不了选区跑偏）；
-- **53 个工具，MVSL 闭环可达**：`sel_schema`（先看语法：字段名/量纲/示例自证）/
+- **55 个工具，MVSL 闭环可达**：`sel_schema`（先看语法：字段名/量纲/示例自证）/
   `census`（先普查再选色）/`probe`（这个点选中没有）/
   `select_preview`（试选 + 连通域事实）/`mvsl_set`（装编辑表）/`mvsl_impact`
   （影响证书）/`mvsl_assert`（保护断言）/`mvsl_show`/`mvsl_clear`。模型只写 **JSON**
@@ -137,9 +137,8 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   `build_demo.sh#doc-tools` 会机械核对下面这块，同时保证**工具面不许指向一条
   引擎里不存在的命令**。要新增可达能力时改这里，而不是默默改数：
   <!-- unreachable:begin -->
-  引擎 63 条命令里，demo 的 AI 够不着 10 条：`session-open` `open-mpd-b64`
+  引擎 63 条命令里，demo 的 AI 够不着 8 条：`session-open` `open-mpd-b64`
   `help` `list-tools` `fingerprint` `add-image` `set-image` `inspect`
-  `group-add` `group-remove`
   <!-- unreachable:end -->
   各自原因——`session-open`/`open-mpd-b64`：会话与开门由前端管，不该让模型
   自己开门；`help`/`list-tools`：工具清单本来就在 system prompt 里；
@@ -147,11 +146,10 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   模型无法产出、也无处接收图片字节——插图与换图是人类的动作：前端上传后成为图片层，
   AI 可以在它之上移动/缩放/改样式（`move`/`resize`/`set-style`/`set-mask`），
   但不能凭空造出或替换掉图片像素**；`inspect`：
-  文档概览，AI 用 list_layers + edits + stats 已能拼出；**`group-add`/`group-remove`：
-  组的成员增删——**产品两侧都还没有入口**：demo 工具面没接线，而人类前端的
-  工具条也没有分组动作（撤销/重做/裁剪/蒙版/调整那一排里没有它）。所以这是
-  "整块还没做"，不是"只差 AI 侧"；`group`/`ungroup` 目前也只有 AI 走得到
-  （它们在工具面里）。要"把这个层放进那个组"得走引擎命令行，属下一步。
+  文档概览，AI 用 list_layers + edits + stats 已能拼出。**分组不在名单里**：
+  `group`/`ungroup`/`group-add`/`group-remove` 四条现在**两侧都有入口**——
+  AI 侧是 `group`/`ungroup`/`group_add`/`group_remove` 四个工具，人类侧是
+  属性面板的「编组」「解组」按钮与「父级」下拉（根级 ⇄ 某个组）。
 - **元参数通道**：`list_params` / `set_param` / `remove_param` 读写命名元参数
   （品牌主色、网点密度这类设计系统元数据）。**纯元数据、不影响渲染**——改画面
   仍要走 MVSL 或图形命令；它的用途是让 AI 在开场先读既有规范（而不是凭空配色）、
