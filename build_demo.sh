@@ -107,7 +107,7 @@ console.log('NPM SDK SMOKE OK: multi-session + render + save/open round-trip all
 "
 cd ../..
 
-echo "== 6/8 页面接线：HTML 引用的每个处理器的名字都出现过在注册表里 =="
+echo "== 6/8 页面接线：HTML 引用的每个处理器的名字都出现过在注册表里（含经参数传进拼 HTML helper 的） =="
 # 运行时那条测试（demo_test「页面接线」）比这条强——它拿的是**真的拼出来的
 # HTML**。但它只覆盖静态骨架 `app_html()`；图层列表与属性面板是
 # `sb.write_string(...)` **动态拼**出来的，那段 HTML 只有在浏览器里点开某个
@@ -125,6 +125,12 @@ for path in glob.glob('demo/*.mbt'):
         if stripped.startswith('//'):
             continue                      # 注释里的示例不算引用
         refs.update(re.findall(r'globalThis\.(__[A-Za-z_][A-Za-z_0-9]*)', line))
+        # 处理器名也可能是**经参数**传进拼 HTML 的辅助函数的
+        # （`txt_input(…, "__rename", …)`）——那时源码里只有裸字符串字面量、
+        # 没有 `globalThis.` 前缀。只扫前者会漏掉**整整一类**：实测新加的一批
+        # 控件里，14 个名字只有 3 个带前缀（其余都走参数），而门禁报"37 个全部
+        # 有注册"照样好看。这类前端断链的典型症状是"点了没反应"。
+        refs.update(re.findall(r'"(__[A-Za-z_][A-Za-z_0-9]*)"', line))
         regs.update(re.findall(r'js_reg[0-9a-z]*\("(__[A-Za-z_][A-Za-z_0-9]*)"', line))
 missing = sorted(refs - regs)
 if missing:
@@ -133,7 +139,7 @@ if missing:
 print('页面接线 OK（%d 个处理器引用全部有注册）' % len(refs))
 PYW
 
-echo "== 7/8 文档里的工具数与边界与实际一致（数字漂了就红） =="
+echo "== 7/8 文档里的工具数、AI/人类两条边界与实际一致（数字漂了就红） =="
 # 实测踩过：给工具面加了 3 个工具，`grep -c "make_tool("` 数出 52 ——
 # 那个数里含 `fn make_tool(` **函数定义本身**，真实是 51，于是 README/AGENTS
 # 被写错。文档里的数字是"我们做到了多少"的承诺（铁律 3），不能靠手数。
@@ -190,6 +196,15 @@ if bad:
 print('引擎/工具边界 OK（引擎 %d 条 − 工具面 %d 条 = 够不着 %d 条，与 README 一致）'
       % (len(eng), len(covered), len(unreach)))
 PYD
+
+# 人类前端是**另一条边界**：上面那块管的是「AI 工具面 ↔ 引擎」，这块管
+# 「人类前端 ↔ 引擎」。此前没人管——实测 63 条命令里人类前端只走得到 35 条，
+# 而 README 的「绘制」一行读起来像"产品支持画多边形"。
+# 判据（名单 + 理由 + 数字，脚本里逐条自证过反例）：
+# ① 人类可达集合 = 源码里作为字符串**首词**出现的命令（不许写上去却够不着）；
+# ② 引擎 − 人类可达 == README 名单（不重不漏、不许幽灵命令）；
+# ③ 每条必须写理由（空理由 = 没做过的决定）；④ 散文里的条数要对得上。
+run_quiet python3 ui_audit.py
 
 echo "== 8/8 demo 测试（工具面 + MVSL 闭环可达；需 Node） =="
 # 这条守住"引擎有能力"与"产品里的 AI 用得上"之间的缝：mock 模型经真实

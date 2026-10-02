@@ -106,3 +106,120 @@ test "图层列表：空组标「空」、选中态只落在被选中的那一�
   let sel_count = h.split("class='li sel'").length() - 1
   assert_true(sel_count == 1, msg="选中态出现 \{sel_count} 次（应该恰好 1）：\{h}")
 }
+
+///|
+test "属性面板：可改的属性都有入口（改名/坐标/尺寸/旋转/翻转/标签摘挂）" {
+  // 这一批（rename / move / resize / rotate / flip / tag / untag）此前
+  // **只有 AI 走得到**：人类想改个层名、挪 10 像素、把字放大，只能删了重加
+  // （蒙版/标签/层序全丢，调整层还会被推到栈顶改变作用范围）。
+  let roots = panel_layers()
+  let r = parse_json_safe(
+    "{\"id\":\"l1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":10,\"y\":20,\"w\":30,\"h\":40,\"rot\":15,\"flip_h\":true,\"flip_v\":false,\"opacity\":1,\"blend\":\"normal\",\"tags\":[\"hero\",\"主体\"]}",
+  )
+  let h = props_html(r, roots)
+  for name in [
+    "__rename", "__setx", "__sety", "__setw", "__seth", "__rotate", "__flip", "__tag_add",
+  ] {
+    assert_true(has_sub(h, "globalThis." + name + "("), msg="面板少了 \{name} 的入口：\{h}")
+  }
+  // 当前值必须回显（否则人一改就把别的分量写丢了：move/resize 是整对赋值）
+  assert_true(has_sub(h, "value='10'"), msg=h)
+  assert_true(has_sub(h, "value='40'"), msg=h)
+  assert_true(has_sub(h, "value='15'"), msg=h)
+  // 翻转按钮两个方向都在，各自带方向参数
+  assert_true(has_sub(h, "globalThis.__flip(\"l1\",\"h\")"), msg=h)
+  assert_true(has_sub(h, "globalThis.__flip(\"l1\",\"v\")"), msg=h)
+  // 已有标签要看得见，而且**每个都能摘**（能打上就必须能摘下）
+  assert_true(has_sub(h, "#hero"), msg=h)
+  assert_true(has_sub(h, "globalThis.__tag_del(\"l1\",\"hero\")"), msg=h)
+  assert_true(has_sub(h, "globalThis.__tag_del(\"l1\",\"主体\")"), msg=h)
+  // 文字层/调整层专属的控件不许出现在矩形上
+  assert_true(lacks_sub(h, "__text_set"), msg="矩形上出现了文字控件：\{h}")
+  assert_true(lacks_sub(h, "__adj_op"), msg="矩形上出现了调整控件：\{h}")
+}
+
+///|
+test "属性面板：文字层给内容+字号，调整层给算子+数值（各自专属）" {
+  let roots = panel_layers()
+  let t = parse_json_safe(
+    "{\"id\":\"t1\",\"name\":\"标题\",\"kind\":\"text\",\"x\":0,\"y\":0,\"w\":40,\"h\":16,\"text\":\"你好\",\"font_size\":16,\"opacity\":1,\"blend\":\"normal\"}",
+  )
+  let ht = props_html(t, roots)
+  assert_true(has_sub(ht, "globalThis.__text_set(\"t1\",this.value)"), msg=ht)
+  assert_true(has_sub(ht, "globalThis.__text_font(\"t1\",this.value)"), msg=ht)
+  assert_true(has_sub(ht, "value='你好'"), msg="文字内容没回显：\{ht}")
+  assert_true(lacks_sub(ht, "__adj_op"), msg=ht)
+  let a = parse_json_safe(
+    "{\"id\":\"a1\",\"name\":\"调亮\",\"kind\":\"adjust\",\"adjust\":{\"op\":\"brightness\",\"value\":0.25},\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\"}",
+  )
+  let ha = props_html(a, roots)
+  assert_true(has_sub(ha, "globalThis.__adj_op(\"a1\",this.value)"), msg=ha)
+  assert_true(has_sub(ha, "globalThis.__adj_val(\"a1\",this.value)"), msg=ha)
+  assert_true(has_sub(ha, "value='brightness'"), msg=ha)
+  assert_true(has_sub(ha, "value='0.25'"), msg=ha)
+  assert_true(lacks_sub(ha, "__text_set"), msg=ha)
+}
+
+///|
+test "HTML 转义：用户输入里的引号/尖括号不能把属性撑破" {
+  // 层名、文字内容、标签都是用户输入。不转义的话一个 `'` 就把 `value='…'`
+  // 提前闭合，后面的结构变成正文——画面"看起来还行"而控件全错位，
+  // 浏览器里才看得出来。这条测试是那一类的机器判据。
+  let roots = panel_layers()
+  let evil = parse_json_safe(
+    "{\"id\":\"l1\",\"name\":\"a'b<c>&d\",\"kind\":\"rect\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"tags\":[\"x'y\"]}",
+  )
+  let h = props_html(evil, roots)
+  // 正文里的 `<c>` 不转义会被浏览器当成标签（名字后半截消失）
+  assert_true(lacks_sub(h, "<c>"), msg="尖括号没转义：\{h}")
+  assert_true(lacks_sub(h, "'d"), msg="单引号没转义（属性会被提前闭合）：\{h}")
+  assert_true(has_sub(h, "&#39;"), msg=h)
+  assert_true(has_sub(h, "&lt;c&gt;"), msg=h)
+  assert_true(has_sub(h, "&amp;d"), msg=h)
+  assert_true(has_sub(h, "globalThis.__tag_del(\"l1\",\"x&#39;y\")"), msg=h)
+}
+
+///|
+test "flip 是设置不是取反：四个标志组合都要有对应的方向词" {
+  // 按钮发的是**目标状态**。若顺手写成"再点一次发 h"，垂直翻转会被悄悄清掉。
+  assert_eq(flip_word(true, false), "h")
+  assert_eq(flip_word(false, true), "v")
+  assert_eq(flip_word(true, true), "both")
+  assert_eq(flip_word(false, false), "none")
+  // 负控：两个输入换位不能得到同一个词（否则参数被写反也测不出来）
+  assert_true(flip_word(true, false) != flip_word(false, true), msg="h 与 v 撞了")
+}
+
+///|
+test "换图：文件选择走「原地换掉」还是「导入新层」由状态位决定（两条路一条命令）" {
+  // 人类侧此前只有"导入新层"：选错了一张图，只能删掉重导——蒙版、标签、
+  // 层序、翻转全丢（调整层还会被推到栈顶改变作用范围）。
+  // 这条分叉抽成纯函数就是为了钉住"换图不是新层"。
+  assert_true(
+    has_sub(
+      import_line("l1", "AAAA", "照片.png"),
+      "set-image l1 b64=AAAA",
+    ),
+    msg="换图必须走 set-image（原地），不能是 add-image",
+  )
+  assert_true(
+    lacks_sub(import_line("l1", "AAAA", "照片.png"), "add-image"),
+    msg="换图那条路不许出现 add-image",
+  )
+  // 导入新层那条路保持历史参数不变（含名字要加引号）
+  assert_eq(
+    import_line("", "AAAA", "我的 照片"),
+    "add-image x=100 y=60 w=600 h=450 b64=AAAA name=\"我的 照片\"",
+  )
+  // 面板：image 层才有「换图」按钮，且按钮先记状态再触发文件选择
+  let roots = panel_layers()
+  let img = parse_json_safe(
+    "{\"id\":\"i1\",\"name\":\"照片\",\"kind\":\"image\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"asset\":\"deadbeef\"}",
+  )
+  let hi = props_html(img, roots)
+  assert_true(has_sub(hi, "globalThis.__img_swap(\"i1\");document.getElementById(\"file-in\").click()"), msg=hi)
+  let rect = parse_json_safe(
+    "{\"id\":\"l1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\"}",
+  )
+  assert_true(lacks_sub(props_html(rect, roots), "__img_swap"), msg="矩形上不该有「换图」")
+}

@@ -8,6 +8,9 @@ let g_sel : Ref[String] = Ref("")
 let g_ready : Ref[Bool] = Ref(false)
 /// 当前画笔层 id（首个 brush 使用时惰性创建/绑定）
 let g_paint : Ref[String] = Ref("")
+/// 「换图」模式：非空 = 下一次文件选择要把这张图**原地换掉**（值是要换的层 id）。
+/// 复用同一个 `<input type=file>`：多一个输入框就多一条"选完文件不知道走哪条路"的路。
+let g_swap : Ref[String] = Ref("")
 /// 待应用裁剪区域 "x,y,w,h"（空串=无）
 let g_crop : Ref[String] = Ref("")
 
@@ -449,9 +452,11 @@ fn layers_html(layers : Array[Json], sel : String) -> String {
     sb.write_string("</span><span class='ico'>")
     sb.write_string(ico)
     sb.write_string("</span><span class='lnm'>")
-    sb.write_string(lnm)
+    // 层名/类型是**用户输入或容器内容**：不转义的话名字里的 `<` 会被浏览器
+    // 当成标签（名字后半截直接消失），`&` 会吃掉后面几个字符。
+    sb.write_string(html_attr(lnm))
     sb.write_string("</span><span class='lkd'>")
-    sb.write_string(lkd)
+    sb.write_string(html_attr(lkd))
     sb.write_string("</span>")
     // 空组给个记认：`group-remove` 把最后一个成员移走之后，组会**留在原地**
     // （引擎不替你删——那才是静默动作），而 `lint` 把它算作"装了却什么都不干"。
@@ -491,6 +496,51 @@ fn refresh_ui() -> Unit {
   let _ = doc_j
   js_status_bar("图层: \{count} │ 指纹: \{fp}")
   refresh_props()
+}
+
+///|
+/// HTML 属性值里的特殊字符转义。层名/文字内容/标签都是**用户输入**，
+/// 直接拼进 `value='…'` 会让一个引号把后面的结构撑破（属性截断、后续
+/// 属性变成正文），而测试看不出"结构破了"——所以拼 HTML 的用户输入一律过它。
+fn html_attr(s : String) -> String {
+  s.replace(old="&", new="&amp;")
+    .replace(old="'", new="&#39;")
+    .replace(old="\"", new="&quot;")
+    .replace(old="<", new="&lt;")
+    .replace(old=">", new="&gt;")
+}
+
+///|
+/// 翻转的两个布尔值 → `flip` 命令的方向词。四个组合都能表达
+/// （(t,f)=h，(f,t)=v，(t,t)=both，(f,f)=none），所以按钮只要把**目标状态**
+/// 算出来交给引擎即可——不需要"切换"语义（`flip` 是**设置**不是取反，
+/// 这一点曾经差一点让按钮写成 `flip id h` 而把垂直翻转悄悄清掉）。
+fn flip_word(fh : Bool, fv : Bool) -> String {
+  if fh && fv {
+    "both"
+  } else if fh {
+    "h"
+  } else if fv {
+    "v"
+  } else {
+    "none"
+  }
+}
+
+///|
+/// 数字输入框（属性面板用）。`handler(id, this.value)` —— 两个参数，
+/// 与 `js_reg2s` 的签名一致。
+fn num_input(label : String, val : String, handler : String, id : String) -> String {
+  "<span class='pk'>" + label + "</span><input class='pnum' type='number' value='" +
+  html_attr(val) + "' onchange='globalThis." + handler + "(\"" + id +
+  "\",this.value)'/>"
+}
+
+///|
+/// 文本输入框（层名/文字内容/算子/标签）。`val` 为空时显示占位提示。
+fn txt_input(ph : String, val : String, handler : String, id : String) -> String {
+  "<input class='pin' value='" + html_attr(val) + "' placeholder='" + html_attr(ph) +
+  "' onchange='globalThis." + handler + "(\"" + id + "\",this.value)'/>"
 }
 
 ///|
@@ -592,6 +642,29 @@ fn props_html(l : Json, roots : Array[Json]) -> String {
   let gh = json_num_str(l, "h")
   let gop = json_num_str(l, "opacity")
   let gbl = json_get_str(l, "blend")
+  // `json_num_str` 对**缺失**字段回 "—"（那是给人看的占位），但
+  // `<input type=number>` 拿到 "—" 只会显示空白、提交时又是空串——
+  // 这里回落到 0（旋转缺省就是 0，与 canonical JSON 省略该字段等价）
+  let grot = match json_get(l, "rot") {
+    Some(_) => json_num_str(l, "rot")
+    None => "0"
+  }
+  let gtext = json_get_str(l, "text")
+  let gfs = json_num_str(l, "font_size")
+  let (adj_op, adj_val) = match json_get(l, "adjust") {
+    Some(a) => (json_get_str(a, "op"), json_num_str(a, "value"))
+    None => ("", "")
+  }
+  let gtags : Array[String] = match json_get(l, "tags") {
+    Some(Json::Array(a)) =>
+      a.map(fn(t) {
+        match t {
+          Json::String(x) => x
+          _ => ""
+        }
+      })
+    _ => []
+  }
   // 调整层显示算子
   let adj = match json_get(l, "adjust") {
     Some(a) => {
@@ -606,7 +679,7 @@ fn props_html(l : Json, roots : Array[Json]) -> String {
   sb.write_string("<span class='pk'>ID</span><span class='pv'>")
   sb.write_string(gid)
   sb.write_string("</span><span class='pk'>名称</span><span class='pv'>")
-  sb.write_string(gname)
+  sb.write_string(html_attr(gname))
   sb.write_string("</span><span class='pk'>类型</span><span class='pv'>")
   sb.write_string(gkind)
   sb.write_string("</span>")
@@ -622,6 +695,56 @@ fn props_html(l : Json, roots : Array[Json]) -> String {
   sb.write_string("</span><span class='pk'>混合</span><span class='pv'>")
   sb.write_string(gbl)
   sb.write_string("</span></div>")
+  // ── 人类侧的可改属性 ──────────────────────────────────────────
+  // 这一块此前只有「不透明度滑杆 + 删/置顶/置底 + 蒙版 + 分组」：层名、坐标、
+  // 尺寸、旋转、翻转、文字内容、调整算子、标签**全都只有 AI 改得动**——
+  // 人类想把一个层挪 10 像素、改个名字、把字放大一点，只能删了重加（蒙版/
+  // 标签/层序/id 引用全丢，调整层还会被推到栈顶改变作用范围）。每条控件都
+  // 直接对到一条引擎命令，命令名在源码里是字面量——`ui_audit.py` 按
+  // "字符串首词是命令名"统计人类面覆盖，所以这里写的就是那份名册。
+  sb.write_string("<div class='pedit'>")
+  sb.write_string(txt_input("层名", gname, "__rename", gid))
+  sb.write_string(num_input("X", gx, "__setx", gid))
+  sb.write_string(num_input("Y", gy, "__sety", gid))
+  sb.write_string(num_input("W", gw, "__setw", gid))
+  sb.write_string(num_input("H", gh, "__seth", gid))
+  sb.write_string(num_input("旋转", grot, "__rotate", gid))
+  sb.write_string("<button class='ghost' title='水平翻转' onclick='globalThis.__flip(\"")
+  sb.write_string(gid)
+  sb.write_string("\",\"h\")'>⇋</button>")
+  sb.write_string("<button class='ghost' title='垂直翻转' onclick='globalThis.__flip(\"")
+  sb.write_string(gid)
+  sb.write_string("\",\"v\")'>⇅</button>")
+  sb.write_string("</div>")
+  if gkind == "image" {
+    sb.write_string("<div class='pedit'><button class='ghost' title='原地换掉这张图：层序/蒙版/标签/透明度/翻转/旋转都不动' onclick='globalThis.__img_swap(\"")
+    sb.write_string(gid)
+    sb.write_string("\");document.getElementById(\"file-in\").click()'>换图</button></div>")
+  }
+  if gkind == "text" {
+    sb.write_string("<div class='pedit'>")
+    sb.write_string(txt_input("文字内容", gtext, "__text_set", gid))
+    sb.write_string(num_input("字号", gfs, "__text_font", gid))
+    sb.write_string("</div>")
+  }
+  if gkind == "adjust" {
+    sb.write_string("<div class='pedit'>")
+    sb.write_string(txt_input("算子", adj_op, "__adj_op", gid))
+    sb.write_string(num_input("数值", adj_val, "__adj_val", gid))
+    sb.write_string("</div>")
+  }
+  sb.write_string("<div class='pedit'>")
+  sb.write_string(txt_input("加标签", "", "__tag_add", gid))
+  for t in gtags {
+    sb.write_string("<span class='pvw'>#")
+    sb.write_string(html_attr(t))
+    sb.write_string("<button class='ghost' title='摘掉这个标签' onclick='globalThis.__tag_del(\"")
+    sb.write_string(gid)
+    sb.write_string("\",\"")
+    sb.write_string(html_attr(t))
+    sb.write_string("\")'>✕</button></span>")
+  }
+  sb.write_string("</div>")
   // 不透明度滑杆（change 提交）
   sb.write_string("<div class='osl'><span class='pk'>α</span><input type='range' min='0' max='100' value='\{opacity_pct(gop)}' oninput='globalThis.__optip(\"")
   sb.write_string(gid)
@@ -737,6 +860,16 @@ fn opacity_pct(op_s : String) -> Int {
 }
 
 ///|
+///|
+/// 读一个布尔字段（缺失/类型不对都当 false）。原先这四行在 `do_vis` 里
+/// 手写过一遍，翻转按钮再抄一遍就会分叉。
+fn json_true(j : Json, key : String) -> Bool {
+  match json_get(j, key) {
+    Some(Json::True) => true
+    _ => false
+  }
+}
+
 fn json_num_str(j : Json, key : String) -> String {
   match json_get(j, key) {
     Some(Json::Number(n, ..)) => d2s(n)
@@ -817,6 +950,180 @@ fn do_ungroup_sel(id : String) -> Unit {
 }
 
 ///|
+/// 提交一条**人类侧**命令：失败要把引擎的原话摆到状态栏上。
+/// 这一层是这轮补的——此前人类侧的入口大多是 `let _ = engine_exec_line(…)`，
+/// 失败了连"没反应"都算不上（画面不动，人以为自己点错了）。引擎的拒绝理由
+/// 是它唯一的说明书（"羽化必须 ≥ 0"、"画布单边 ≤ 4096"），必须传给人。
+fn do_ui_cmd(line : String) -> Unit {
+  // `engine_exec_line` 回的是**字符串**（原始 JSON），走 `eng` 解析成 Json
+  let j = eng(line)
+  if eng_ok(j) {
+    eng_render(800)
+    refresh_ui()
+  } else {
+    js_status_bar("⚠ " + eng_s(j, "error"))
+  }
+}
+
+///|
+/// 进入「换图」模式：记住要换的层，随后由页面触发文件选择
+/// （inline JS 里紧跟一次 `file-in` 的 click）。选完文件由
+/// `on_file_selected` 按这个状态分叉成 `set-image`。
+fn do_img_swap(id : String) -> Unit {
+  g_swap.val = id
+}
+
+///|
+/// 层重命名（`rename`）。空名字在入口就拦——引擎那边空名字会写进 canonical
+/// JSON 与指纹，而列表上只剩一个空行，人根本认不出是哪一层。
+fn do_rename(id : String, name : String) -> Unit {
+  let n = name.trim(char_set=" \t").to_owned()
+  if n.length() == 0 {
+    js_status_bar("⚠ 层名不能为空")
+    return
+  }
+  do_ui_cmd("rename " + id + " " + quote_arg(n))
+}
+
+///|
+/// 改一个坐标/尺寸分量。引擎的 `move` / `resize` 都是**整对**赋值
+/// （`move <id> <x> <y>`），所以先回读另一半再发——只发改的那个。
+fn do_set_axis(id : String, key : String, v : String) -> Unit {
+  let j = eng("query-layer " + id)
+  if !eng_ok(j) {
+    js_status_bar("⚠ " + eng_s(j, "error"))
+    return
+  }
+  let l = match json_get(j, "layer") {
+    Some(x) => x
+    None => parse_json_safe("null")
+  }
+  let x = json_num_str(l, "x")
+  let y = json_num_str(l, "y")
+  let w = json_num_str(l, "w")
+  let h = json_num_str(l, "h")
+  let line = if key == "x" {
+    "move " + id + " " + v + " " + y
+  } else if key == "y" {
+    "move " + id + " " + x + " " + v
+  } else if key == "w" {
+    "resize " + id + " " + v + " " + h
+  } else {
+    "resize " + id + " " + w + " " + v
+  }
+  do_ui_cmd(line)
+}
+
+///|
+/// 绕层中心旋转（`rotate`）。
+fn do_rotate(id : String, v : String) -> Unit {
+  do_ui_cmd("rotate " + id + " " + v)
+}
+
+///|
+/// 翻转：`flip` 是**设置**不是取反，所以要把当前两个标志读出来、算成目标
+/// 状态（`flip_word`）再发——直接发 `flip id h` 会**悄悄清掉垂直翻转**。
+fn do_flip(id : String, axis : String) -> Unit {
+  let j = eng("query-layer " + id)
+  if !eng_ok(j) {
+    js_status_bar("⚠ " + eng_s(j, "error"))
+    return
+  }
+  let l = match json_get(j, "layer") {
+    Some(x) => x
+    None => parse_json_safe("null")
+  }
+  let fh = if axis == "h" {
+    !json_true(l, "flip_h")
+  } else {
+    json_true(l, "flip_h")
+  }
+  let fv = if axis == "v" {
+    !json_true(l, "flip_v")
+  } else {
+    json_true(l, "flip_v")
+  }
+  do_ui_cmd("flip " + id + " " + flip_word(fh, fv))
+}
+
+///|
+/// 改文字内容（`set-text`）。盒子跟着内容重算（引擎侧规则），所以这里不传
+/// w/h——要固定盒子得显式给尺寸（AI 那条路）。
+fn do_text_set(id : String, txt : String) -> Unit {
+  if txt.length() == 0 {
+    js_status_bar("⚠ 文字内容不能为空（空文本层会被 lint 报）")
+    return
+  }
+  do_ui_cmd("set-text " + id + " " + quote_arg(txt))
+}
+
+///|
+/// 改字号：`set-text` 的内容是**位置参数**，所以改字号得把当前文字带上。
+fn do_text_font(id : String, v : String) -> Unit {
+  let j = eng("query-layer " + id)
+  if !eng_ok(j) {
+    js_status_bar("⚠ " + eng_s(j, "error"))
+    return
+  }
+  let l = match json_get(j, "layer") {
+    Some(x) => x
+    None => parse_json_safe("null")
+  }
+  let t = json_get_str(l, "text")
+  do_ui_cmd("set-text " + id + " " + quote_arg(t) + " font_size=" + v)
+}
+
+///|
+/// 改调整层的算子/数值（`set-adjust`，**原地改、层序不变**）。取值契约由
+/// 引擎把关（invert/grayscale 不收 value、越界拒绝），错误原话转给人。
+fn do_adj(id : String, which : String, v : String) -> Unit {
+  let key = if which == "op" { "op=" } else { "value=" }
+  do_ui_cmd("set-adjust " + id + " " + key + v)
+}
+
+///|
+/// 打标签：这是人类把"哪几层是一组"告诉 AI 的通道——MVSL 的
+/// `layer=@<标签>` 按标签选层，标签本身不影响渲染。
+fn do_tag_add(id : String, t : String) -> Unit {
+  let tag = t.trim(char_set=" \t").to_owned()
+  if tag.length() == 0 {
+    js_status_bar("⚠ 标签不能为空")
+    return
+  }
+  do_ui_cmd("tag " + id + " " + quote_arg(tag))
+}
+
+///|
+/// 摘标签（`untag`，与 `tag` 对偶）。
+fn do_tag_del(id : String, t : String) -> Unit {
+  do_ui_cmd("untag " + id + " " + quote_arg(t))
+}
+
+///|
+/// 从输入框读一个画布尺寸，空/非数就用默认值（「新建」与「改画布」共用）。
+fn canvas_dim(elem : String, dflt : String) -> String {
+  let v = js_val(elem).trim(char_set=" \t").to_owned()
+  match parse_double_safe(v) {
+    d =>
+      if d > 0.0 {
+        v
+      } else {
+        dflt
+      }
+    _ => dflt
+  }
+}
+
+///|
+/// 改画布尺寸（`set-canvas`）：**只改画布，图层不动**。超上限（单边 4096）
+/// 会被引擎拒，理由原样转给人。
+fn do_set_canvas() -> Unit {
+  let w = canvas_dim("cw", "800")
+  let h = canvas_dim("ch", "600")
+  do_ui_cmd("set-canvas " + w + " " + h)
+}
+
+///|
 /// 「父级」下拉：`target == ""` = 移回根级，否则加进那个组。
 /// 从 A 组换到 B 组要**两条**引擎命令（`group-remove` 再 `group-add`——引擎没有
 /// "直接改嫁"的单条命令）；顺序是刻意的：先摘后加，第二步若失败层落在**根级**
@@ -859,8 +1166,11 @@ fn do_redo() -> Unit {
 }
 
 fn do_new() -> Unit {
-  let _ = engine_exec_line("new 800 600 uuid=n\{js_now_ms()}")
-  let _ = engine_exec_line("add-rect x=0 y=0 w=800 h=600 fill=#FFFFFFFF name=背景")
+  // 尺寸跟着顶栏输入框走（此前写死 800×600，人想开个别的尺寸只能先建再裁）
+  let w = canvas_dim("cw", "800")
+  let h = canvas_dim("ch", "600")
+  let _ = engine_exec_line("new " + w + " " + h + " uuid=n\{js_now_ms()}")
+  let _ = engine_exec_line("add-rect x=0 y=0 w=\{w} h=\{h} fill=#FFFFFFFF name=背景")
   g_sel.val = ""
   g_paint.val = ""
   eng_render(800)
@@ -931,6 +1241,19 @@ fn do_export() -> Unit {
   }
 }
 
+///|
+/// 一次文件选择 → 一条命令行：**「导入新层」还是「原地换图」由调用方给的
+/// swap_id 决定**（空 = 导入）。抽成纯函数是为了让这条分叉可测——它是那种
+/// "选完文件画面变了但变错了"的经典位置（把换图做成新层，蒙版/标签/层序全丢）。
+fn import_line(swap_id : String, b64 : String, name : String) -> String {
+  if swap_id != "" {
+    "set-image " + swap_id + " b64=" + b64
+  } else {
+    "add-image x=100 y=60 w=600 h=450 b64=" + b64 + " name=" + quote_arg(name)
+  }
+}
+
+///|
 fn do_import(b64 : String, name : String) -> Unit {
   bootstrap()
   let cmd = "add-image x=100 y=60 w=600 h=450 b64=\{b64} name=\{quote_arg(name)}"
@@ -1091,7 +1414,11 @@ pub fn app_html() -> String {
       #|<div class='topbar'>
       #|<span class='logo'>🎨 MoonPainter</span>
       #|<button onclick='globalThis.__new()'>新建</button>
-      #|<button onclick="document.getElementById('file-in').click()">📷 导入图片</button>
+      #|<input class='pnum' id='cw' type='number' min='1' max='4096' value='800' title='画布宽（新建 / 改画布用）'/>
+      #|<span class='sep'>×</span>
+      #|<input class='pnum' id='ch' type='number' min='1' max='4096' value='600' title='画布高'/>
+      #|<button onclick='globalThis.__set_canvas()'>改画布</button>
+      #|<button onclick="globalThis.__img_swap('');document.getElementById('file-in').click()">📷 导入图片</button>
       #|<span class='sep'></span>
       #|<button onclick='globalThis.__undo()'>↩ 撤销</button>
       #|<button onclick='globalThis.__redo()'>↪ 重做</button>
@@ -1211,7 +1538,21 @@ async fn on_file_selected() -> Unit {
       _ => "image"
     }
     if b64 != "" {
-      do_import(b64, name)
+      let swap_id = g_swap.val
+      g_swap.val = ""
+      if swap_id != "" {
+        // 原地换图：层序/蒙版/标签/透明度/翻转/旋转都不动（`set-image` 的语义）
+        let r = eng(import_line(swap_id, b64, name))
+        if eng_ok(r) {
+          js_log_line("🖼 已换图（层序与蒙版不变）", "#4a4")
+          eng_render(800)
+          refresh_ui()
+        } else {
+          js_log_line("❌ 换图失败：\{eng_s(r, "error")}", "#f66")
+        }
+      } else {
+        do_import(b64, name)
+      }
     }
   } else {
     let err = match json_get(result, "error") {
@@ -1281,6 +1622,22 @@ pub fn register_globals() -> Unit {
   js_reg1("__group_sel", fn(id : String) { do_group_sel(id) })
   js_reg1("__ungroup_sel", fn(id : String) { do_ungroup_sel(id) })
   js_reg2s("__reparent", fn(id : String, target : String) { do_reparent(id, target) })
+  // 人类侧的可改属性（这一批命令此前只有 AI 走得到，见 PLAN 三十）
+  js_reg1("__img_swap", fn(id : String) { do_img_swap(id) })
+  js_reg2s("__rename", fn(id : String, v : String) { do_rename(id, v) })
+  js_reg2s("__setx", fn(id : String, v : String) { do_set_axis(id, "x", v) })
+  js_reg2s("__sety", fn(id : String, v : String) { do_set_axis(id, "y", v) })
+  js_reg2s("__setw", fn(id : String, v : String) { do_set_axis(id, "w", v) })
+  js_reg2s("__seth", fn(id : String, v : String) { do_set_axis(id, "h", v) })
+  js_reg2s("__rotate", fn(id : String, v : String) { do_rotate(id, v) })
+  js_reg2s("__flip", fn(id : String, axis : String) { do_flip(id, axis) })
+  js_reg2s("__text_set", fn(id : String, v : String) { do_text_set(id, v) })
+  js_reg2s("__text_font", fn(id : String, v : String) { do_text_font(id, v) })
+  js_reg2s("__adj_op", fn(id : String, v : String) { do_adj(id, "op", v) })
+  js_reg2s("__adj_val", fn(id : String, v : String) { do_adj(id, "value", v) })
+  js_reg2s("__tag_add", fn(id : String, v : String) { do_tag_add(id, v) })
+  js_reg2s("__tag_del", fn(id : String, v : String) { do_tag_del(id, v) })
+  js_reg1("__set_canvas", fn(_ : String) { do_set_canvas() })
   js_reg1("__crop_cancel", fn(_ : String) { do_crop_cancel() })
   js_reg2s("__af", fn(op : String, sign : String) {
     let s = js_state_get("strength")
