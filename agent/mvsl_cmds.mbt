@@ -113,8 +113,13 @@ fn mvsl_decode(tok : String) -> Result[@core.EditProgram, String] {
 ///   * `layer=@tag` **落不到任何层** —— 展开后一个算子都不剩，算子在表里、
 ///     跑得通、什么都不改（判据在 core 里只有一份，render 侧同用）；
 ///   * 引用了**不存在的层** —— `program_for_layer` 永远匹配不上，同上；
-///   * `layer=` 与 `STAGE` 基准组合 —— 两段式分段执行后 STAGE 序号不再连续，
-///     放行会取到错的中间缓冲（render 侧另有兜底）。
+///   * `stage:n` 指向**别的段**或**自己/后面那条** —— 两段式分段执行后段内第 n 条
+///     不是表里第 n 条，放行会取到错的中间缓冲（render 侧同一句判据）。
+///
+/// ⚠️ 最后那条必须在 **`layer=@tag` 展开之后**的表上判：一个标签算子展开成
+/// "标签命中几层就几条"，表序会变，而"同段 + 严格在前"正是按表序判的。
+/// 展开前说合法、展开后非法（或反过来）就是同一个判断在两张表上各判一次
+/// ——`render.impact_stages` 里判据也在展开之后，两处口径必须一致。
 fn layer_scope_check(doc : @core.Document, prog : @core.EditProgram) -> String? {
   match @core.tag_scope_error(prog, doc) {
     Some(e) => return Some(e)
@@ -141,7 +146,9 @@ fn layer_scope_check(doc : @core.Document, prog : @core.EditProgram) -> String? 
       )
     }
   }
-  @core.layer_scope_error(prog)
+  // 判据要在**展开后**的同一张表上跑（理由见本函数文档）：入口与唯一渲染实现
+  // 于是判的是同一张表，不会出现"装的进、渲染才拒"。
+  @core.layer_scope_error(@core.expand_layer_scopes(prog, doc))
 }
 
 ///|

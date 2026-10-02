@@ -496,10 +496,11 @@ test "图层级算子：装得进、报得出，引用不存在的层被拒绝�
 }
 
 ///|
-test "STAGE(n>0) 与图层级算子共存：入口拒绝（判据扩到整张表，两头都咬）" {
-  // 判据本轮从"层算子自己写 STAGE"扩到"**表里有 layer= 就算数**"：两段式下
-  // 文档级段的 `stage:n` 只指向**文档级**第 n 条之后，与算子序号口径对不上——
-  // 插一条只改某层的算子会静默换掉后面算子取到的像素（实测坐实）。
+test "stage:n 的入口判据：目标必须**同段**且**严格在前**（跨段、自指都拒）" {
+  // 判据只有一条：`stage:n` 指"表里第 n 条之后的缓冲"，所以第 n 条必须与引用者
+  // 同段（同为文档级，或同为同一个层的算子）、且严格在引用者之前。历史上它先是
+  // 只查"层算子自己写 STAGE"（漏了文档级引用层算子），后来又漏了上界（自指/前视
+  // 放行到执行期才报错）——每漏一次都是"命令面收下了、渲染时才失败"。
   let s = @agent.Session::new()
   let _ = run(s, "session-open full_image")
   let _ = run(s, "new 16 8")
@@ -524,7 +525,9 @@ test "STAGE(n>0) 与图层级算子共存：入口拒绝（判据扩到整张表
   let set = fn(s : @agent.Session, prog : @core.EditProgram) -> String {
     run(s, "mvsl-set \{b64_of(@core.program_to_json(prog))}")
   }
-  // ① 拒绝：层算子自己引用 STAGE(1)
+  // ① 拒绝：层算子引用 STAGE(1) 而表里只有它自己（= 自指，n-1 不小于自己的表序）
+  //    ⚠️ 注意这条现在是**上界**在拒它：同段（都是 l1）成立，但 `stage:1` 指的是
+  //    "第 1 条之后"，而它自己就是第 1 条。
   let e1 = set(s, { ops: [mk("e1", @core.Stage(1), "l1")], guards: [] })
   assert_true(e1.has_prefix("{\"error\":\""), msg=e1)
   assert_true(e1.contains("STAGE"), msg=e1)
@@ -535,7 +538,7 @@ test "STAGE(n>0) 与图层级算子共存：入口拒绝（判据扩到整张表
   })
   assert_true(e2.has_prefix("{\"error\":\""), msg=e2)
   assert_true(e2.contains("文档级"), msg=e2)
-  // ③ 正控：层算子用 STAGE(0)（= 本条算子的输入）→ 装得进
+  // ③ 正控：层算子用 STAGE(0)（= 本段的输入）→ 装得进
   let ok1 = set(s, { ops: [mk("e1", @core.Stage(0), "l1")], guards: [] })
   assert_true(ok1.contains("\"op\":\"mvsl-set\""), msg=ok1)
   // ④ 正控：文档级 STAGE(1) 且**表里第 1 条是文档级**（层算子排在最后）→ 装得进
@@ -547,6 +550,31 @@ test "STAGE(n>0) 与图层级算子共存：入口拒绝（判据扩到整张表
   // ⑤ 正控：纯文档级表的 STAGE(1)（历史行为）→ 装得进
   let ok3 = set(s, { ops: [mk("d1", @core.Base, ""), mk("d2", @core.Stage(1), "")], guards: [] })
   assert_true(ok3.contains("\"op\":\"mvsl-set\""), msg=ok3)
+  // ⑥ 正控（本轮新增的能力）：**同层**、表序在前的 STAGE(1) → 装得进
+  //    此前图层级算子完全不许用 STAGE(n>0)，而文档级算子可以引用更早的文档级
+  //    算子——同一个判据两种处置。规则统一成"同段 + 严格在前"之后放行。
+  let ok4 = set(s, {
+    ops: [mk("l1a", @core.Base, "l1"), mk("l1b", @core.Stage(1), "l1")],
+    guards: [],
+  })
+  assert_true(ok4.contains("\"op\":\"mvsl-set\""), msg=ok4)
+  // ⑦ 负例：**层与层**之间引用 → 拒（同段要求的另一半）
+  let e3 = set(s, {
+    ops: [mk("l1a", @core.Base, "l1"), mk("l2a", @core.Base, "l2"), mk("l1c", @core.Stage(2), "l1")],
+    guards: [],
+  })
+  assert_true(e3.has_prefix("{\"error\":\""), msg=e3)
+  let _ = run(s, "tag l1 both")
+  let _ = run(s, "tag l2 both")
+  // ⑧ 负例（表序被标签展开改掉）：`@both` 命中两层，展开前表里第 2 条是文档级
+  //    算子 d1（旧判据在这里说"合法"），展开后第 2 条成了**层算子** → 必须拒。
+  //    入口与 `render.impact_stages` 现在都在**展开后**的表上判，口径一致。
+  let e4 = set(s, {
+    ops: [mk("t", @core.Base, "@both"), mk("d1", @core.Base, ""), mk("d2", @core.Stage(2), "")],
+    guards: [],
+  })
+  assert_true(e4.has_prefix("{\"error\":\""), msg=e4)
+  assert_true(e4.contains("STAGE"), msg=e4)
 }
 
 ///|

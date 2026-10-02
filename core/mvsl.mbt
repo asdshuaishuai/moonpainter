@@ -250,43 +250,29 @@ pub fn program_layer_ids(p : EditProgram) -> Array[String] {
 }
 
 ///|
-/// 取出**某一图层**的算子子集。
+/// 取出**一个段**的算子（`keep` = 该段算子的 `layer` 值：`""` = 文档级段），
+/// 并把 `stage:n` 从**表序**改写成**段内序号**。
 ///
-/// 不带 guards：保护断言是"针对**最终图**"的约束，统一在文档级段之后检查，
-/// 否则一条"别动人物"的断言会被每一层各判一次，语义就散了。
-pub fn program_for_layer(p : EditProgram, layer_id : String) -> EditProgram {
-  let ops : Array[EditOp] = []
-  for op in p.ops {
-    if op.layer == layer_id {
-      ops.push(op)
-    }
-  }
-  { ops, guards: [] }
-}
-
-///|
-/// 取出**文档级**算子（`layer` 为空）与**全部** guards。
-///
-/// ⚠️ **同时把 `stage:n` 从"表序"改写成"文档级段内序号"**（返回值是直接交给
-/// `pixel.run_program` 跑的段程序，而 `run_program` 的 `Stage(n)` 是**段内**
-/// 下标）。不改写就会**静默指到别的缓冲**：`stage:n` 的声明含义是"**表里**第 n
-/// 条算子之后的中间缓冲"，而层算子被剔出本段之后，段内第 n 条并不是表里第 n 条
-/// ——前面每插一条层算子，取到的缓冲就整体前移一格。
+/// 这是"拆段 + 重编号"的**唯一实现**——文档级段与每个被引用的层段走同一段代码，
+/// 于是"段内第 n 条不是表里第 n 条"只需要在一处处理（两段各写一遍必然有一边先烂）。
+/// 返回值是直接交给 `pixel.run_program` 跑的段程序，而 `run_program` 的 `Stage(n)`
+/// 是**段内**下标：不改写就会**静默指到别的缓冲**——`stage:n` 的声明含义是
+/// "**表里**第 n 条算子之后的中间缓冲"，而别的段的算子被剔出去之后，段内第 n 条
+/// 并不是表里第 n 条（前面每插一条**别段**的算子，取到的缓冲就整体前移一格）。
 ///
 /// 实测（`render/mvsl_render_test.mbt`：表 = 层算子 · a · b · c(`stage:2`)）：
 /// 改写前 `c` 的基准指到 **b** 的输出而不是声明的 **a**，而校验放行、lint 不报、
 /// 渲染照做——正是本仓库最反对的那类"看起来成功了"。
-/// 只看"第 n 条是不是文档级算子"是不够的（判据写窄了），必须**同时**把序号搬进
-/// 本段——这两件事是同一句话的两半。
 ///
-/// `stage:0` 是"**本段的输入**"（单段时 = 底图；本文档级段里 = 层合成结果），
-/// 段内无歧义，原样保留。
-pub fn program_doc_scope(p : EditProgram) -> EditProgram {
-  // 表序（1 基）→ 文档级段内序号（1 基）；非文档级算子填 0（本段用不到）。
+/// 只改写到**与本段同段**的目标上（`p.ops[n-1].layer == keep`）：跨段引用是
+/// `layer_scope_error` 的活（入口、lint、渲染共用同一句），这里原样保留，
+/// 不发明第二种处置。
+fn segment_ops(p : EditProgram, keep : String) -> Array[EditOp] {
+  // 表序（1 基）→ 本段内序号（1 基）；别的段的算子填 0（本段用不到）。
   let seg_no : Array[Int] = []
   let mut next = 0
   for op in p.ops {
-    if op.layer == "" {
+    if op.layer == keep {
       next = next + 1
       seg_no.push(next)
     } else {
@@ -295,13 +281,11 @@ pub fn program_doc_scope(p : EditProgram) -> EditProgram {
   }
   let ops : Array[EditOp] = []
   for op in p.ops {
-    if op.layer == "" {
+    if op.layer == keep {
       let sel = match op.sel.basis {
         Base => op.sel
         Stage(n) => {
-          // 指到层算子/越界的情形 `layer_scope_error` 已拒（入口、lint、渲染
-          // 共用同一句）；这里原样保留，不发明第二种处置。
-          if n > 0 && n <= p.ops.length() && p.ops[n - 1].layer == "" {
+          if n > 0 && n <= p.ops.length() && p.ops[n - 1].layer == keep {
             { ..op.sel, basis: Stage(seg_no[n - 1]) }
           } else {
             op.sel
@@ -311,7 +295,26 @@ pub fn program_doc_scope(p : EditProgram) -> EditProgram {
       ops.push({ ..op, sel })
     }
   }
-  { ops, guards: p.guards }
+  ops
+}
+
+///|
+/// 取出**某一图层**的算子子集（`stage:n` 已重编号到本层段内）。
+///
+/// 不带 guards：保护断言是"针对**最终图**"的约束，统一在文档级段之后检查，
+/// 否则一条"别动人物"的断言会被每一层各判一次，语义就散了。
+pub fn program_for_layer(p : EditProgram, layer_id : String) -> EditProgram {
+  { ops: segment_ops(p, layer_id), guards: [] }
+}
+
+///|
+/// 取出**文档级**算子（`layer` 为空）与**全部** guards（`stage:n` 已重编号到
+/// 文档级段内，理由见 `segment_ops`）。
+///
+/// `stage:0` 是"**本段的输入**"（单段时 = 底图；本文档级段里 = 层合成结果），
+/// 段内无歧义，原样保留。
+pub fn program_doc_scope(p : EditProgram) -> EditProgram {
+  { ops: segment_ops(p, ""), guards: p.guards }
 }
 
 ///|
@@ -343,20 +346,21 @@ pub fn layer_scope_error(p : EditProgram) -> String? {
       Base => ()
       Stage(n) => {
         // `stage:n`（n>0）指向表里**第 n 条算子**之后的缓冲：该条必须存在、
-        // 是文档级算子、且严格在引用者之前。
-        let target_is_doc = if n > 0 && n <= p.ops.length() {
-          let t = p.ops[n - 1]
-          t.layer == ""
+        // **与本引用者同段**（同为文档级算子，或同为同一个层 id 的算子——
+        // `layer=@tag` 在渲染前会先展开成具体层 id，所以这里比的是展开后的值）、
+        // 且**严格在引用者之前**。
+        let same_seg = if n > 0 && n <= p.ops.length() {
+          p.ops[n - 1].layer == op.layer
         } else {
           false
         }
-        // n 是 1 基"第 n 条"：n 条之后的缓冲就是第 n+1 条的输入，所以引用者
+        // n 是 1 基"第 n 条"：第 n 条之后的缓冲就是第 n+1 条的输入，所以引用者
         // （0 基下标 i）允许的范围是 n ≤ i，即 n - 1 < i。
-        let same_segment = op.layer == "" && n > 0 && target_is_doc && n - 1 < i
-        if n > 0 && !same_segment {
+        let ok = same_seg && n - 1 < i
+        if n > 0 && !ok {
           let scope = if op.layer == "" { "文档级" } else { "layer=\{op.layer}" }
           return Some(
-            "算子 \{op.id}（表序 \{i}，\{scope}）用了 STAGE(\{n})：`stage:n` 是\"**表里**第 n 个算子之后的中间缓冲\"，而这张表里有图层级算子——两段式执行下文档级段会把层算子剔出去再跑，段内第 n 条**不是**表里第 n 条（**插一条图层级算子就会静默换掉取到的像素**）。n 还必须严格小于引用者自己的表序（不许前视）。STAGE(0) 表示\"本段的输入\"（放行），要把某一步的中间结果接给后面的算子请改用**同段内、表序在前的文档级算子**——图层级与 STAGE(n>0) 不能共存",
+            "算子 \{op.id}（表序 \{i}，\{scope}）用了 STAGE(\{n})：`stage:n` 一律指\"**表里**第 n 条算子之后的中间缓冲\"，所以第 n 条必须①与引用者**同段**（同为文档级算子，或同为同一个层的算子）②**严格在引用者之前**。跨段引用与自指/前视都在这里拒——两段式执行会把别的段的算子剔出去再跑，段内第 n 条不是表里第 n 条，放行就会静默换掉取到的像素。STAGE(0) 表示\"本段的输入\"（放行）",
           )
         }
       }

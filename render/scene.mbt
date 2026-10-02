@@ -1089,10 +1089,6 @@ pub fn impact_stages(
     }
     return Ok((list, out))
   }
-  match @core.layer_scope_error(prog) {
-    Some(e) => return Err(e)
-    None => ()
-  }
   // `layer=@tag` 的标签作用域：先静态校验（落不到任何层 → 拒绝，不许静默不生效），
   // 再**展开**成具体层 id。展开与 agent 侧的分析命令共用 core 的同一个实现，
   // 于是"这条算子改哪些层"只有一处判断（标签是活的：打/摘标签即改作用范围）。
@@ -1101,6 +1097,14 @@ pub fn impact_stages(
     None => ()
   }
   let prog = @core.expand_layer_scopes(prog, doc)
+  // ⚠️ `stage:n` 的判据必须在**展开之后**跑：一个 `layer=@tag` 的算子展开成
+  // "标签命中几层就几条"，表序会变，而"同段 + 严格在前"正是按表序判的——
+  // 判据看展开前的表、下面 `program_*_scope` 的重编号看展开后的表，就是同一个
+  // 判断在**两张表**上各判一次（展开前说合法、执行时才发现指到别段）。
+  match @core.layer_scope_error(prog) {
+    Some(e) => return Err(e)
+    None => ()
+  }
   // 引用了不存在的层：`program_for_layer` 永远匹配不上，那个算子会**静默失效**
   // （表里有、跑得通、什么都不改）。这里兜底拒绝，agent 入口另有更早的友好报错。
   for id in @core.program_layer_ids(prog) {

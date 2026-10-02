@@ -806,3 +806,119 @@ test "单段路径下 stage:n 的 basis 报告也必须是**真正求值的**那
     msg="不许退化成'报成前一条的输出'（那不是它求值的图）",
   )
 }
+
+///|
+/// 造一条带 `layer` 的 recolor 算子。
+fn layerop(id : String, sel : @core.SelSpec, hue : Double, layer : String) -> @core.EditOp {
+  let o = rprog_layer(sel, hue, layer).ops[0]
+  { ..o, id, sel }
+}
+
+///|
+test "图层级算子也能用 stage:n>0 —— 只要目标在**同一层**且表序在前" {
+  // 上一轮把 `stage:n` 统一成"表序 + 段内重编号"之后，再禁止图层级算子用它就是
+  // 一条**不对称的特例**（同一个判据两种处置）：文档级算子能引用"表里更早的
+  // 文档级算子"，图层级算子却连"本层更早的算子"都引用不了。规则现在只有一条：
+  // 目标必须**同段**且**严格在前**。
+  let env = @render.RenderEnv::new()
+  let doc = two_tone_doc() // l1 左半红、l2 右半蓝
+  // 表：[l1·a1, l1·a2, l1·b(stage:1), doc·x]
+  let a1 = layerop("a1", whole16(), 10.0, "l1")
+  let a2 = layerop("a2", whole16(), 40.0, "l1")
+  let b = layerop("b", { basis: @core.Stage(1), expr: whole16().expr }, 100.0, "l1")
+  let x = docop("x", whole16(), 300.0)
+  let prog : @core.EditProgram = { ops: [a1, a2, b, x], guards: [] }
+  match @core.layer_scope_error(prog) {
+    None => ()
+    Some(e) => abort("同层、表序在前的 STAGE(n>0) 必须放行，却被拒：\{e}")
+  }
+  let (stages, _) = stages_of(doc, env, prog)
+  // 阶段顺序：层算子（l1 三条，按表序）→ 文档级算子
+  assert_eq(stages.length(), 4, msg="3 条 l1 阶段 + 1 条文档级阶段")
+  assert_eq(stages[2].op.id, "b", msg="层内按表序")
+  assert_true(
+    !same_buf(stages[0].after, stages[1].after),
+    msg="判别力自证：a1 与 a2 的输出必须不同，否则'指错了'量不出来",
+  )
+  // `stage:1` = 表里第 1 条之后 = a1 的输出（**不是** b 自己的输入 a2）
+  assert_true(
+    same_buf(stages[2].basis, stages[0].after),
+    msg="图层级 STAGE(1) 必须取到本层段内的 a1 输出",
+  )
+  assert_true(
+    !same_buf(stages[2].basis, stages[1].after),
+    msg="不许退化成'本层前一条的输出'（a2 的输入才是它）",
+  )
+}
+
+///|
+test "跨段的 stage:n 一律拒（文档级↔图层级、层↔层），同段才放行" {
+  // 判据只有一个，但四个方向都要咬得住——**漏报与误报都是 bug**。
+  let g : @core.GeoWindow = { x: 0.0, y: 0.0, w: 16.0, h: 8.0, feather: 0.0 }
+  let geosel : @core.SelSpec = { basis: @core.Base, expr: @core.Atom(@core.Geo(g, "rect")) }
+  let d1 = docop("d1", geosel, 10.0)
+  let l1a = layerop("l1a", geosel, 20.0, "l1")
+  let l2a = layerop("l2a", geosel, 30.0, "l2")
+  let d2 = docop("d2", geosel, 40.0)
+  let stage_sel = fn(n : Int) -> @core.SelSpec {
+    { basis: @core.Stage(n), expr: geosel.expr }
+  }
+  // ①文档级算子 → 图层级目标（表里第 2 条是 l1a）：拒
+  let c1 : @core.EditProgram = { ops: [d1, l1a, docop("d3", stage_sel(2), 50.0)], guards: [] }
+  assert_true(@core.layer_scope_error(c1) is Some(_), msg="文档级引用图层级目标必须拒")
+  // ②图层级算子 → 文档级目标（表里第 1 条是 d1）：拒
+  let c2 : @core.EditProgram = { ops: [d1, layerop("l1b", stage_sel(1), 60.0, "l1")], guards: [] }
+  assert_true(@core.layer_scope_error(c2) is Some(_), msg="图层级引用文档级目标必须拒")
+  // ③l1 的算子 → l2 的算子（表里第 2 条是 l2a）：拒
+  let c3 : @core.EditProgram = {
+    ops: [l1a, l2a, layerop("l1c", stage_sel(2), 70.0, "l1")],
+    guards: [],
+  }
+  assert_true(@core.layer_scope_error(c3) is Some(_), msg="层与层之间也必须拒")
+  // 正控：同段（都是文档级）引用更早那条 → 放行
+  let ok1 : @core.EditProgram = { ops: [d1, d2, docop("d4", stage_sel(1), 80.0)], guards: [] }
+  assert_true(@core.layer_scope_error(ok1) is None, msg="同段引用放行（判据不许写宽）")
+  // 正控：同层（都是 l1）引用更早那条 → 放行
+  let ok2 : @core.EditProgram = {
+    ops: [l1a, layerop("l1d", geosel, 90.0, "l1"), layerop("l1e", stage_sel(1), 95.0, "l1")],
+    guards: [],
+  }
+  assert_true(@core.layer_scope_error(ok2) is None, msg="同层引用放行")
+  // 正控：stage:0（本段输入）在两种段里都放行
+  assert_true(
+    @core.layer_scope_error({ ops: [layerop("l1f", stage_sel(0), 11.0, "l1")], guards: [] }) is None,
+    msg="stage:0 恒放行",
+  )
+}
+
+///|
+test "标签展开会改表序：stage:n 的判据必须在**展开后**的同一张表上跑" {
+  // 表：[标签算子(@both), docA, docC(stage:2)]，而 @both 命中两层。
+  // 展开前：表里第 2 条是 docA（文档级）→ 判据说"合法"。
+  // 展开后：@both 变成两条层算子，表里第 2 条成了**层算子** → 按"同段"规则非法。
+  // 判据必须看展开后的表（与下面做重编号的那张表是同一张），否则就是同一个判断
+  // 在两张表上各判一次：入口/这里说合法、执行时才发现指到别段。
+  let base = two_tone_doc()
+  let doc = tag_only(tag_only(base, "l1", "both"), "l2", "both")
+  let tagop = layerop("t", whole16(), 20.0, "@both")
+  let da = docop("da", whole16(), 30.0)
+  let dc = docop("dc", { basis: @core.Stage(2), expr: whole16().expr }, 40.0)
+  let prog : @core.EditProgram = { ops: [tagop, da, dc], guards: [] }
+  // 展开前的表（`layer_scope_error` 单独看它）确实判"合法"——这正是要修的口径
+  assert_true(
+    @core.layer_scope_error(prog) is None,
+    msg="前提：展开前的表序上，第 2 条是文档级算子，单看它判合法",
+  )
+  // 而唯一渲染实现必须在**展开后**判它非法，并给出**共用判据**的话
+  let env = @render.RenderEnv::new()
+  match @render.render_doc_with(doc, env, prog) {
+    Ok(_) => abort("展开后 stage:2 指向层算子，必须拒（否则就是静默取到别段的缓冲）")
+    Err(e) => {
+      assert_true(e.contains("STAGE(2)"), msg="报错要回显 n：\{e}")
+      assert_true(
+        e.contains("同段") || e.contains("严格在引用者之前"),
+        msg="这里要出**共用判据**的话，而不是执行器的\"拒绝前视引用\"：\{e}",
+      )
+    }
+  }
+}

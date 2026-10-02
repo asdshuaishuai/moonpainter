@@ -246,10 +246,13 @@ MUTS = [
     ),
     (
         "R9",
-        "program_for_layer 不按图层过滤（图层级算子漏到所有层上）",
+        "program_for_layer 取错段（层段拿到文档级算子 → 这条层的算子一个都不跑）",
         "core/mvsl.mbt",
-        '    if op.layer == layer_id {\n      ops.push(op)',
-        '    if op.layer != "" {\n      ops.push(op)',
+        '''pub fn program_for_layer(p : EditProgram, layer_id : String) -> EditProgram {
+  { ops: segment_ops(p, layer_id), guards: [] }''',
+        '''pub fn program_for_layer(p : EditProgram, layer_id : String) -> EditProgram {
+  let _keep = layer_id
+  { ops: segment_ops(p, ""), guards: [] }''',
         "killed",
     ),
     (
@@ -1502,9 +1505,9 @@ MUTS = [
         "U21",
         "文档级 STAGE(n>0) 与图层级算子共存被放行（两段式下静默换掉取到的像素）",
         "core/mvsl.mbt",
-        """        let same_segment = op.layer == "" && n > 0 && target_is_doc && n - 1 < i
-        if n > 0 && !same_segment {""",
-        """        let same_segment = true
+        """        let ok = same_seg && n - 1 < i
+        if n > 0 && !ok {""",
+        """        let ok = true
         if false {""",
         "killed",
     ),
@@ -1678,11 +1681,47 @@ MUTS = [
         "killed",
     ),
     (
+        "Z5",
+        "入口判据改回**展开前**的表（标签展开会改表序 → 入口说合法、渲染才拒）",
+        "agent/mvsl_cmds.mbt",
+        '''  @core.layer_scope_error(@core.expand_layer_scopes(prog, doc))''',
+        '''  @core.layer_scope_error(prog)''',
+        "killed",
+    ),
+    (
+        "Z6",
+        "渲染侧判据搬回**展开前**（判据看一张表、重编号看另一张表）",
+        "render/scene.mbt",
+        '''  let prog = @core.expand_layer_scopes(prog, doc)
+  // ⚠️ `stage:n` 的判据必须在**展开之后**跑：一个 `layer=@tag` 的算子展开成
+  // "标签命中几层就几条"，表序会变，而"同段 + 严格在前"正是按表序判的——
+  // 判据看展开前的表、下面 `program_*_scope` 的重编号看展开后的表，就是同一个
+  // 判断在**两张表**上各判一次（展开前说合法、执行时才发现指到别段）。
+  match @core.layer_scope_error(prog) {
+    Some(e) => return Err(e)
+    None => ()
+  }''',
+        '''  match @core.layer_scope_error(prog) {
+    Some(e) => return Err(e)
+    None => ()
+  }
+  let prog = @core.expand_layer_scopes(prog, doc)''',
+        "killed",
+    ),
+    (
+        "Z4",
+        "stage:n 判据丢掉\"同段\"要求（跨段引用被放行 → 取到别段的缓冲）",
+        "core/mvsl.mbt",
+        '''        let ok = same_seg && n - 1 < i''',
+        '''        let ok = n - 1 < i''',
+        "killed",
+    ),
+    (
         "Z3",
         "stage:n 的静态判据丢掉上界（自指/前视变成校验放行、渲染才失败）",
         "core/mvsl.mbt",
-        '''        let same_segment = op.layer == "" && n > 0 && target_is_doc && n - 1 < i''',
-        '''        let same_segment = op.layer == "" && n > 0 && target_is_doc''',
+        '''        let ok = same_seg && n - 1 < i''',
+        '''        let ok = same_seg''',
         "killed",
     ),
     ]
