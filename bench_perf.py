@@ -54,7 +54,15 @@ def run_cli(cmds, label):
 
 
 def bench(build, tail, label, reps):
-    """重复 reps 次，返回中位秒数与原始样本。"""
+    """**丢弃一轮预热**后重复 reps 次，返回中位秒数与原始样本。
+
+    为什么必须有预热轮：`moon run` 第一次会把构建缓存检查/装载的代价算进去，
+    实测同一个 1 层用例两次得到 **9.28s 与 1.23s**（差 7.5 倍），而「2 次取中位」
+    在这种情况下等于取平均——据此推出的"1 层 5.25s ⇒ 12MP<2s 不成立"、
+    "每层边际 0.43s"全是冷启动的账。**先扔掉一轮，再报 3 次的离散度**，
+    离散度大就明说这次测量不可信（同 `selfcheck` 那条：先验测量前提）。
+    """
+    run_cli(build() + tail, label + "（预热，丢弃）")
     ts = []
     for _ in range(reps):
         dt, _ = run_cli(build() + tail, label)
@@ -62,7 +70,11 @@ def bench(build, tail, label, reps):
             return None, []
         ts.append(dt)
     med = statistics.median(ts)
-    print(f"  {label:34s} {['%.2f' % x for x in ts]}  中位 {med:.2f}s")
+    spread = (max(ts) - min(ts)) / med if med > 0 else 0.0
+    note = ""
+    if spread > 0.25:
+        note = f"  ⚠️ 离散度 {spread * 100:.0f}%（这次测量不可信，别写进文档）"
+    print(f"  {label:34s} {['%.2f' % x for x in ts]}  中位 {med:.2f}s{note}")
     return med, ts
 
 
@@ -151,7 +163,7 @@ def _prog_offscreen(W, n_ops):
 # 实验二：12MP 渲染证伪线（PLAN-MVSL §5 / DESIGN 边界节）
 # ---------------------------------------------------------------------------
 
-def m2(reps=2):
+def m2(reps=3):
     W, H = 4000, 3000  # 12 MP
 
     def build(nl, mask):

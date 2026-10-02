@@ -61,6 +61,20 @@ pub fn RenderEnv::new() -> RenderEnv {
 }
 
 ///|
+/// 2×2 子采样的四个偏移。**放在循环外一份**：原先它写在最内层循环里，
+/// 每个像素新建一个数组——12MP 渲染 = 每次 1200 万次分配（实测这是 12MP
+/// 渲染的主要开销，见 PLAN 三十四）。数值与顺序一字未改。
+///
+/// 它必须与判据的"每像素 N 格"约定一致，所以格数取自这个数组的**长度**、
+/// 别处不写死 4。
+let subsample_2x2 : Array[(Double, Double)] = [
+  (0.25, 0.25),
+  (0.75, 0.25),
+  (0.25, 0.75),
+  (0.75, 0.75),
+]
+
+///|
 /// 设备坐标 → 层局部坐标（含绕层中心的逆旋转）。
 pub fn to_local(
   l : @core.Layer,
@@ -387,6 +401,9 @@ fn paint_layer(
   } else {
     None
   }
+  // 取样色缓冲**循环外一份、每像素覆写**（原先每像素新建动态数组 + 4 次
+  // push，容量还一路长）。每像素都恰好写满全部格，判据读的也是这些格。
+  let sample_scratch : FixedArray[Int] = FixedArray::make(subsample_2x2.length(), 0)
   let mut py = py0
   while py < py1 {
     let mut px = px0
@@ -394,14 +411,8 @@ fn paint_layer(
       // 2×2 子采样
       let mut fill_hits = 0
       let mut stroke_hits = 0
-      let samples = [
-        (0.25, 0.25),
-        (0.75, 0.25),
-        (0.25, 0.75),
-        (0.75, 0.75),
-      ]
-      let sample_colors : Array[Int] = []
-      for s in samples {
+      let sample_colors = sample_scratch
+      for i, s in subsample_2x2 {
         let (lx, ly) = to_local(
           l,
           px.to_double() + s.0,
@@ -410,7 +421,7 @@ fn paint_layer(
         let stroke_in = inside_stroke(l, lx, ly)
         if stroke_in {
           stroke_hits = stroke_hits + 1
-          sample_colors.push(l.stroke.color)
+          sample_colors[i] = l.stroke.color
         } else if inside_fill(l, lx, ly) {
           fill_hits = fill_hits + 1
           let color = match l.kind {
@@ -422,9 +433,9 @@ fn paint_layer(
             }
             _ => fill_color_at(l.fill, lx, ly, l.w, l.h)
           }
-          sample_colors.push(color)
+          sample_colors[i] = color
         } else {
-          sample_colors.push(0x00000000)
+          sample_colors[i] = 0x00000000
         }
       }
       let (cover, color) = subsample_result(fill_hits, stroke_hits, sample_colors)
@@ -892,7 +903,7 @@ fn clamp8(v : Int) -> Int {
 fn subsample_result(
   fill_hits : Int,
   stroke_hits : Int,
-  colors : Array[Int],
+  colors : FixedArray[Int],
 ) -> (Int, Int) {
   let hits = fill_hits + stroke_hits
   if hits == 0 {
@@ -900,12 +911,8 @@ fn subsample_result(
   }
   let mut color = 0x00000000
   let mut got = false
-  for c in colors {
-    if c != 0x00000000 || got {
-      // 取第一个命中色（stroke 优先已按序 push）
-    }
-  }
-  // 简化：第一个非零覆盖样本
+  // 第一个不透明样本（stroke 优先已按序写格）。原先这里还有一个**空体循环**
+  // （`if … { }`，什么都不做），每个像素白跑 4 次——顺手删掉。
   for c in colors {
     if (c & 0xFF000000) != 0 {
       color = c

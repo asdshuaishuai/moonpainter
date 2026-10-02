@@ -69,6 +69,9 @@ fi
 
 echo "== 2/13 moon test --target native =="
 run_quiet moon test --target native
+# 留下条数给文档对账（README 首页写着具体条数）：**散文里的数字必须有人管**，
+# 实测它写着"native 192 项"而当时已经 283 项，没有任何东西会红。
+cp "$OUT/step.log" "$OUT/native-tests.log"
 
 echo "== 3/13 wasm-gc 可检 + 测试（引擎纯字节进出的背书） =="
 # wasm-gc 的 check 也要查 warning：铁律 1 的"0 error / 0 warning"不分 target。
@@ -81,6 +84,7 @@ if echo "$WASM_CHECK" | grep -q "Warning"; then
   exit 1
 fi
 run_quiet moon test --target wasm-gc
+cp "$OUT/step.log" "$OUT/wasm-tests.log"
 
 echo "== 4/13 CLI 子进程端到端（含蒙版参数面：毛边 / 部分更新 / 容器契约档位） =="
 # 生成最小 2×2 RGBA PNG（python3 标准库，zlib+struct 手工构造）作为位图资产
@@ -538,8 +542,15 @@ PYEOF
 # 里面的数字是当时的记录，改它等于篡改历史。
 # 路径走 argv：`<<'PYD'` 是引号 heredoc，块里的 $OUT **不会**被 shell 展开
 # （上一版就栽在这：FileNotFoundError: '$OUT/cmdlist.txt'）
+# 实际测试条数（上面两步留下的日志）→ 交给对账脚本核 README 首页的声明。
+# 读不出来就**判失败**（读不出来 = 这块对账没了，而汇总照旧好看）。
+NATIVE_N=$(sed -n 's/^Total tests: \([0-9]*\),.*/\1/p' "$OUT/native-tests.log" | tail -1)
+WASM_N=$(sed -n 's/^Total tests: \([0-9]*\),.*/\1/p' "$OUT/wasm-tests.log" | tail -1)
+test -n "$NATIVE_N" && test -n "$WASM_N" || { echo "FAIL: 读不出测试条数（$OUT/native-tests.log / wasm-tests.log）"; exit 1; }
+export NATIVE_N WASM_N
+
 python3 - "$OUT/cmdlist.txt" <<'PYD'
-import ast, re, sys
+import ast, os, re, sys
 n = len([l for l in open(sys.argv[1], encoding='utf-8') if l.strip()])
 bad = []
 DOCS = ('README.md', 'DESIGN.md', 'AGENTS.md')
@@ -607,17 +618,63 @@ else:
 
 # ── README 声明的 verify.sh 步数 + 该节编号清单项数 ──────────────────────
 rm = open('README.md', encoding='utf-8').read()
-m = re.search(r'`\./verify\.sh`\s*(\d+)\s*步', rm)
-if not m:
+# 步数声明：**每一处**都要核（原先只核第一处），且要认**中文数字**——
+# 首页那句写的是"`./verify.sh` 八步验证门全过"，而正则只认 \d+，
+# 于是它从缝里漏过去、步数从 8 变 13 也没人红。
+CN_DIGIT = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5,
+            '六': 6, '七': 7, '八': 8, '九': 9, '十': 10}
+def cn2int(t):
+    if t in CN_DIGIT:
+        return CN_DIGIT[t]
+    if t.startswith('十'):
+        return 10 + CN_DIGIT.get(t[1:], 0)
+    if '十' in t:
+        a, b = t.split('十')
+        return CN_DIGIT[a] * 10 + (CN_DIGIT.get(b, 0) if b else 0)
+    return None
+claims = list(re.finditer(r'`\./verify\.sh`[^\n]{0,4}?([0-9]+|[一二三四五六七八九十]+)\s*步', rm))
+if not claims:
     bad.append('README 没有「`./verify.sh` N 步」的步数声明（数不出来 = 没在核对）')
 else:
-    if int(m.group(1)) != scripts['verify.sh'][0]:
-        bad.append('README 写 verify.sh %s 步，实际 %d 步' % (m.group(1), scripts['verify.sh'][0]))
+    for m in claims:
+        got = int(m.group(1)) if m.group(1).isdigit() else cn2int(m.group(1))
+        if got != scripts['verify.sh'][0]:
+            bad.append('README 写 verify.sh %s 步（「%s」），实际 %d 步'
+                       % (m.group(1), m.group(0), scripts['verify.sh'][0]))
+    # 编号清单要锚在**那份声明后面真跟着清单**的那一处：首页横幅也写着
+    # "`./verify.sh` 十三步验证门全过"，但它后面没有清单（原先只匹配数字，
+    # 首页的中文数字漏过去了，所以从没暴露这个歧义）。
+    def _section_items(after):
+        t = rm[after:]
+        t = t[:t.find('\n## ')] if '\n## ' in t else t
+        return re.findall(r'^\d+\. ', t, re.M)
+    m = claims[0]
+    items = _section_items(m.end())
+    for c in claims:
+        cand = _section_items(c.end())
+        if len(cand) > len(items):
+            m, items = c, cand
     sec = rm[m.end():]
     sec = sec[:sec.find('\n## ')] if '\n## ' in sec else sec
     items = re.findall(r'^\d+\. ', sec, re.M)
     if len(items) != scripts['verify.sh'][0]:
         bad.append('README 的验证门清单列了 %d 项，而 verify.sh 有 %d 步' % (len(items), scripts['verify.sh'][0]))
+
+# ── 测试条数（**按文件各扫一遍**）────────────────────────────────────
+# 实测 README 首页写着"native 192 项 / wasm-gc 190 项"而当时已 283/281，
+# 没有任何东西会红——散文里的数字又一个没人管的。
+# ⚠️ 这条判据**不许**放进下面那个逐行循环里：那里 `rm` 是 README 全文，
+# 于是每读一行就把 README 重扫一遍，报出上百条重复、还把行号/文件名安到
+# 别的文档头上（实测第一版就报"DESIGN.md 写了…"几十遍）。判据自己说错话
+# 比不判更坏。
+_real_n = int(os.environ['NATIVE_N'])
+_real_w = int(os.environ['WASM_N'])
+for _path in DOCS:
+    for m in re.finditer(r'native\s*([0-9]+)\s*项\s*/\s*wasm-gc\s*([0-9]+)\s*项',
+                         open(_path, encoding='utf-8').read()):
+        if int(m.group(1)) != _real_n or int(m.group(2)) != _real_w:
+            bad.append('%s 写「native %s 项 / wasm-gc %s 项」，实际 native %d / wasm-gc %d'
+                       % (_path, m.group(1), m.group(2), _real_n, _real_w))
 
 for path in DOCS:
     # 自动维护的进度区块（deepgit）**不是承诺**：里面有时间戳、提交标题、乃至
