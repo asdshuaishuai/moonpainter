@@ -26,21 +26,22 @@ run_quiet() {
 
 # 步骤 slug 映射（散文里引用步骤用 `build_demo.sh#doc-tools` 这种形态；
 # 编号会随插入步骤错位）。verify.sh 第 8 步的文档数字对账会核这张表。
-# step-slugs: 1=wasm 2=demo-js 3=dist 4=node-headless 5=sdk-smoke 6=html-wiring 7=doc-tools 8=demo-test
+# step-slugs: 1=wasm 2=demo-js 3=dist 4=node-headless 5=clickthrough 6=sdk-smoke 7=html-wiring 8=doc-tools 9=demo-test
 
-echo "== 1/8 引擎 wasm 构建 =="
+echo "== 1/9 引擎 wasm 构建 =="
 run_quiet moon build --target wasm
 
-echo "== 2/8 demo（MoonBit js 后端）构建 =="
+echo "== 2/9 demo（MoonBit js 后端）构建 =="
 run_quiet moon build --target js
 
-echo "== 3/8 组装 dist/ =="
+echo "== 3/9 组装 dist/ =="
 rm -rf dist
 mkdir -p dist
 cp _build/wasm/release/build/wasm/wasm.wasm dist/moonpainter.wasm 2>/dev/null ||
   cp _build/wasm/debug/build/wasm/wasm.wasm dist/moonpainter.wasm
 cp _build/js/release/build/demo/demo.js dist/demo.js 2>/dev/null ||
   cp _build/js/debug/build/demo/demo.js dist/demo.js
+cp demo/clickthrough.mjs dist/clickthrough.mjs
 cat > dist/index.html << 'HTML'
 <!doctype html>
 <html lang="zh-CN">
@@ -55,7 +56,7 @@ cat > dist/index.html << 'HTML'
 HTML
 ls -la dist | awk 'NR>1 {print $5, $9}'
 
-echo "== 4/8 Node headless 自检（mock 模型 × wasm 引擎） =="
+echo "== 4/9 Node headless 自检（mock 模型 × wasm 引擎） =="
 cd dist
 NODE_OUT=$(node demo.js)
 echo "$NODE_OUT" | python3 -c "
@@ -66,9 +67,31 @@ assert d.get('engine_ok') is True, d
 assert d.get('version'), d
 print('headless selftest OK:', d)
 "
+echo "== 5/9 人类面点击穿透（真的 demo.js + 最小 DOM 壳，直接调页面处理器） =="
+# 为什么值得单列一步：处理器那一层此前只有**源码级**证据（名字注册了、HTML 里
+# 有按钮），"点了到底动不动引擎、动得对不对"只有人在浏览器里点得出来。
+# 这里用哑 DOM 壳加载构建产物，调 `__poly_finish`/`__shape_ready`/`__rename`
+# 这些页面处理器，再从引擎把状态**读回来**逐条断言。
+# 它验的是「处理器 → do_* → 引擎」这条链；**DOM 本身的正确性仍需浏览器**。
+CT_OUT=$(node clickthrough.mjs)
+echo "$CT_OUT" | python3 -c "
+import json, sys
+# 驱动器会打出**两行** JSON：demo.js 自己的 headless 自检（import 时执行 main）
+# 加穿透报告。取带 clickthrough 字段的那一行——按行号取会在 demo.js 多打一行
+# 时静默解析错东西。
+lines = [l for l in sys.stdin.read().split('\n') if l.strip()]
+d = json.loads([l for l in lines if '\"clickthrough\"' in l][-1])
+if not d.get('clickthrough'):
+    bad = [c for c in d['checks'] if not c['ok']]
+    print('FAIL: 点击穿透有 %d 条不过' % len(bad))
+    for c in bad:
+        print('  -', c['name'], '|', c['extra'][:200])
+    sys.exit(1)
+print('点击穿透 OK（%d 条断言：逐点形状/拖拽形状/点数下界/改名改坐标改标签/坏输入/重渲染）' % d['total'])
+"
 cd ..
 
-echo "== 5/8 npm SDK 冒烟（多会话 + 渲染 + 容器） =="
+echo "== 6/9 npm SDK 冒烟（多会话 + 渲染 + 容器） =="
 cp _build/wasm/debug/build/wasm/wasm.wasm npm/moonpainter-sdk/moonpainter.wasm
 cd npm/moonpainter-sdk
 node --input-type=module -e "
@@ -107,7 +130,7 @@ console.log('NPM SDK SMOKE OK: multi-session + render + save/open round-trip all
 "
 cd ../..
 
-echo "== 6/8 页面接线：HTML 引用的每个处理器的名字都出现过在注册表里（含经参数传进拼 HTML helper 的） =="
+echo "== 7/9 页面接线：HTML 引用的每个处理器的名字都出现过在注册表里（含经参数传进拼 HTML helper 的） =="
 # 运行时那条测试（demo_test「页面接线」）比这条强——它拿的是**真的拼出来的
 # HTML**。但它只覆盖静态骨架 `app_html()`；图层列表与属性面板是
 # `sb.write_string(...)` **动态拼**出来的，那段 HTML 只有在浏览器里点开某个
@@ -124,7 +147,16 @@ for path in glob.glob('demo/*.mbt'):
         stripped = line.lstrip()
         if stripped.startswith('//'):
             continue                      # 注释里的示例不算引用
-        refs.update(re.findall(r'globalThis\.(__[A-Za-z_][A-Za-z_0-9]*)', line))
+        # `globalThis.__x = …` 是**定义**（有些处理器就是从注入的 JS 里挂上去的，
+        # 比如 headless 测试钩子），别把它算成引用。
+        # ⚠️ 别写成 `(__\w*)(?!\s*=)`：负向前瞻会逼正则**回溯**，把名字截短一个
+        # 字符好让断言成立——实测它把 `__headless_exec` 读成 `__headless_exe`
+        # 并据此报"引用了没注册的处理器"。**判据自己念错名字**比不判更坏。
+        for m in re.finditer(r'globalThis\.(__[A-Za-z_][A-Za-z_0-9]*)(\s*=)?', line):
+            if m.group(2):
+                regs.add(m.group(1))
+            else:
+                refs.add(m.group(1))
         # 处理器名也可能是**经参数**传进拼 HTML 的辅助函数的
         # （`txt_input(…, "__rename", …)`）——那时源码里只有裸字符串字面量、
         # 没有 `globalThis.` 前缀。只扫前者会漏掉**整整一类**：实测新加的一批
@@ -139,7 +171,7 @@ if missing:
 print('页面接线 OK（%d 个处理器引用全部有注册）' % len(refs))
 PYW
 
-echo "== 7/8 文档里的工具数、AI/人类两条边界与实际一致（数字漂了就红） =="
+echo "== 8/9 文档里的工具数、AI/人类两条边界与实际一致（数字漂了就红） =="
 # 实测踩过：给工具面加了 3 个工具，`grep -c "make_tool("` 数出 52 ——
 # 那个数里含 `fn make_tool(` **函数定义本身**，真实是 51，于是 README/AGENTS
 # 被写错。文档里的数字是"我们做到了多少"的承诺（铁律 3），不能靠手数。
@@ -206,7 +238,7 @@ PYD
 # ③ 每条必须写理由（空理由 = 没做过的决定）；④ 散文里的条数要对得上。
 run_quiet python3 ui_audit.py
 
-echo "== 8/8 demo 测试（工具面 + MVSL 闭环可达；需 Node） =="
+echo "== 9/9 demo 测试（工具面 + MVSL 闭环可达；需 Node） =="
 # 这条守住"引擎有能力"与"产品里的 AI 用得上"之间的缝：mock 模型经真实
 # tool provider 驱动真实 wasm 引擎，跑完整 MVSL 闭环（普查→试选→装表→
 # 影响/断言→渲染），并断言图像类回包走附件。

@@ -426,12 +426,15 @@
                                 # （含 save→open 往返）+ 页面接线源码核对 + demo 测试
                                 # （工具面与 MVSL 闭环可达，需 Node；
                                 # 含 undispatched_tools 工具面自检、HTML 接线自检）
-                                # **页面接线的三层**：demo_test 拿真的拼出来的
+                                # **页面接线的四层**：demo_test 拿真的拼出来的
                                 # 骨架 HTML 查处理器与 id；`panel_html_wbtest` 直接调
                                 # `layers_html`/`props_html`（这两段已提成**纯函数**）
                                 # 断言动态拼出来的列表/面板里有该出现的按钮与选中态
                                 # ——纯函数里**不许再调引擎**，一调测试就 panic；
-                                # build_demo.sh#html-wiring 兜另一半（名字都已注册）。
+                                # build_demo.sh#html-wiring 兜名字都已注册；
+                                # build_demo.sh#clickthrough 用哑 DOM 壳加载真的
+                                # demo.js 调处理器，再从引擎读回状态断言
+                                # （**DOM 本身仍需浏览器**，壳只保证跑得下去）。
                                 # build_demo.sh#doc-tools 文档工具数 + 边界自洽：README 与 AGENTS 里
                                 # 写的工具数必须与 paint_tool_defs 一致；README
                                 # 里 unreachable 标记之间那份"AI 够不着"的名单

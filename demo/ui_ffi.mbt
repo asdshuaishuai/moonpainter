@@ -442,6 +442,14 @@ extern "js" fn js_canvas_cursor(tool : String) -> Unit =
   #| }
 
 ///|
+/// **headless（Node）专用**：把引擎的命令行入口暴露给驱动器。
+/// 为什么必须有它：没有这个钩子，"点击穿透"（`demo/clickthrough.mjs`）就只能
+/// 断言"调用没抛异常"——那等于没验。有了它才能从引擎把状态读回来，
+/// 断言"点了处理器之后引擎里真的多了/改了什么"。
+extern "js" fn js_expose_exec(f : (String) -> String) -> Unit =
+  #| (f) => { globalThis.__headless_exec = f; }
+
+///|
 /// 逐点绘制的预览（空串 = 隐藏）。点是**画布坐标**，换算成显示坐标由 JS 做
 /// （缩放/适配窗口都在那一侧）。
 extern "js" fn js_poly_preview(pts : String) -> Unit =

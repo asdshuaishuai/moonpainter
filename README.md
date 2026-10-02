@@ -110,7 +110,9 @@ EOF
 
 ```bash
 ./build_demo.sh          # 构建 wasm + demo.js + index.html → dist/ + Node headless 自检
-                         # + npm SDK 冒烟 + demo 测试（工具面与 MVSL 闭环可达）
+                         # + **人类面点击穿透**（哑 DOM 壳加载真的 demo.js，直接调
+                         #   页面处理器，再从引擎读回状态逐条断言）+ npm SDK 冒烟
+                         # + 页面接线核对 + 两条边界对账 + demo 测试
 cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
 ```
 

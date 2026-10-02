@@ -1975,6 +1975,13 @@ fn main {
       "engine_ok": ok_val,
       "version": ver_val,
     })
+    // 人类面的**处理器表**在 headless 里也挂上：`demo/clickthrough.mjs` 直接调
+    // `globalThis.__poly_finish()` 这些页面处理器，验的是"处理器 → do_* → 引擎"
+    // 整条链。此前这条链只有源码级证据（名字对得上、HTML 里有这个按钮），
+    // "点了到底动不动引擎、动得对不对"只有人在浏览器里点得出来。
+    // 顺带把引擎入口暴露出去，好让驱动器把状态**读回来**断言。
+    register_globals()
+    js_expose_exec(fn(line : String) { engine_exec_line(line) })
     println(result.stringify())
   } else {
     // 浏览器：同步初始化（无 async 运行时依赖）
