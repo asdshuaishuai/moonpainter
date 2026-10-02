@@ -297,7 +297,16 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
   11 个算子；每个算子的可调数值**有取值范围**——brightness/contrast/saturation/
   warm 是 -1..1，blur/sharpen/smooth/whiten/vignette 是 0..1，invert/grayscale
   **没有数值**（渲染器不读 value，给了入口直接拒绝）；范围与清单是
-  `agent/session.mbt` 的 `adjust_spec` **一张表**，字典描述与错误提示都从它生成），
+  `agent/session.mbt` 的 `adjust_spec` **一张表**，字典描述与错误提示都从它生成）。
+  **调整层自己的蒙版也生效**（此前 `add-mask` 收得下、`lint` 一个字不说、而渲染
+  **逐位不变**——三种信号自相矛盾，属铁律 6 那一类）：`p' = lerp(p, op(p), cover)`，
+  复用编辑表那句唯一的软混合原语 `@pixel.lerp_argb`（软权重只有一处实现）。
+  窗口是**蒙版支撑窗**（bbox 外扩 `roughen`；`invert` 与退化蒙版退回整幅）；
+  邻域算子（blur/sharpen/smooth）先在 scratch 上整幅算完再按覆盖度混合——就地做
+  会把已经改过的像素当邻居（**不按算子分类**是有意的：分派表已经有一份"哪些是
+  邻域"，再抄一张清单必然先烂），代价是这条路上多一次整幅拷贝（12MP ≈ 48MB）。
+  覆盖度恰好 1 处走直通 ⇒ "蒙版盖满整幅"与"没有蒙版"逐位相同；**没有蒙版的调整层
+  逐位等于旧实现**（既有 golden 一个像素都没动），
   可反复编辑参数的独立调整层（levels/curves/hue_sat 面板）仍未做；
   **文本层**做了 **ASCII 点阵字形**（无 CJK、无字体文件）。
 - **仍未做**：贝塞尔、图层样式 fx、多色渐变/径向渐变；
@@ -405,6 +414,12 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
   `STAGE(0)`，`lint` 另有 P4 兜底；
 - 填充/描边颜色是 `0xAARRGGBB`，alpha **真的参与混合**（`paint_layer` 里若写成
   `color & 0x00FFFFFF` 就会静默丢掉它——这曾经是真实缺陷，见 PLAN 补遗 7 第八节）；
+- **组（Group）上的蒙版仍不生效**：渲染器对组只递归子层、组自身无面，所以
+  `add-mask` 装到组上同样是"收得下、画面不变"（`pick` 也照渲染器一样不读它，
+  两处一致）。给组一个蒙版要先把组合成到自己的缓冲再整体乘覆盖度，属于**渲染
+  架构**的改动（与"组 opacity"同一个坑），留作后续；**在做到之前，这种状态由
+  `lint_doc` 报出来**（`P2 noop 组 … 上的蒙版不生效`）——命令面收得下而画面不变
+  的状态，必须有人说话（铁律 6）；
 - 栅格蒙版（画笔涂抹）与 live mask（引用下层 alpha，DESIGN §1 引的 Photoshop 做法）
   均未实现，蒙版只有几何形态。几何蒙版支持 `feather` 边缘羽化，但它是**线性**
   过渡且过渡带在**内侧**（边界处覆盖 0，向内 feather 像素到满覆盖），不是
@@ -552,7 +567,7 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
   | 10 层 + 软蒙版 | 6.17 s | **1.24 s** | −80% |
 
   每层边际 **0.55 s → 0.08 s**、**软蒙版边际 0.53 s → 0.11 s**，像素逐位未变
-  （291 条测试含 golden sha256 全绿）。
+  （300 条测试含 golden sha256 全绿）。
 
   **圆角矩形随后也进来了**（同一个内接盒，各边再内缩半径）：半径的**夹取**
   提成了一处实现（`clamped_radius`，渲染器 `in_rounded_rect` 与快速路径共用

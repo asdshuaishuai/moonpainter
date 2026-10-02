@@ -595,8 +595,9 @@ fn paint_layer(
       return
     }
     @core.ShapeKind::Adjust => {
-      // 调整层：对当前缓冲（其下全部可见层的合成结果）就地施加算子
-      apply_adjust(l.adjust, buf)
+      // 调整层：对当前缓冲（其下全部可见层的合成结果）施加算子；
+      // **蒙版在这里生效**（按覆盖度软混合，见 `apply_adjust_layer`）
+      apply_adjust_layer(l, buf)
       return
     }
     @core.ShapeKind::Text => {
@@ -919,57 +920,134 @@ fn apply_adjust(a : @core.Adjust?, buf : @codec.RgbaBuf) -> Unit {
 }
 
 ///|
+/// 蒙版**支撑窗**（覆盖度可能 > 0 的像素范围，左闭右开、已夹到画布）。
+/// 保守取法：蒙版 bbox 外扩 `roughen`（毛边的噪声偏移最多能把覆盖度甩出形状
+/// `roughen` 个像素），`invert`（区域无界）与退化蒙版（w/h ≤ 0）一律退回整幅。
+fn mask_support_box(l : @core.Layer, buf : @codec.RgbaBuf) -> (Int, Int, Int, Int) {
+  let all = (0, 0, buf.width, buf.height)
+  let m = match l.mask {
+    Some(m) => m
+    None => return all
+  }
+  if m.invert || m.w <= 0.0 || m.h <= 0.0 {
+    return all
+  }
+  let slack = m.roughen.ceil() + 1.0
+  (
+    clamp_int((m.x - slack).floor(), 0, buf.width),
+    clamp_int((m.y - slack).floor(), 0, buf.height),
+    clamp_int((m.x + m.w + slack).ceil(), 0, buf.width),
+    clamp_int((m.y + m.h + slack).ceil(), 0, buf.height),
+  )
+}
+
+///|
+/// 施加调整层 —— **蒙版在这里生效**。
+///
+/// * 没有蒙版：逐位等于原来的 `apply_adjust`（整幅、就地），既有文档与 golden
+///   一个像素都不动；
+/// * 有蒙版：`p' = lerp(p, op(p), cover)`，复用编辑表那句唯一的软混合原语
+///   `@pixel.lerp_argb`（软权重只有一处实现，编辑表与蒙版不分叉）。覆盖度恰好
+///   1 的地方走 `op(p)` 直通，所以"蒙版盖满整幅"与"没有蒙版"逐位相同（有测试
+///   钉住这一条）。
+///
+/// ⚠️ 邻域算子（blur/sharpen/smooth）的结果要读**原**缓冲的邻居，就地做会把
+/// 已经改过的像素当成邻居；暗角（vignette）虽然只看位置，但走同一条路才不用
+/// 维护第二张"哪些算子是邻域"的清单。所以带蒙版时一律先在 scratch 上整幅算完、
+/// 再按覆盖度混合：代价是一次整幅拷贝（12MP ≈ 48MB），**只在"带蒙版的调整层"
+/// 这条路上付**，而混合本身只扫蒙版支撑窗。
+fn apply_adjust_layer(l : @core.Layer, buf : @codec.RgbaBuf) -> Unit {
+  if l.adjust is None || l.mask is None {
+    apply_adjust(l.adjust, buf)
+    return
+  }
+  let (wx0, wy0, wx1, wy1) = mask_support_box(l, buf)
+  if wx1 <= wx0 || wy1 <= wy0 {
+    return
+  }
+  let scratch = @codec.rgba_new(buf.width, buf.height)
+  let total = buf.width * buf.height
+  let mut i = 0
+  while i < total {
+    scratch.pixels[i] = buf.pixels[i]
+    i = i + 1
+  }
+  apply_adjust(l.adjust, scratch)
+  let mut y = wy0
+  while y < wy1 {
+    let mut x = wx0
+    while x < wx1 {
+      let cover = mask_cover_at(l, x.to_double() + 0.5, y.to_double() + 0.5)
+      if cover > 0.0 {
+        let at = y * buf.width + x
+        let p = buf.pixels[at]
+        let op = scratch.pixels[at]
+        buf.pixels[at] = if cover >= 1.0 { op } else { @pixel.lerp_argb(p, op, cover) }
+      }
+      x = x + 1
+    }
+    y = y + 1
+  }
+}
+
+///|
+/// 单个像素的点位算子结果（纯函数）：整幅路径与上面那条蒙版路径共用**这一处**，
+/// 所以两条路的数值不可能分叉。
+fn adjust_pixel(adj : @core.Adjust, p : Int) -> Int {
+  let r = (p >> 16) & 0xFF
+  let g = (p >> 8) & 0xFF
+  let b = p & 0xFF
+  let pair : (Int, Int, Int) = match adj.op {
+    @core.AdjustOp::Invert => (255 - r, 255 - g, 255 - b)
+    @core.AdjustOp::Grayscale => {
+      let lum = (r * 30 + g * 59 + b * 11) / 100
+      (lum, lum, lum)
+    }
+    @core.AdjustOp::Brightness => {
+      let d = (adj.value * 255.0).to_int()
+      (clamp8(r + d), clamp8(g + d), clamp8(b + d))
+    }
+    @core.AdjustOp::Contrast => {
+      // value: -1..1 → 系数 0..2（0=原样）
+      let k = adj.value + 1.0
+      (
+        clamp8(((r.to_double() - 128.0) * k + 128.0 + 0.5).to_int()),
+        clamp8(((g.to_double() - 128.0) * k + 128.0 + 0.5).to_int()),
+        clamp8(((b.to_double() - 128.0) * k + 128.0 + 0.5).to_int()),
+      )
+    }
+    @core.AdjustOp::Saturation => {
+      let lum = (r * 30 + g * 59 + b * 11) / 100
+      let k = if adj.value < 0.0 { 1.0 + adj.value } else { 1.0 }
+      (
+        clamp8((lum.to_double() + (r.to_double() - lum.to_double()) * k + 0.5).to_int()),
+        clamp8((lum.to_double() + (g.to_double() - lum.to_double()) * k + 0.5).to_int()),
+        clamp8((lum.to_double() + (b.to_double() - lum.to_double()) * k + 0.5).to_int()),
+      )
+    }
+    // 美白：暖色调（R>B）像素按皮肤相似度加权提亮
+    @core.AdjustOp::Whiten => {
+      let s = if r > b { (r - b).to_double() / 60.0 } else { 0.0 }
+      let sk = if s > 1.0 { 1.0 } else { s }
+      let d = (adj.value * 70.0 * sk + 0.5).to_int()
+      (clamp8(r + d), clamp8(g + d), clamp8(b + d))
+    }
+    // 色温：正=暖（R+/B-），负=冷
+    @core.AdjustOp::Warm => {
+      let d = (adj.value * 45.0 + 0.5).to_int()
+      (clamp8(r + d), g, clamp8(b - d))
+    }
+    _ => (r, g, b)
+  }
+  (p & 0xFF000000) + (pair.0 << 16) + (pair.1 << 8) + pair.2
+}
+
+///|
 fn apply_adjust_pixel(adj : @core.Adjust, buf : @codec.RgbaBuf) -> Unit {
   let total = buf.width * buf.height
   let mut i = 0
   while i < total {
-    let p = buf.pixels[i]
-    let r = (p >> 16) & 0xFF
-    let g = (p >> 8) & 0xFF
-    let b = p & 0xFF
-    let pair : (Int, Int, Int) = match adj.op {
-      @core.AdjustOp::Invert => (255 - r, 255 - g, 255 - b)
-      @core.AdjustOp::Grayscale => {
-        let lum = (r * 30 + g * 59 + b * 11) / 100
-        (lum, lum, lum)
-      }
-      @core.AdjustOp::Brightness => {
-        let d = (adj.value * 255.0).to_int()
-        (clamp8(r + d), clamp8(g + d), clamp8(b + d))
-      }
-      @core.AdjustOp::Contrast => {
-        // value: -1..1 → 系数 0..2（0=原样）
-        let k = adj.value + 1.0
-        (
-          clamp8(((r.to_double() - 128.0) * k + 128.0 + 0.5).to_int()),
-          clamp8(((g.to_double() - 128.0) * k + 128.0 + 0.5).to_int()),
-          clamp8(((b.to_double() - 128.0) * k + 128.0 + 0.5).to_int()),
-        )
-      }
-      @core.AdjustOp::Saturation => {
-        let lum = (r * 30 + g * 59 + b * 11) / 100
-        let k = if adj.value < 0.0 { 1.0 + adj.value } else { 1.0 }
-        (
-          clamp8((lum.to_double() + (r.to_double() - lum.to_double()) * k + 0.5).to_int()),
-          clamp8((lum.to_double() + (g.to_double() - lum.to_double()) * k + 0.5).to_int()),
-          clamp8((lum.to_double() + (b.to_double() - lum.to_double()) * k + 0.5).to_int()),
-        )
-      }
-      // 美白：暖色调（R>B）像素按皮肤相似度加权提亮
-      @core.AdjustOp::Whiten => {
-        let s = if r > b { (r - b).to_double() / 60.0 } else { 0.0 }
-        let sk = if s > 1.0 { 1.0 } else { s }
-        let d = (adj.value * 70.0 * sk + 0.5).to_int()
-        (clamp8(r + d), clamp8(g + d), clamp8(b + d))
-      }
-      // 色温：正=暖（R+/B-），负=冷
-      @core.AdjustOp::Warm => {
-        let d = (adj.value * 45.0 + 0.5).to_int()
-        (clamp8(r + d), g, clamp8(b - d))
-      }
-      _ => (r, g, b)
-    }
-    buf.pixels[i] = (p & 0xFF000000) + (pair.0 << 16) + (pair.1 << 8) + pair.2
+    buf.pixels[i] = adjust_pixel(adj, buf.pixels[i])
     i = i + 1
   }
 }

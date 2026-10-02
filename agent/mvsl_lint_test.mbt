@@ -254,6 +254,28 @@ test "lint：空组与空文本层是「装了却什么都不干」，必须报"
 }
 
 ///|
+test "lint：组上的蒙版不生效（收得下、画面逐位不变）必须报" {
+  // 实测：`group g1 l1` 之后 `add-mask g1 x=0 y=0 w=5 h=10` 回 ok、`lint`
+  // 报 0 违规、渲染 sha256 **逐位不变**——渲染器对组只递归子层、组自身无面。
+  // 正控：同样一条蒙版装在**普通层**上不许被报（否则这条判据会把正常用法
+  // 也一起骂了，而"漏报与误报都是 bug"）。
+  let s = scene("lint-group-mask")
+  let _ = run(s, "add-rect x=0 y=0 w=10 h=10 fill=#00FF00FF name=A")
+  let _ = run(s, "add-mask l1 x=0 y=0 w=5 h=10")
+  let r0 = run(s, "lint")
+  assert_true(!r0.contains("上的蒙版不生效"), msg="普通层上的蒙版不该被报：\{r0}")
+  let _ = run(s, "group g1 l1")
+  let r1 = run(s, "lint")
+  assert_true(!r1.contains("上的蒙版不生效"), msg="普通的组（无蒙版）不该被报：\{r1}")
+  let _ = run(s, "add-mask g1 x=0 y=0 w=5 h=10")
+  let r2 = run(s, "lint")
+  assert_true(
+    r2.contains("上的蒙版不生效"),
+    msg="组上的蒙版必须被报（渲染器根本不读它）：\{r2}",
+  )
+}
+
+///|
 test "lint：非文本层带 text 字段是死数据（渲染器不读，却改变指纹）" {
   // 这个字段的一整条通路：`set-text` 写 → canonical JSON 存 → 指纹变 →
   // query-layer 报 → **渲染器只对 Text 层读它** → 画面一个像素没变。

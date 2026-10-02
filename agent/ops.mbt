@@ -903,6 +903,16 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
       if l.children.length() == 0 {
         v.push("P2 noop 组 \{l.id} 没有任何成员（直通合成里什么都不做）")
       }
+      // 组上的蒙版：渲染器对组只递归子层、组自身无面（`paint_layer` 那条
+      // `Group => for c in l.children`），所以蒙版**不生效**。实测：给组装蒙版
+      // 回 ok、`lint` 报 0 违规、渲染 sha256 **逐位不变** —— 同"装了却什么都不干"。
+      // 想限定整组只影响一块，得先把组合成到自己的缓冲再整体乘覆盖度
+      // （渲染架构改动，见 DESIGN 边界节），在那之前这条必须报出来。
+      if l.mask is Some(_) {
+        v.push(
+          "P2 noop 组 \{l.id} 上的蒙版不生效（渲染器只递归子层、组自身无面）：画面与该蒙版无关",
+        )
+      }
     }
     if l.kind is @core.ShapeKind::Text {
       if l.text == "" {

@@ -1821,6 +1821,58 @@ MUTS = [
         "killed",
     ),
     (
+        "Q29",
+        "调整层的蒙版不参与混合（覆盖度被丢掉：羽化带变硬边）",
+        "render/scene.mbt",
+        "        buf.pixels[at] = if cover >= 1.0 { op } else { @pixel.lerp_argb(p, op, cover) }",
+        "        buf.pixels[at] = op",
+        "killed",
+    ),
+    (
+        "Q30",
+        "调整层蒙版窗口不含 roughen 外溢（毛边甩到形状外那圈像素静默漏改）",
+        "render/scene.mbt",
+        "  let slack = m.roughen.ceil() + 1.0",
+        "  let slack = 0.0",
+        "killed",
+    ),
+    (
+        "Q31",
+        "调整层蒙版窗口对 invert 仍按形状 bbox 裁（区域无界的蒙版漏掉整片）",
+        "render/scene.mbt",
+        "  if m.invert || m.w <= 0.0 || m.h <= 0.0 {",
+        "  if m.w <= 0.0 || m.h <= 0.0 {",
+        "killed",
+    ),
+    (
+        "Q32",
+        "调整层的邻域算子在原缓冲上就地做（把已经改过的像素当邻居）",
+        "render/scene.mbt",
+        "  apply_adjust(l.adjust, scratch)",
+        "  apply_adjust(l.adjust, buf)",
+        "killed",
+    ),
+    (
+        "Q33",
+        "调整层回到老行为：挂蒙版也整幅施加（蒙版装了却什么都不干）",
+        "render/scene.mbt",
+        "  if l.adjust is None || l.mask is None {",
+        "  if l.adjust is None {",
+        # 等价：adjust 为 None 时两条路都立刻返回；adjust 为 Some 时，蒙版为 None
+        # 的那一支走"整幅窗口 + `mask_cover_at` 恒 1.0"，覆盖度恰好 1 ⇒ 直通 `op`，
+        # 与原地整幅施加逐位相同（只是白拷一次整幅）。实测：跑变异门判 SURVIVED，
+        # 逐条推演后确认是等价变异，不是测试缺口。
+        "equivalent",
+    ),
+    (
+        "Q34",
+        "组上的蒙版不生效这件事不再被 lint 报出来（收得下、画面不变、没人说）",
+        "agent/ops.mbt",
+        "      if l.mask is Some(_) {",
+        "      if false {",
+        "killed",
+    ),
+    (
         "Z9",
         "set-image 从『原地换像素』退化成『重造该层』（蒙版/标签/层序一起丢）",
         "agent/session.mbt",
