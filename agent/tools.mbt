@@ -135,7 +135,7 @@ pub fn list_tools() -> Array[AgentTool] {
   add("save-mpd-b64", "会话打包为 .mpd 容器字节（base64）", "meta")
   add("open-mpd-b64", "open-mpd-b64 <b64>：载入容器（拒绝式校验）", "meta")
   // MVSL 编辑表（确定性编辑 IR）：人机同一张表，AI 与 GUI 同一撤销栈
-  add("mvsl-set", "mvsl-set <base64(canonical program json)>：安装 MVSL 编辑表（校验+规范化，空 ops 表示逐位还原底图）。算子 JSON 里可带 layer 字段（值是层 id）把作用域收窄到那一层——该层先单独栅格化、选择子在**这一层自己的像素**上求值，再合成回去；带 layer 的算子先按序执行、然后合成、最后才跑文档级算子（跨作用域的相对顺序不保留），且 layer 与 STAGE 基准的组合会被拒绝", "meta")
+  add("mvsl-set", "mvsl-set <base64(canonical program json)>：安装 MVSL 编辑表（校验+规范化，空 ops 表示逐位还原底图）。算子 JSON 里可带 layer 字段（值是层 id）把作用域收窄到那一层——该层先单独栅格化、选择子在**这一层自己的像素**上求值，再合成回去；带 layer 的算子先按序执行、然后合成、最后才跑文档级算子（跨作用域的相对顺序不保留），且 STAGE(n>0) 与图层级算子**不能共存**（两段式下 stage:n 只指向文档级第 n 条，插一条层算子就会静默换掉取到的像素；STAGE(0) = 本条算子的输入，照旧可用）", "meta")
   add("mvsl-show", "当前 MVSL 编辑表 canonical 全文 + program_sha256 + 三个算法版本 pin", "meta")
   add("mvsl-clear", "清空 MVSL 编辑表（渲染逐位还原底图）", "meta")
   add("select-preview", "select-preview <base64(sel json)> [max=1024]：选择子 → overlay PNG（洋红覆盖）+ 覆盖率/bbox/连通域事实（AI 选 ID 不报坐标）", "both")

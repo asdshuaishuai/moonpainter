@@ -304,31 +304,76 @@ test "图层级编辑：只引用一层的表，不含图层级算子时走原�
 }
 
 ///|
-test "图层级编辑：layer= 与 STAGE 基准组合被拒绝（分段后序号不连续）" {
+test "图层级编辑：STAGE(n>0) 与图层级算子共存必须被拒绝（分段后序号不连续）" {
+  // 判据本轮**扩到了整张表**：不只是"层算子自己写 STAGE"，而是"表里只要有
+  // 图层级算子，文档级段的 `stage:n`（n>0）口径就与算子序号对不上"——插一条
+  // 只改某层的算子，会静默换掉后面文档级算子取到的像素（实测坐实）。
   let env = @render.RenderEnv::new()
   let doc = two_tone_doc()
   let g : @core.GeoWindow = { x: 0.0, y: 0.0, w: 16.0, h: 8.0, feather: 0.0 }
-  let op : @core.EditOp = {
-    id: "e1",
-    kind: @core.Recolor,
-    sel: { basis: @core.Stage(0), expr: @core.Atom(@core.Geo(g, "rect")) },
-    amount: 1.0,
-    hue_deg: 120.0,
-    temp_kelvin: 0.0,
-    relight_gain: 1.0,
-    layer: "l1",
-    refine: [],
-    note: "",
-    evidence: None,
+  let mk = fn(id : String, basis : @core.SelBasis, layer : String) -> @core.EditOp {
+    {
+      id,
+      kind: @core.Recolor,
+      sel: { basis, expr: @core.Atom(@core.Geo(g, "rect")) },
+      amount: 1.0,
+      hue_deg: 120.0,
+      temp_kelvin: 0.0,
+      relight_gain: 1.0,
+      layer,
+      refine: [],
+      note: "",
+      evidence: None,
+    }
   }
-  let prog : @core.EditProgram = { ops: [op], guards: [] }
-  match @render.render_doc_with(doc, env, prog) {
-    Ok(_) => abort("layer= 与 STAGE 组合必须被拒绝，而不是静默取错缓冲")
+  // ① 层算子自己引用 STAGE(0)：`STAGE(0)` = 本条算子的输入，两段式下语义恒真 → 放行
+  let ok_prog : @core.EditProgram = { ops: [mk("e1", @core.Stage(0), "l1")], guards: [] }
+  match @render.render_doc_with(doc, env, ok_prog) {
+    Ok(_) => ()
+    Err(e) => abort("STAGE(0) 是「本条算子的输入」，不该被拒：\{e}")
+  }
+  // ② 层算子自己引用 STAGE(1)：分段后序号不连续 → 拒绝
+  let bad1 : @core.EditProgram = { ops: [mk("e1", @core.Stage(1), "l1")], guards: [] }
+  match @render.render_doc_with(doc, env, bad1) {
+    Ok(_) => abort("层算子的 STAGE(n>0) 必须被拒绝，而不是静默取错缓冲")
+    Err(e) => assert_true(e.contains("STAGE"), msg="错误信息要说清原因：\{e}")
+  }
+  // ③ 表里有层算子，文档级算子引用 STAGE(1) 而**表里第 1 条是层算子** → 拒绝
+  //    （这正是"插一条层算子就静默换缓冲"的形态）
+  let bad2 : @core.EditProgram = {
+    ops: [
+      mk("layer-op", @core.Base, "l2"),
+      mk("d1", @core.Base, ""),
+      mk("d2", @core.Stage(1), ""),
+    ],
+    guards: [],
+  }
+  match @render.render_doc_with(doc, env, bad2) {
+    Ok(_) => abort("两段式下文档级 STAGE(1) 指向的是层算子之后，必须拒绝")
     Err(e) =>
       assert_true(
-        e.contains("STAGE") && e.contains("分段"),
-        msg="错误信息要说清原因：\{e}",
+        e.contains("STAGE") && e.contains("文档级"),
+        msg="错误要说清是文档级段的口径问题：\{e}",
       )
+  }
+  // ④ 正控：表里第 1 条恰好是**文档级**（层算子排在最后）→ 放行（不许误伤）
+  let ok2 : @core.EditProgram = {
+    ops: [
+      mk("d1", @core.Base, ""),
+      mk("d2", @core.Stage(1), ""),
+      mk("layer-op", @core.Base, "l2"),
+    ],
+    guards: [],
+  }
+  match @render.render_doc_with(doc, env, ok2) {
+    Ok(_) => ()
+    Err(e) => abort("目标条是文档级算子时 STAGE(1) 语义明确，不该被拒：\{e}")
+  }
+  // ⑤ 正控：整张表都是文档级（历史行为，一律放行）
+  let ok3 : @core.EditProgram = { ops: [mk("d1", @core.Base, ""), mk("d2", @core.Stage(1), "")], guards: [] }
+  match @render.render_doc_with(doc, env, ok3) {
+    Ok(_) => ()
+    Err(e) => abort("纯文档级表的 STAGE(1) 是历史行为，不该被拒：\{e}")
   }
 }
 

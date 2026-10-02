@@ -138,3 +138,39 @@ test "带标签作用域的表仍然算「含图层级算子」（走两段式�
   assert_eq(ids.length(), 1, msg="未展开时只报出作用域串本身")
   assert_eq(ids[0], "@hero", msg="作用域串应原样报出（供入口校验识别）")
 }
+
+
+///|
+test "算子字段的中性值：不给就是不起作用，不许因为默认值报「必须为 1」" {
+  // 实测坐实：手搓 base64 时漏写 `relight_gain` 的 recolor 会被**静默拒装**，
+  // 报错是「算子 e1 不是 relight，relight_gain 必须为 1」——用户写的是合法
+  // 语义（不给这个字段 = 它不起作用），引擎却报得像"字段填错了"，而
+  // `sel-schema` 的示例里三个数值字段都写着，谁也不会去猜哪个能省。
+  // 病根：可选数值一律回落 0，而 relight_gain 的中性值是 **1**。
+  let text = "{\"version\":1,\"ops\":[{\"id\":\"e1\",\"kind\":\"recolor\",\"sel\":{\"basis\":\"base\",\"expr\":{\"t\":\"luma\",\"l\":0.5,\"lh\":0.1,\"feather\":0.05}},\"amount\":1,\"hue_deg\":180}],\"guards\":[]}"
+  match @core.program_from_json(text) {
+    Ok(p) => {
+      assert_eq(p.ops.length(), 1)
+      let op = p.ops[0]
+      assert_eq(op.hue_deg, 180.0)
+      assert_eq(op.temp_kelvin, 0.0, msg="不给 temp_kelvin → 中性值 0")
+      assert_eq(op.relight_gain, 1.0, msg="不给 relight_gain → 中性值必须是 1（不是 0）")
+      // 规范化后照旧打得开（拒绝路径不许在"合法语义"上开火）
+      match @core.validate_program(p) {
+        Ok(_) => ()
+        Err(e) => abort("缺省字段的合法语义不该被拒：\{e}")
+      }
+    }
+    Err(e) => abort("缺省可选字段的算子应能解析：\{e}")
+  }
+  // 正控：**给了**非中性值就必须报（判据两头都咬，不能放宽成"不看这个字段"）
+  let bad = "{\"version\":1,\"ops\":[{\"id\":\"e1\",\"kind\":\"recolor\",\"sel\":{\"basis\":\"base\",\"expr\":{\"t\":\"luma\",\"l\":0.5,\"lh\":0.1,\"feather\":0.05}},\"amount\":1,\"hue_deg\":180,\"relight_gain\":0.2}],\"guards\":[]}"
+  match @core.program_from_json(bad) {
+    Ok(p) =>
+      match @core.validate_program(p) {
+        Ok(_) => abort("recolor 上给 relight_gain=0.2 应当被拒（那个值渲染器不读）")
+        Err(e) => assert_true(e.contains("relight_gain"), msg=e)
+      }
+    Err(e) => abort("解析不该在这一步失败：\{e}")
+  }
+}

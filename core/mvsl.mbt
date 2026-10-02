@@ -277,18 +277,48 @@ pub fn program_doc_scope(p : EditProgram) -> EditProgram {
 }
 
 ///|
-/// 图层级算子的入口校验（两段式渲染的硬约束）。
+/// STAGE 基准的作用域校验（两段式渲染的硬约束）：**`stage:n`（n>0）不许与
+/// `layer=` 共存**。
 ///
-/// `STAGE(n)` 的 `n` 是"第 n 个算子之后的中间缓冲"序号，而两段式会把算子拆到
-/// 不同缓冲上分别执行，序号不再连续——放行会得到一个**看起来跑通、实际取错缓冲**
-/// 的结果，所以直接拒绝。
+/// `STAGE(n)` 的 `n` 是"第 n 个算子之后的中间缓冲"——这个序号只有在"整张表在
+/// **同一个缓冲**上按表序跑"时才有定义。
+///
+/// ⚠️ 这条禁令**从"图层级算子自身"扩到"整张表"**（本轮实测坐实）：两段式渲染把
+/// 表拆成三段跑——①被引用的层各自的栅格（只跑属于它的算子）②合成 ③文档级算子
+/// 跑在合成图上。于是同一个 `stage:n` 有两种口径：
+///   * **单段**（表里没有 `layer=`）：`stage:n` = 表里第 n 个算子之后；
+///   * **两段**（表里有 `layer=`）：文档级段里 `stage:n` = **文档级**第 n 条之后。
+/// 也就是说，**往表里插一条只改蓝色图层的算子，会静默换掉一条文档级算子在
+/// `stage:` 上取到的像素**（实测：同一份文档，加上那条只动蓝层的层算子之后
+/// render sha 变了，而两者在红色区域本应逐位一致——层算子的效果全在蓝层）。
+///
+/// 判定（静态、只看表）：`n == 0` 恒等于"本条算子的输入"，两种口径下都对 → 放行；
+/// `n > 0` 要求"表里第 n 条算子"与该引用者在**同一个文档级段**里，否则拒绝
+/// （图层级算子引用 `STAGE(n>0)` 自然落在这条上）。
+///
+/// 与它同形的还有 `tag_scope_error`：入口、lint、渲染三处共用同一句话。
 pub fn layer_scope_error(p : EditProgram) -> String? {
   let mut i = 0
   for op in p.ops {
-    if op.layer != "" && op.sel.basis is Stage(_) {
-      return Some(
-        "算子 \{op.id}（序号 \{i}）同时用了 layer=\{op.layer} 与 STAGE 基准：图层级算子分段执行，STAGE 序号不再连续，拒绝这种组合",
-      )
+    match op.sel.basis {
+      Base => ()
+      Stage(n) => {
+        // `stage:n`（n>0）指向表里**第 n 条算子**之后的缓冲：该条必须存在、
+        // 且与引用者同在文档级段（`n` 的类型是 Int，`n > 0` 保证下标非负）。
+        let target_is_doc = if n > 0 && n <= p.ops.length() {
+          let t = p.ops[n - 1]
+          t.layer == ""
+        } else {
+          false
+        }
+        let same_segment = op.layer == "" && n > 0 && target_is_doc
+        if n > 0 && !same_segment {
+          let scope = if op.layer == "" { "文档级" } else { "layer=\{op.layer}" }
+          return Some(
+            "算子 \{op.id}（表序 \{i}，\{scope}）用了 STAGE(\{n})：`stage:n` 是\"第 n 个算子之后的中间缓冲\"，而这张表里有图层级算子——两段式执行下文档级段里的 STAGE 只会指向**文档级**第 n 条之后，口径与算子序号对不上（**插一条图层级算子就会静默换掉取到的像素**）。STAGE(0) 表示\"本条算子的输入\"（放行），要把某一步的中间结果接给后面的算子请改用文档级算子——图层级与 STAGE 不能共存",
+          )
+        }
+      }
     }
     i = i + 1
   }
@@ -978,10 +1008,30 @@ fn jstr(v : JValue, f : String) -> Result[String, String] {
 }
 
 ///|
+/// 可选数值字段：缺失 → 0。用于**中性值本来就是 0** 的那些（选择子窗口、
+/// 精修幅度、断言阈值）——它们的"不给"与"给 0"语义一致。
 fn jfin(v : JValue, f : String) -> Double {
   match v.get(f) {
     Some(JNum(n)) => n
     _ => 0.0
+  }
+}
+
+///|
+/// 可选数值字段：**缺失时取该字段的"中性值"**（不是 0）。
+///
+/// ⚠️ 三种算子各有一个"不是本 kind 就必须为中性值"的字段，而它们的中性值
+/// **不都是 0**：`hue_deg`/`temp_kelvin` 的中性值是 0，`relight_gain` 是 **1**。
+/// 早先这里一律回落 0，于是"手搓 base64 时漏写 `relight_gain`"的 recolor 会
+/// 触发 `relight_gain 必须为 1`——**用户写的是合法语义（不给就等于不起作用），
+/// 引擎却报了一个看起来在说"字段填错了"的错**，而 `sel-schema` 的示例里
+/// 三个字段都写着，谁也不会去猜哪个能省。默认值表现在与校验表同源
+/// **就写在调用点上**（`jfneutral(v, f, 中性值)`），与下面校验那几句紧挨着，
+/// 改一处时另一处就在几行之外。
+fn jfneutral(v : JValue, f : String, neutral : Double) -> Double {
+  match v.get(f) {
+    Some(JNum(n)) => n
+    _ => neutral
   }
 }
 
@@ -1421,9 +1471,9 @@ fn op_of(v : JValue) -> Result[EditOp, String] {
     kind: k,
     sel,
     amount: av,
-    hue_deg: jfin(v, "hue_deg"),
-    temp_kelvin: jfin(v, "temp_kelvin"),
-    relight_gain: jfin(v, "relight_gain"),
+    hue_deg: jfneutral(v, "hue_deg", 0.0),
+    temp_kelvin: jfneutral(v, "temp_kelvin", 0.0),
+    relight_gain: jfneutral(v, "relight_gain", 1.0),
     layer: jfstr(v, "layer"),
     refine: refines,
     note: jfstr(v, "note"),

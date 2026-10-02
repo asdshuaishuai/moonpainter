@@ -496,29 +496,57 @@ test "图层级算子：装得进、报得出，引用不存在的层被拒绝�
 }
 
 ///|
-test "图层级算子：layer= 与 STAGE 基准的组合在入口被拒绝" {
+test "STAGE(n>0) 与图层级算子共存：入口拒绝（判据扩到整张表，两头都咬）" {
+  // 判据本轮从"层算子自己写 STAGE"扩到"**表里有 layer= 就算数**"：两段式下
+  // 文档级段的 `stage:n` 只指向**文档级**第 n 条之后，与算子序号口径对不上——
+  // 插一条只改某层的算子会静默换掉后面算子取到的像素（实测坐实）。
   let s = @agent.Session::new()
   let _ = run(s, "session-open full_image")
   let _ = run(s, "new 16 8")
   let _ = run(s, "add-rect x=0 y=0 w=8 h=8 fill=#FF0000FF id=l1")
+  let _ = run(s, "add-rect x=8 y=0 w=8 h=8 fill=#0000FFFF id=l2")
   let g : @core.GeoWindow = { x: 0.0, y: 0.0, w: 16.0, h: 8.0, feather: 0.0 }
-  let op : @core.EditOp = {
-    id: "e1",
-    kind: @core.Recolor,
-    sel: { basis: @core.Stage(0), expr: @core.Atom(@core.Geo(g, "rect")) },
-    amount: 1.0,
-    hue_deg: 120.0,
-    temp_kelvin: 0.0,
-    relight_gain: 1.0,
-    layer: "l1",
-    refine: [],
-    note: "",
-    evidence: None,
+  let mk = fn(id : String, basis : @core.SelBasis, layer : String) -> @core.EditOp {
+    {
+      id,
+      kind: @core.Recolor,
+      sel: { basis, expr: @core.Atom(@core.Geo(g, "rect")) },
+      amount: 1.0,
+      hue_deg: 120.0,
+      temp_kelvin: 0.0,
+      relight_gain: 1.0,
+      layer,
+      refine: [],
+      note: "",
+      evidence: None,
+    }
   }
-  let prog : @core.EditProgram = { ops: [op], guards: [] }
-  let e = run(s, "mvsl-set \{b64_of(@core.program_to_json(prog))}")
-  assert_true(e.has_prefix("{\"error\":\""), msg=e)
-  assert_true(e.contains("STAGE"), msg=e)
+  let set = fn(s : @agent.Session, prog : @core.EditProgram) -> String {
+    run(s, "mvsl-set \{b64_of(@core.program_to_json(prog))}")
+  }
+  // ① 拒绝：层算子自己引用 STAGE(1)
+  let e1 = set(s, { ops: [mk("e1", @core.Stage(1), "l1")], guards: [] })
+  assert_true(e1.has_prefix("{\"error\":\""), msg=e1)
+  assert_true(e1.contains("STAGE"), msg=e1)
+  // ② 拒绝：表里有层算子，而文档级 STAGE(1) 指向的正是那条层算子
+  let e2 = set(s, {
+    ops: [mk("layer-op", @core.Base, "l2"), mk("d1", @core.Base, ""), mk("d2", @core.Stage(1), "")],
+    guards: [],
+  })
+  assert_true(e2.has_prefix("{\"error\":\""), msg=e2)
+  assert_true(e2.contains("文档级"), msg=e2)
+  // ③ 正控：层算子用 STAGE(0)（= 本条算子的输入）→ 装得进
+  let ok1 = set(s, { ops: [mk("e1", @core.Stage(0), "l1")], guards: [] })
+  assert_true(ok1.contains("\"op\":\"mvsl-set\""), msg=ok1)
+  // ④ 正控：文档级 STAGE(1) 且**表里第 1 条是文档级**（层算子排在最后）→ 装得进
+  let ok2 = set(s, {
+    ops: [mk("d1", @core.Base, ""), mk("d2", @core.Stage(1), ""), mk("layer-op", @core.Base, "l2")],
+    guards: [],
+  })
+  assert_true(ok2.contains("\"op\":\"mvsl-set\""), msg=ok2)
+  // ⑤ 正控：纯文档级表的 STAGE(1)（历史行为）→ 装得进
+  let ok3 = set(s, { ops: [mk("d1", @core.Base, ""), mk("d2", @core.Stage(1), "")], guards: [] })
+  assert_true(ok3.contains("\"op\":\"mvsl-set\""), msg=ok3)
 }
 
 ///|

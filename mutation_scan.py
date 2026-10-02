@@ -1439,6 +1439,24 @@ MUTS = [
         "killed",
     ),
     (
+        "U21",
+        "文档级 STAGE(n>0) 与图层级算子共存被放行（两段式下静默换掉取到的像素）",
+        "core/mvsl.mbt",
+        """        let same_segment = op.layer == "" && n > 0 && target_is_doc
+        if n > 0 && !same_segment {""",
+        """        let same_segment = true
+        if false {""",
+        "killed",
+    ),
+    (
+        "U22",
+        "算子字段的中性值回落 0（relight_gain 缺省 = 0 → 合法语义被静默拒装）",
+        "core/mvsl.mbt",
+        """    relight_gain: jfneutral(v, "relight_gain", 1.0),""",
+        """    relight_gain: jfin(v, "relight_gain"),""",
+        "killed",
+    ),
+    (
         "U20",
         "lint 不报手改容器里的退化蒙版（负 roughen / 非正尺寸没人说）",
         "agent/ops.mbt",
