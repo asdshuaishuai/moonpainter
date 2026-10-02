@@ -184,10 +184,14 @@ fn cmd_mvsl_set(s : Session, tokens : Array[String]) -> String {
     return err(cost)
   }
   s.mvsl = prog
+  // 代价与内存**都在装表这一刻报出来**：画布已知，而"这张表以后要吃什么"是
+  // 调用方此刻唯一能决定要不要继续的地方（`edit_cost_error` 管时间，内存那条
+  // 与它同源不同量——见 DESIGN §性能；拦不拦是产品决定，这里只报）。
+  let peak = @core.edit_peak_bytes(prog.ops.length(), doc.width, doc.height)
   mvsl_reply(
     "mvsl-set",
     prog,
-    "\"fingerprint\":\"\{@core.fingerprint(doc)}\"",
+    "\"fingerprint\":\"\{@core.fingerprint(doc)}\",\"est_peak_bytes\":\{peak.to_int()},\"bytes_per_pixel_op\":\{@core.fmt_num(@core.EDIT_BYTES_PER_PIXEL_OP)}",
   )
 }
 
@@ -357,6 +361,9 @@ fn cmd_mvsl_impact(s : Session, tokens : Array[String]) -> String {
   // 真正执行到的算子级阶段数（`layer=@tag` 展开成几层就是几个）。
   sb.write_string(
     ",\"doc_stages\":\{@core.program_doc_scope(prog).ops.length()},\"executed\":\{stages.length()}",
+  )
+  sb.write_string(
+    ",\"est_peak_bytes\":\{@core.edit_peak_bytes(prog.ops.length(), doc.width, doc.height).to_int()},\"bytes_per_pixel_op\":\{@core.fmt_num(@core.EDIT_BYTES_PER_PIXEL_OP)}",
   )
   sb.write_string(",\"per_op\":[")
   let mut first = true

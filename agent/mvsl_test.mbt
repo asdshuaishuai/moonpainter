@@ -1190,3 +1190,50 @@ test "MVSL：编辑表规模护栏（条数 / 断言数 / 代价三个限额）"
   let back = run(s, "render")
   assert_true(back.contains("\"ok\":true"), msg=back)
 }
+
+///|
+/// **编辑表的内存代价必须报出来**（`est_peak_bytes`）。
+///
+/// 时间那条护栏（`edit_cost_error`）有入口拒绝；内存这条**同源不同量**——
+/// 一张恰好通过时间护栏的表（190 条 × 1024×1024）能吃掉 ~2.9 GB，而此前
+/// 这个数字只活在 DESIGN 与 Python 标定脚本里，引擎回包一个字都没有：调用方
+/// 装表时看不见"以后要吃什么"。这里钉三件事：
+///   * 系数是声明的那一个（`EDIT_BYTES_PER_PIXEL_OP`，实测保守上界 14.4）；
+///   * 公式是 `算子数 × 画布像素数 × 系数`（1 条 vs 2 条**恰好两倍**，
+///     画布 320×240 ⇒ 76800 像素）；
+///   * 两处出口都报（装表时 / 分析时），且**空表报 0**（判据的空集也要说话）。
+test "MVSL：内存代价在装表与分析两处都报出来（与时间护栏同源不同量）" {
+  let s = scene("mvsl-mem")
+  let px = 320.0 * 240.0
+  let coef = @core.EDIT_BYTES_PER_PIXEL_OP
+  assert_eq(coef, 14.4)
+  let one = @core.program_to_json(recolor_program([]))
+  let r = run(s, "mvsl-set \{b64_of(one)}")
+  assert_true(r.contains("\"op\":\"mvsl-set\""), msg=r)
+  let want1 = px * coef
+  let got1 = jnum_field(r, "est_peak_bytes")
+  assert_true(
+    got1 > want1 - 2.0 && got1 < want1 + 2.0,
+    msg="mvsl-set 报的内存 \{got1} 应≈ \{want1}（76800 像素 × 系数）",
+  )
+  assert_eq(jnum_field(r, "bytes_per_pixel_op"), coef)
+  let imp = run(s, "mvsl-impact max=8")
+  let goti = jnum_field(imp, "est_peak_bytes")
+  assert_true(
+    goti > want1 - 2.0 && goti < want1 + 2.0,
+    msg="mvsl-impact 报的内存 \{goti} 应≈ \{want1}（两处出口同一句判据）",
+  )
+  // 算子数翻倍 ⇒ 恰好翻倍（系数与像素数都没变）
+  let p1 = recolor_program([])
+  let two = { ..p1, ops: [p1.ops[0], { ..p1.ops[0], id: "e2" }] }
+  let r2 = run(s, "mvsl-set \{b64_of(@core.program_to_json(two))}")
+  let got2 = jnum_field(r2, "est_peak_bytes")
+  assert_true(
+    got2 > 2.0 * want1 - 3.0 && got2 < 2.0 * want1 + 3.0,
+    msg="2 条算子该是 1 条的 2 倍：\{got2} vs \{want1}",
+  )
+  // 空表：没有算子就没有保留量（0 而不是"1 条的价"）
+  let _ = run(s, "mvsl-clear")
+  let empty = run(s, "mvsl-impact max=8")
+  assert_eq(jnum_field(empty, "est_peak_bytes"), 0.0)
+}

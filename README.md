@@ -1,7 +1,7 @@
 # MoonPainter — Agent 驱动的图层绘制引擎
 
 > 状态：**0.1.0（.mpd 容器 v2 + 参数化绘制 + AI 修图 demo + MVSL 确定性编辑 IR 引擎已落地：
-> native 287 项 / wasm-gc 285 项测试全绿；`./verify.sh` 十三步验证门全过）**。
+> native 288 项 / wasm-gc 286 项测试全绿；`./verify.sh` 十三步验证门全过）**。
 > 设计书 [DESIGN.md](./DESIGN.md) · 方案与验收 [PLAN.md](./PLAN.md) ·
 > MVSL 规划与评审对照 [PLAN-MVSL.md](./PLAN-MVSL.md) · AI 修图 demo 见下节。
 
