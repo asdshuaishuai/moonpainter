@@ -490,7 +490,7 @@ printf '%s\n' \
 grep -q '保护断言被违反' "$OUT/mvsl_lintbad.log" || { echo "FAIL: lint 未报出被违反的保护断言"; exit 1; }
 echo "MVSL：安装/render≡impact/断言/软过渡带不算泄漏/容器往返/预览走编辑表/lint 空操作与违约 全部 OK"
 
-echo "== 8/12 命令字典与分发一致（铁律 6） =="
+echo "== 8/12 命令字典与分发一致（铁律 6）+ 文档数字 / AGENTS.md 字节预算 =="
 # 字典（agent/tools.mbt，经 list-tools 输出）与分发（session.mbt 的命令 match）
 # 是两张**手写表**，铁律 6 要求同步，但此前没有任何自动化守着。
 # demo 侧就栽在这上面：10 个工具"注册了却接不上"，而人类走前端按钮、测试
@@ -665,12 +665,29 @@ for path in DOCS:
                 bad.append('%s:%d 写「%s 个变异中 %s 个被抓住」，实际 %d 中 %d' % (
                     path, i, m.group(1), m.group(2), muts_total, muts_killed))
 
+# ── AGENTS.md 的字节预算（指令文件有硬上限，超了会被**从尾部静默截断**） ──
+# 2026-10-01 实测：AGENTS.md 长到 65977 字节时，宿主按 65536 字节的预算加载它，
+# **从尾部截断**——先切掉的是 deepgit 进度块与「结构速览」，再长就轮到
+# `快速命令`（那份列出所有门禁的清单）与 demo 纪律，而且**没有任何东西会红**：
+# 纪律文件自己在静默降级。这与本仓库反复抓的那一类 bug 完全同形（护栏同时是
+# 能力上限、截断 = 静默丢内容），只不过这次被截的是"规矩"本身。
+# 分工：**AGENTS.md 只留规则，经过与实测数字进 PLAN.md**（实施历史不在对账内）。
+# 预算取 48 KiB：给自动维护的 deepgit 块与未来的新规则留出余量，而不是卡在
+# 65536 上——贴着上限就等于下一次加规则又会静默截断。
+AGENTS_BUDGET = 48 * 1024
+agents_bytes = len(open('AGENTS.md', 'rb').read())
+if agents_bytes > AGENTS_BUDGET:
+    bad.append('AGENTS.md 已 %d 字节（预算 %d）：指令文件超预算会被**从尾部静默截断**，'
+               '文末的规则会先消失而门禁照旧全绿。新经过/新数字写进 PLAN.md，'
+               'AGENTS.md 只留规则。' % (agents_bytes, AGENTS_BUDGET))
+
 if bad:
     print('FAIL: ' + '；'.join(bad))
     sys.exit(1)
 print('文档数字 OK（命令 %d；verify.sh %d 步 / build_demo.sh %d 步，步骤引用全是有效 slug；'
-      '变异 %d 中 %d 被抓住）' % (n, scripts['verify.sh'][0], scripts['build_demo.sh'][0],
-                                muts_total, muts_killed))
+      '变异 %d 中 %d 被抓住；AGENTS.md %d/%d 字节）'
+      % (n, scripts['verify.sh'][0], scripts['build_demo.sh'][0],
+         muts_total, muts_killed, agents_bytes, AGENTS_BUDGET))
 PYD
 
 echo "== 9/12 命令参数下界自检（读 tokens[N] 之前必须先卡住 N） =="

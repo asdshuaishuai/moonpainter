@@ -101,7 +101,7 @@ pub fn list_tools() -> Array[AgentTool] {
   add("add-mask", "add-mask <id> " + mask_key_doc() + "：蒙版坐标是**画布坐标**（x/y/w/h 用像素，不随图层 move/rotate 走）", "meta")
   add(
     "set-mask",
-    "set-mask <id> [kind=rect|ellipse] [x=] [y=] [w=] [h=] [radius=] [feather=] [roughen=] [invert=true|false]：**部分更新**，只改给的参数、其余原样保留（历史写法 `set-mask <id> true|false` 等价于只给 invert=）",
+    "set-mask <id> " + mask_key_doc() + "：**部分更新**，只改给的参数、其余原样保留（历史写法 `set-mask <id> true|false` 等价于只给 invert=）",
     "meta",
   )
   add("remove-mask", "remove-mask <id>：移除蒙版（层不存在、或本来没有蒙版 → 报错，不静默成功）", "meta")
