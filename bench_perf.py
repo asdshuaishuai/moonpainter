@@ -167,6 +167,8 @@ def m2(reps=2):
     r10m, _ = bench(lambda: build(10, True), "render 4000\n", "10 层 + 软蒙版", reps)
 
     print("\n  结论（只报量到的，不外推）：")
+    print("    口径：上面的层都是**整幅画布**的层。几何层已按 paint_window 裁窗，")
+    print("    小层远便宜（未实测）；Text/Raster/Group/Adjust 不裁窗。")
     if r1:
         print(f"    1 层 = {r1:.2f}s ⇒ 「12MP 软 mask <2s」在**单层**下"
               f"{'成立' if r1 < 2.0 else '不成立'}")
