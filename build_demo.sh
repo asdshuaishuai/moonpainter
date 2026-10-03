@@ -104,7 +104,7 @@ if not d.get('clickthrough'):
     for c in bad:
         print('  -', c['name'], '|', c['extra'][:200])
     sys.exit(1)
-print('点击穿透 OK（%d 条断言：逐点形状/拖拽形状/点数下界/改名改坐标改标签/坏输入/重渲染）' % d['total'])
+print('点击穿透 OK（%d 条断言：逐点形状/拖拽形状/点数下界/改名改坐标改标签/坏输入/重渲染/顶栏徽标两条）' % d['total'])
 "
 cd ..
 

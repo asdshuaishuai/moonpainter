@@ -2078,6 +2078,13 @@ pub fn register_globals() -> Unit {
   js_reg1("__img_swap", fn(id : String) { do_img_swap(id) })
   js_reg2s("__shape_ready", fn(kind : String, box : String) { do_shape_ready(kind, box) })
   js_reg1("__poly_click", fn(xy : String) { do_poly_click(xy) })
+  // 徽标：**启动序列的一部分**，但也要能单独调——clickthrough 的负控要"元数据
+  // 缺失时"再跑一次看它是否明说（`import` 只有一次，重跑只能靠这个入口）。
+  js_reg0("__build_badge", fn() -> @js_async.Promise[Unit] {
+    @js_async.Promise::from_async(async fn() {
+      do_build_badge()
+    })
+  })
   js_reg0("__poly_finish", fn() -> @js_async.Promise[Unit] {
     @js_async.Promise::from_async(async fn() { do_poly_finish() })
   })
@@ -2274,6 +2281,11 @@ pub fn build_badge_text(info : String, engine_ver : String) -> String {
 ///|
 /// 徽标填进顶栏（浏览器启动时调一次；也是"这页是哪一版"的唯一可见凭据）。
 fn do_build_badge() -> Unit {
+  // 没有页面就不画（headless 自检有引擎、没有 DOM）。**判据在入口一处**：
+  // `js_has_dom` 说没有就返回，而不是让 `document` 未定义把进程打崩。
+  if !js_has_dom() {
+    return
+  }
   js_text("build-badge", build_badge_text(js_build_info(), engine_version_json()))
 }
 
@@ -2396,6 +2408,13 @@ fn main {
     register_globals()
     js_expose_exec(fn(line : String) { engine_exec_line(line) })
     js_expose_boot(fn() { bootstrap() })
+    // **启动序列的两条分支都要调徽标**。此前只有浏览器分支调它，于是
+    // `clickthrough`（headless 分支）里 `#build-badge` **永远是空的**——
+    // 而"启动了却没填"正是人第一步会看到的现象（顶栏一片空白 = 又在盲跑）。
+    // 更要紧的是：不调它，`js_text` 的 id 写错也没人发现（读回来是空串，
+    // 而空串不报错）。同一条纪律："验收工具与被验对象不同状态时，报出来的
+    // 现象会指向别的地方。"
+    do_build_badge()
     println(result.stringify())
   } else {
     // 浏览器：同步初始化（无 async 运行时依赖）

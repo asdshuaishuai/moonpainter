@@ -5155,3 +5155,33 @@ MVSL 的 `mvsl-clear` 之后该比的是 `impact` 自己的 `base == result`（�
 2. **手写 JSON 就是会错**。40×30 与 5×5 两个选区我手写了两遍，**两处都漏了
    一个 `}`**，引擎回「选择子解析失败：对象未闭合」——现象指向"选择子有问题"。
    现在选区 JSON 只有一处模板（`sc_geo_sel_wh`），`sc_geo_sel` 也从它出。
+
+**九、回填（续）：**"启动序列的那一步"也要有人守。** 徽标这条链此前只有两截
+有证据：`demo_test` 验纯函数 `build_badge_text`、`build_demo.sh#dist` 验
+`index.html` 里写了 `window.__MP_BUILD__`；**中间那一截没人管**——"页面启动时
+到底调没调 `do_build_badge()`、`js_text` 的 id 写错没有"。而它坏起来的样子
+正是人第一步会碰到的：**顶栏一片空白**（又回到"对着不知道哪一版点半天"）。
+
+`do_build_badge()` 原先只在**浏览器分支**被调用（`demo/main.mbt` 的 if/else），
+而 `clickthrough` 走 headless 分支 ⇒ 那条链在驱动器里从来没被走过。三处修：
+
+1. headless 分支**也调**它（两条分支的启动序列一致），`__build_badge` 另注册
+   一个可显式调用的入口（负控要在"元数据缺失"状态再跑一次，而 `import` 只有
+   一次）；
+2. `js_has_dom()` 判据**一处**：headless 自检有引擎没有页面，`document` 未定义
+   时 `getElementById` 是 ReferenceError（实测：加了调用之后第 4 步当场
+   `ReferenceError: document is not defined`）。"画到页面上的东西"先问有没有
+   页面，而不是改十几个 FFI（那会有十几份拷贝）；
+3. `clickthrough` 在 **import 之前**设 `globalThis.__MP_BUILD__`（与浏览器同序：
+   `index.html` 那段 inline script 就排在 `demo.js` 之前），正控读**启动序列
+   填出来的**文案（不是"显式调一次"），负控清掉元数据后再调一次看它是否明说。
+
+**判据自证（注入三次，都被抓住）：** ①headless 分支不调徽标 ⇒ 正控红、实测
+文本为空；②`js_text` 的 id 写成 `build-badge-x` ⇒ 正控与负控都红（空串不报错，
+这正是"静默失败"的样子）；③元数据缺失时不点名 `./build_demo.sh` ⇒ 负控红。
+clickthrough 36 → 38 条。
+
+⚠️ 顺手记一条**工具**：这一轮给 `/tmp/ct.sh` 写了"只跑 clickthrough"的快捷
+路径（`moon build --target js` + 拷 `demo.js`/`clickthrough.mjs` 进 `dist/` 再
+`node`），一次约 20 秒——否则每次注入都要等 `./build_demo.sh` 九步。**注入验证
+要在一次会话里做很多次，先给自己铺一条快路**（但门禁里跑的仍是九步那版）。

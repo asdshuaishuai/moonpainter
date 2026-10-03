@@ -1,6 +1,13 @@
 /// demo —— DOM FFI 绑定（demo/ui_ffi）。仅 js 后端。
 
 ///|
+/// 有没有页面（DOM）？**headless 自检没有**（`build_demo.sh#4` 只给引擎，不给
+/// 页面），而 `document` 未定义时任何 `getElementById` 都是 ReferenceError。
+/// 判据放一处：要"画到页面上"的东西先问它，别改每一个 FFI（那会有十几份拷贝）。
+extern "js" fn js_has_dom() -> Bool =
+  #| () => typeof document !== 'undefined'
+
+///|
 extern "js" fn js_text(id : String, text : String) -> Unit =
   #| (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; }
 

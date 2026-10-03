@@ -56,6 +56,16 @@ globalThis.localStorage = {
 if (!globalThis.performance) globalThis.performance = { now: () => Date.now() };
 globalThis.requestAnimationFrame = (f) => setTimeout(f, 0);
 
+// **构建元数据要在 import 之前设**：浏览器里 `dist/index.html` 的 inline script
+// 就排在 `demo.js` 之前（`build_demo.sh` 写的那段）。顺序反了就不算"与浏览器
+// 同一状态"——而徽标正是"这一页是哪一版"的唯一可见凭据（人做功能测试的第一件事）。
+globalThis.__MP_BUILD__ = {
+  time: '2026-10-03T00:00:00Z',
+  commit: 'ct1234',
+  wasm_sha: 'abcdef0123456789',
+  demo_sha: 'fedcba9876543210',
+};
+
 // 先 import（此刻还没有 window，`js_is_node()` 为真 → 走 headless 分支：
 // 引擎自检 + 注册处理器表 + 暴露引擎入口）。之后再把 window 补上，
 // 因为处理器要用 `window.MPST`（工具/颜色/笔宽）与 `window.__polyPreview`。
@@ -236,6 +246,27 @@ check(
   !/⚠/.test(status()) && layers().some((l) => l.kind === 'group' && (l.children || []).some((c) => c.id === 'gm1')),
   status(),
 );
+
+// ③ 顶栏徽标：**这一页是哪一版**（人做功能测试的第一件事）。
+// 正控读的是"启动序列真的填了"——不是"显式调了一次"，所以它同时守住
+// "启动时有没有调 do_build_badge"（此前 headless 分支从不调它 ⇒ 徽标恒空）
+// 与"js_text 的 id 写错没有"（id 错了读回来是空串，而空串不报错）。
+const badge = () => el('build-badge').textContent || '';
+check(
+  '正控：启动后顶栏徽标已填，且说得出这一页的 commit 与 wasm 前 8 位',
+  /ct1234/.test(badge()) && /wasm abcdef01/.test(badge()) && /引擎 v/.test(badge()),
+  badge(),
+);
+// 负控：元数据缺失时必须**明说**"不是 ./build_demo.sh 产出的"，而不是显示假版本号
+const savedBuild = globalThis.__MP_BUILD__;
+delete globalThis.__MP_BUILD__;
+await globalThis.__build_badge();
+check(
+  '负控：没有构建元数据时徽标明说「不是 ./build_demo.sh 产出的」',
+  /不是 \.\/build_demo\.sh 产出的/.test(badge()) && /引擎 v/.test(badge()),
+  badge(),
+);
+globalThis.__MP_BUILD__ = savedBuild;
 
 const bad = results.filter((r) => !r.ok);
 console.log(
