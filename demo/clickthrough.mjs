@@ -739,6 +739,27 @@ check(
   `画布=${canvas.join('x')} 层=${wide.w}x${wide.h}@${wide.x},${wide.y}`,
 );
 
+// ⑲ 「选区 → 只改这一块」这条 PS 核心动线的人侧走法：加调整层 → 它必须**被选中**
+// → 拖 ▭ 蒙版必须落在**调整层**上（而不是把照片挖掉一块）。判据两头咬：调整层有蒙版，
+// 且刚才那张照片层**没有**被动过。
+{
+  const before = new Set(layers().map((l) => l.id));
+  globalThis.__sel(wide.id);
+  await globalThis.__af('brightness', '+');
+  await flush();
+  const adj = layers().find((l) => !before.has(l.id));
+  const propsSel = !!adj && String(el('pprops').innerHTML).includes(adj.id);
+  await globalThis.__mask_ready('rect', '10,10,200,80');
+  await flush();
+  const adjMask = adj && layer(adj.id).mask;
+  const photoMask = layer(wide.id).mask;
+  check(
+    '局部调整动线：加调整层后它被选中（属性面板切到它），拖 ▭ 蒙版落在**调整层**上、照片层不被动',
+    !!adj && adj.kind === 'adjust' && propsSel && !!adjMask && adjMask.w === 200 && photoMask === undefined,
+    `选中=${propsSel} 调整层mask=${adjMask && adjMask.w} 照片层mask=${photoMask}｜状态栏=${status()}`,
+  );
+}
+
 // ⑯ 覆盖清单（机器对账用，格式由 `build_demo.sh#html-wiring` 解析）：
 // driver 走不到的处理器必须在这儿**写明原因**，否则"没覆盖"会静默变成"覆盖了"。
 /* coverage:begin

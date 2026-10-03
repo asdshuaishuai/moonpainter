@@ -1,8 +1,12 @@
 /// demo —— 专业修图软件 UI（demo/main）。
 ///
 /// 人机操作面（非一键 AI）：左列真实工具（移动/画笔/橡皮/吸管/裁剪/文本/缩放），
-/// 上下文选项条（笔色/笔径/滤镜强度/裁剪确认），右侧「调整·滤镜」面板
-/// （磨皮/美白/色彩/滤镜，全部以调整层叠加，可撤销可保存）。
+/// 上下文选项条（笔色/笔径/调整强度/裁剪确认），右侧「调整层」面板
+/// （一个算子 = 一步，非破坏叠加、可再调、可撤销；选中调整层后拖蒙版 = 只改那块）。
+///
+/// ⚠️ 这里**不是「一键美颜」**：面板上的每一项都对应一个**可再调的调整层**
+/// （`set-adjust` 原地改 op/value），与 AI 用的是同一条命令面。产品定位是
+/// "AI 替人做那些一步一步的手工操作"，所以每条操作都要能被看见、被改、被撤。
 
 let g_sel : Ref[String] = Ref("")
 let g_ready : Ref[Bool] = Ref(false)
@@ -403,10 +407,16 @@ fn do_filter(op : String, value_s : String) -> Unit {
   }
   let r = eng(line)
   if eng_ok(r) {
+    // **加完必须选中它**：调整层的意义是"这一步只影响这一块/这一层"，而人接下来
+    // 的动作（拖 ▭/◯ 蒙版）作用在**当前选中层**上。此前这里不选中，于是用户按
+    // 面板提示去框选区，蒙版盖到了**照片**上——"局部调整"变成了"把照片挖掉一块"。
+    g_sel.val = eng_s(r, "id")
     eng_render(800)
     refresh_ui()
     let how = if value_s == "" { "无参数" } else { "value=\{value_s}" }
-    js_status_bar("🎛 已叠加 \{op}（\{how}）— 调整层可撤销")
+    js_status_bar(
+      "🎛 已加调整层 \{op}（\{how}）— 现在拖 ▭/◯ 框出范围 = 只改那一块；数值可在下面「属性」里再调",
+    )
   } else {
     js_log_line("❌ \{eng_s(r, "error")}", "#f66")
   }
@@ -1953,11 +1963,12 @@ pub fn app_html() -> String {
       #|</div>
       #|<div class='rpanel'>
       #|<div class='rscroll'>
-      #|<div class='ph'>调整 · 美颜（叠加调整层，可撤销）</div>
+      #|<div class='ph'>调整层（一步一个算子 · 可再调 / 可撤销）</div>
+      #|<div class='hint' style='padding:0 10px 4px'>选中调整层后拖 ▭/◯ = 只改那块（蒙版）；已加过的层在下面「属性」里改数值。</div>
       #|<div class='fstr'><span>强度</span><input type='range' id='fstr' min='5' max='100' value='50'/><span id='fstr-v' class='hint'>0.50</span></div>
       #|<div class='fxgrid'>
-      #|<button onclick='globalThis.__af("smooth","+")'>🧴 磨皮</button>
-      #|<button onclick='globalThis.__af("whiten","+")'>🤍 美白</button>
+      #|<button onclick='globalThis.__af("smooth","+")'>🧴 平滑</button>
+      #|<button onclick='globalThis.__af("whiten","+")'>🤍 提亮</button>
       #|<button onclick='globalThis.__af("blur","+")'>🌫 模糊</button>
       #|<button onclick='globalThis.__af("sharpen","+")'>🔪 锐化</button>
       #|<button onclick='globalThis.__af("warm","+")'>🔥 暖色</button>
@@ -2538,7 +2549,7 @@ fn main {
     js_bind_size_labels()
     js_status_bar("就绪 — 📷 先导入一张照片（左栏 📷 或直接拖进来）")
     js_log_line(
-      "🖼 照片工作台就绪：点左栏 \{""}📷 导入图片\{""}或把照片拖进来 —— **导入后画布自动变成照片尺寸、1:1 不缩放**（超过 {MAX_IMPORT_SIDE} 像素的长边会先等比缩到上限）。导入后右栏「调整·美颜」直接作用于它，左栏是画笔/裁剪/吸管。",
+      "🖼 照片工作台就绪：点左栏 \{""}📷 导入图片\{""}或把照片拖进来 —— **导入后画布自动变成照片尺寸、1:1 不缩放**（超过 {MAX_IMPORT_SIDE} 像素的长边会先等比缩到上限）。导入后右栏「调整层」直接作用于它（一步一个算子，可再调、可撤销；选中它再拖 ▭/◯ 就只改那块），左栏是画笔/裁剪/吸管。",
       "#6af",
     )
   }
