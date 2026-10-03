@@ -48,6 +48,8 @@ cp demo/clickthrough.mjs dist/clickthrough.mjs
 #   commit   = git HEAD 短 hash（工作区脏时带 `+`）
 #   wasm_sha = 产物内容 sha256 前 12 位（与引擎自报的 `mp_version` 一起显示）
 #   demo_sha = demo.js 内容 sha256 前 12 位，同时当 `<script src>` 的查询串
+# 三份产物与这三行元数据必须同源：本步产出后与 `serve_demo.sh` 启动前都调
+# `check_dist_meta.py`（判据一处）——手工拷文件进 dist/ 会让人测错版本。
 #              （查询串变了浏览器必定重新拉取，不会再拿旧的 demo.js）
 MP_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
 git diff --quiet -- . 2>/dev/null || MP_COMMIT="$MP_COMMIT+"
@@ -69,6 +71,9 @@ cat > dist/index.html << HTML
 HTML
 echo "构建元数据 commit=$MP_COMMIT wasm=$MP_WASM_SHA demo.js=$MP_JS_SHA time=$MP_NOW"
 ls -la dist | awk 'NR>1 {print $5, $9}'
+# 刚产出的 dist 必须自洽（判据与 serve_demo.sh 共用一处）：徽标写的就是
+# 这三份产物本身。之前只有"人点开看一眼"，而手工拷文件进 dist/ 谁都不知道。
+python3 check_dist_meta.py
 
 echo "== 4/9 Node headless 自检（mock 模型 × wasm 引擎） =="
 cd dist

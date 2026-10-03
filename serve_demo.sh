@@ -28,6 +28,12 @@ print(m.group(1) if m else '（index.html 里没有 __MP_BUILD__：这不是 bui
 PY
 )
 echo "dist 构建元数据：$META"
+
+# **产物与徽标必须同源**：手工往 `dist/` 拷过文件（或只重建了一半）时，人会
+# 看着徽标上的 commit、点的却是另一份引擎。判据在 `check_dist_meta.py` 一处
+# （构建的 dist 步也调它）——不一致直接拒绝启动：静默服务一份混搭的 dist
+# 比"提醒一句"坏得多。
+python3 check_dist_meta.py
 echo "MoonPainter demo → http://127.0.0.1:$PORT/"
 
 exec python3 - "$PORT" << 'PY'
