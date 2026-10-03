@@ -333,6 +333,9 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #|   wrap.appendChild(svg);
   #|   const pl = svg.querySelector('polyline');
   #|   const pc = svg.querySelector('circle');
+  #|   // **点拾取类工具只有这一份清单**：折线/多边形逐点建层、套索逐点圈选区。
+  #|   // 三处（点击/双击/按键）都读它——抄第二遍就是"加了个工具而某个入口没跟上"。
+  #|   window.__MP_POLY_TOOLS = ['line', 'poly', 'lasso'];
   #|   window.__polyPreview = (pts) => {
   #|     if (!pts) { svg.style.display = 'none'; return; }
   #|     const r = img.getBoundingClientRect();
@@ -390,7 +393,7 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #|       ov.style.display = 'block';
   #|       ov.style.left = dx + 'px'; ov.style.top = dy + 'px';
   #|       ov.style.width = '0px'; ov.style.height = '0px';
-  #|     } else if (t === 'line' || t === 'poly') {
+  #|     } else if (window.__MP_POLY_TOOLS.includes(t)) {
   #|       globalThis.__poly_click(x + ',' + y);
   #|     }
   #|   });
@@ -469,13 +472,13 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #|   // 前端去重（poly_add）——所以这里不需要额外防抖。
   #|   img.addEventListener('dblclick', (e) => {
   #|     const t = window.MPST ? window.MPST.tool : 'move';
-  #|     if (t !== 'line' && t !== 'poly') return;
+  #|     if (!window.__MP_POLY_TOOLS.includes(t)) return;
   #|     e.preventDefault();
   #|     globalThis.__poly_finish();
   #|   });
   #|   document.addEventListener('keydown', (e) => {
   #|     const t = window.MPST ? window.MPST.tool : 'move';
-  #|     if (t !== 'line' && t !== 'poly') return;
+  #|     if (!window.__MP_POLY_TOOLS.includes(t)) return;
   #|     if (e.key === 'Enter') { e.preventDefault(); globalThis.__poly_finish(); }
   #|     else if (e.key === 'Escape') { e.preventDefault(); globalThis.__poly_cancel(); }
   #|   });

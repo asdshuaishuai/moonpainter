@@ -230,7 +230,7 @@ fn do_move_delta(dx_s : String, dy_s : String) -> Unit {
 ///|
 /// 取一个非负整数（取不到或非法给 0）。蒙版圆角/羽化用——它们是非负像素值，
 /// 负号在这里没有意义，所以不走 `parse_double_safe` 那条带符号的路径。
-fn parse_int_safe(s : String) -> Int {
+pub fn parse_int_safe(s : String) -> Int {
   let mut v = 0
   for ch in s.iter() {
     let c = ch.to_int()
@@ -312,6 +312,118 @@ pub fn mask_line(id : String, kind : String, parts : Array[String], radius : Int
   line
 }
 
+///|
+/// **必到**的数值字段：缺了或不是数就报错。
+///
+/// 不做"取不到给默认值"——实测这么写的代价：旋转在**报告面**叫 `rot`，而容器
+/// 字段叫 `rotation_deg`；我按后一个名字去读，`json_as_double` 静默给 0，
+/// 于是"转过角度的层"被当成没转，整道检查**悄悄失效**（画面偏一层的位置）。
+/// 名字对不上就该响，而不是退默认。
+fn must_double(j : Json, key : String) -> Result[Double, String] {
+  match json_get(j, key) {
+    Some(Json::Number(n, ..)) => Ok(n)
+    _ => Err("引擎的报告面没报 \{key} 字段（前端与引擎版本可能不匹配）")
+  }
+}
+
+///|
+/// **可选**的布尔字段：缺键 = 假。这是报告面的约定（`layer_summary` 里
+/// `if l.flip_h || l.flip_v { … }`——只写非默认值，同 `radius`/`points`），
+/// 所以"没这个键"是**合法**的假，不是版本不匹配。
+/// ⚠️ 反过来，`rot`/`x`/`y` 是**无条件写**的，那几个必须走 `must_double`：
+/// 读错键名（报告面 `rot` vs 容器 `rotation_deg`）时静默退默认，整道闸会失效。
+fn opt_bool(j : Json, key : String) -> Bool {
+  match json_get(j, key) {
+    Some(Json::True) => true
+    _ => false
+  }
+}
+
+///|
+/// 出错时把"收到的到底是什么"一起报出来（截断）：不说清收到的值，调用方
+/// 在几百字符的 JSON 里没法自查（同 `session-open`/`mvsl-decode` 那条纪律）。
+fn json_brief(j : Json?) -> String {
+  let s = match j {
+    Some(v) => "\{v}"
+    None => "（没有这个键）"
+  }
+  if s.length() > 120 {
+    s[0:120].to_owned() + "…"
+  } else {
+    s
+  }
+}
+
+///|
+/// **蒙版坐标换算：画布 → 本层局部**（返回画布原点在本层局部里的位置，即 `l.x/l.y`）。
+///
+/// 为什么必须换算：蒙版贴在**层矩形**上（`mask_cover_at` 收的是层局部点，PS 忠实：
+/// 蒙版跟着层走），而人侧在画布上拖出来的框/点列是**画布**坐标。此前直接当层局部
+/// 用 ⇒ 蒙版整体偏一层的位置（层在 (100,100) 时在画布 (100,100) 拖的框实际盖到
+/// (200,200)），命令回 ok、画面"看着像没生效或盖错地方"。
+///
+/// 只在"根级 + 不旋转 + 不翻转"时能这么减（那时局部 = 画布 − (x,y)，是纯平移）；
+/// 其余情形局部盒不再是轴对齐矩形，人侧**明确拒绝并说清**，不猜。
+fn mask_local_offset(id : String) -> Result[(Double, Double), String] {
+  let q = eng("query-layer \{id}")
+  if !eng_ok(q) {
+    return Err("读不到图层 \{id}：\{eng_s(q, "error")}")
+  }
+  let l = match json_get(q, "layer") {
+    Some(x) => x
+    // 回显收到的载荷（截断）：只说"没这个字段"，在几百字符的 JSON 里没法自查
+    None => return Err("query-layer 没回 layer 字段：\{json_brief(Some(q))}")
+  }
+  // ⚠️ 报告面的键是 `rot`（容器字段才叫 `rotation_deg`）。读错名字时下面这两道
+  // 闸会静默失效——所以取值走 `must_*`，缺字段直接报错而不是退默认。
+  let rot = match must_double(l, "rot") {
+    Ok(v) => v
+    Err(msg) => return Err(msg)
+  }
+  let fh = opt_bool(l, "flip_h")
+  let fv = opt_bool(l, "flip_v")
+  if rot != 0.0 {
+    return Err("这一层转过角度（rot=\{rot}）：蒙版坐标是层局部的，旋转下的换算还没做（先把角度归零，或把蒙版加在没转的层上）")
+  }
+  if fh || fv {
+    return Err("这一层翻转过：蒙版坐标是层局部的，翻转下的换算还没做（先取消翻转，或把蒙版加在没翻的层上）")
+  }
+  let lst = eng("list-layers")
+  let roots = match json_get(lst, "layers") {
+    Some(Json::Array(a)) => a
+    _ => []
+  }
+  match parent_group_of(roots, id, "") {
+    Some("") => ()
+    Some(p) => {
+      return Err("这一层在组 \{p} 里：蒙版坐标是层局部的，组变换下的换算还没做（先移出组，或把蒙版加在组外的层上）")
+    }
+    None => ()
+  }
+  let lx = match must_double(l, "x") {
+    Ok(v) => v
+    Err(msg) => return Err(msg)
+  }
+  let ly = match must_double(l, "y") {
+    Ok(v) => v
+    Err(msg) => return Err(msg)
+  }
+  Ok((lx, ly))
+}
+
+///|
+/// 把画布坐标的矩形串 `x,y,w,h` 平移到层局部（减 `(ox,oy)`）。
+/// 只平移**盒**：多边形顶点是相对盒原点的差值，原本就是整数，不因小数层位置丢精度。
+pub fn shift_rect(parts : Array[String], ox : Double, oy : Double) -> Array[String] {
+  [
+    d2s(parse_double_safe(parts[0]) - ox),
+    d2s(parse_double_safe(parts[1]) - oy),
+    parts[2],
+    parts[3],
+  ]
+}
+
+///|
 fn do_mask_ready(kind : String, rect : String) -> Unit {
   let id = g_sel.val
   if id == "" {
@@ -327,11 +439,26 @@ fn do_mask_ready(kind : String, rect : String) -> Unit {
   }
   let radius = parse_int_safe(js_state_get("mask_radius"))
   let feather = parse_int_safe(js_state_get("mask_feather"))
-  let r = eng(mask_line(id, kind, parts, radius, feather))
-  if eng_ok(r) {
+  let (ox, oy) = match mask_local_offset(id) {
+    Ok(p) => p
+    Err(msg) => {
+      js_status_bar("⚠ " + msg)
+      return
+    }
+  }
+  let local = shift_rect(parts, ox, oy)
+  let line = mask_line(id, kind, local, radius, feather)
+  if do_ui_cmd(line) {
     let extra = if feather > 0 { "，羽化 \{feather}px" } else { "" }
     let extra2 = if kind == "rect" && radius > 0 { "，圆角 \{radius}px" } else { "" }
-    js_status_bar("▨ 蒙版已加：\{rect}\{extra2}\{extra}（蒙版外不渲染）")
+    let lx = local[0]
+    let ly = local[1]
+    let shift_note = if ox == 0.0 && oy == 0.0 {
+      ""
+    } else {
+      "（层局部 x=\{lx} y=\{ly}：蒙版贴在层矩形上，跟着这一层走）"
+    }
+    js_status_bar("▨ 蒙版已加：\{rect}\{extra2}\{extra}\{shift_note}（蒙版外不渲染）")
     eng_render(800)
     refresh_ui()
   }
@@ -1230,11 +1357,18 @@ fn shape_ready(kind : String, n : Int) -> Bool {
 /// 唯一能确认工具真的切换了的反馈）。
 fn poly_hint(kind : String, n : Int) -> String {
   let need = if kind == "line" { 2 } else { 3 }
-  let what = if kind == "line" { "折线" } else { "多边形" }
-  if n >= need {
-    "✏️ \{what}：已点 \{n} 个点 —— 双击画布或按回车结束（点越多边越多）"
+  let what = if kind == "line" {
+    "折线"
+  } else if kind == "lasso" {
+    "套索"
   } else {
-    "✏️ \{what}：已点 \{n} 个点，还差 \{need - n} 个（双击/回车结束，Esc 放弃）"
+    "多边形"
+  }
+  let how = if kind == "lasso" { "圈定" } else { "结束" }
+  if n >= need {
+    "✏️ \{what}：已点 \{n} 个点 —— 双击画布或按回车\{how}（点越多边越贴合）"
+  } else {
+    "✏️ \{what}：已点 \{n} 个点，还差 \{need - n} 个（双击/回车\{how}，Esc 放弃）"
   }
 }
 
@@ -1306,19 +1440,36 @@ fn do_shape_ready(kind : String, box : String) -> Unit {
 fn do_poly_click(xy : String) -> Unit {
   match xy2(xy) {
     Some((x, y)) => {
-      let kind = current_shape_tool()
       g_pts.val = poly_add(g_pts.val, x, y)
       js_poly_preview(pts_str(g_pts.val))
-      js_status_bar(poly_hint(kind, g_pts.val.length()))
+      js_status_bar(poly_hint(point_tool(), g_pts.val.length()))
     }
     None => js_status_bar("⚠ 画布坐标没读出来（\{xy}）")
   }
 }
 
 ///|
+/// 点拾取类工具（逐点点击的那三种）**只有这一份清单**：折线/多边形逐点建层、
+/// **套索**逐点圈任意形状选区。三处判断（工具切换、落点提示、结束分叉）都读它。
+fn is_point_tool(name : String) -> Bool {
+  name == "line" || name == "poly" || name == "lasso"
+}
+
+///|
+/// 当前点拾取工具的名字（提示语与结束分叉用）。读的是同一处页面状态。
+fn point_tool() -> String {
+  let t = js_state_get("tool")
+  if is_point_tool(t) {
+    t
+  } else {
+    "poly"
+  }
+}
+
+///|
 /// 当前是折线还是多边形（默认多边形）——形态只由工具决定，别在别处再判一遍。
 fn current_shape_tool() -> String {
-  if js_state_get("tool") == "line" {
+  if point_tool() == "line" {
     "line"
   } else {
     "poly"
@@ -1326,8 +1477,73 @@ fn current_shape_tool() -> String {
 }
 
 ///|
-/// 结束逐点绘制（双击 / 回车）：点数够就建层，不够就说还差几个。
+/// **套索落定：点列 → 一条 `add-mask kind=polygon`**（纯函数，测试直接喂点列断言）。
+///
+/// 三个坐标事实（写错的表现都是"选区整体位移"或"被入口拒绝"）：
+/// ① 蒙版的 `x/y/w/h` 是**画布坐标**（与拖拽建矩形蒙版同一套，实测：层在
+///    (100,100)、蒙版同坐标正好盖住该层）；
+/// ② `points=` 是**蒙版盒内的局部坐标**（`pts_local` 相对紧包围盒原点）；
+/// ③ 盒子取点列的**紧包围盒且宽高至少 1**（`pts_box`）——盒子就是支持窗，
+///    顶点必须落在盒内（引擎的硬判据），所以"盒子跟着内容走"在这里是必须的。
+pub fn lasso_mask_line(
+  id : String,
+  pts : Array[(Int, Int)],
+  feather : Int,
+  ox : Double,
+  oy : Double
+) -> String {
+  let (x0, y0, w, h) = pts_box(pts)
+  // 盒平移到**层局部**（减层的位置）；顶点是相对盒原点的整数差，不受小数层位置影响。
+  let bx = d2s(x0.to_double() - ox)
+  let by = d2s(y0.to_double() - oy)
+  let mut line = "add-mask \{id} kind=polygon x=\{bx} y=\{by} w=\{w} h=\{h} points=\{pts_str(pts_local(pts))}"
+  if feather > 0 {
+    line = line + " feather=\{feather}"
+  }
+  line
+}
+
+///|
+/// 套索圈定（双击 / 回车）：点数够就加蒙版，不够就说还差几个。
+/// 选区**只作用于当前选中图层**（PS 忠实：选区 = 该层的蒙版），没选层就说清。
+fn do_lasso_finish() -> Unit {
+  let pts = g_pts.val
+  if pts.length() < 3 {
+    js_status_bar(poly_hint("lasso", pts.length()))
+    return
+  }
+  let id = g_sel.val
+  if id == "" {
+    js_status_bar("⚠ 套索要先在右侧图层面板点选图层，再圈出选区（选区 = 该层的蒙版）")
+    return
+  }
+  let feather = parse_int_safe(js_state_get("mask_feather"))
+  let (ox, oy) = match mask_local_offset(id) {
+    Ok(p) => p
+    Err(msg) => {
+      js_status_bar("⚠ " + msg)
+      return
+    }
+  }
+  let line = lasso_mask_line(id, pts, feather, ox, oy)
+  let n = pts.length()
+  g_pts.val = []
+  js_poly_preview("")
+  if do_ui_cmd(line) {
+    let extra = if feather > 0 { "，羽化 \{feather}px" } else { "" }
+    js_status_bar("🪢 任意形状选区已加（\{n} 个顶点\{extra}）—— 只改形状内的像素；反选/去蒙版在右栏（选区就是这层的蒙版）")
+    eng_render(800)
+    refresh_ui()
+  }
+}
+
+///|
+/// 结束逐点绘制（双击 / 回车）：套索去圈选区；折线/多边形建层，不够就说还差几个。
 fn do_poly_finish() -> Unit {
+  if point_tool() == "lasso" {
+    do_lasso_finish()
+    return
+  }
   let kind = current_shape_tool()
   let pts = g_pts.val
   if !shape_ready(kind, pts.length()) {
@@ -1351,7 +1567,7 @@ fn do_poly_cancel() -> Unit {
   if n > 0 {
     g_pts.val = []
     js_poly_preview("")
-    js_status_bar("✏️ 已放弃 \{n} 个未闭合的点（折线/多边形要双击或回车结束）")
+    js_status_bar("✏️ 已放弃 \{n} 个未闭合的点（折线/多边形/套索要双击或回车结束）")
   }
 }
 
@@ -1824,7 +2040,7 @@ fn inject_css() -> Unit {
     #|.carea{background:#26262f;display:flex;align-items:center;justify-content:center;overflow:auto;position:relative}
     #|.cwrap{border:1px solid #444;box-shadow:0 4px 24px #0008;background:repeating-conic-gradient(#3a3a4e 0% 25%,#2a2a3e 0% 50%) 0 0/16px 16px}
     #|#canvas-img{display:block;max-width:100%;max-height:72vh}
-    #|#canvas-img.tool-brush,#canvas-img.tool-erase,#canvas-img.tool-pick,#canvas-img.tool-crop,#canvas-img.tool-text,#canvas-img.tool-rect,#canvas-img.tool-ellipse,#canvas-img.tool-line,#canvas-img.tool-poly{cursor:crosshair}
+    #|#canvas-img.tool-brush,#canvas-img.tool-erase,#canvas-img.tool-pick,#canvas-img.tool-crop,#canvas-img.tool-text,#canvas-img.tool-rect,#canvas-img.tool-ellipse,#canvas-img.tool-line,#canvas-img.tool-poly,#canvas-img.tool-lasso{cursor:crosshair}
     #|.rpanel{background:#1b1b2e;border-left:1px solid #32324a;display:flex;flex-direction:column;overflow:hidden}
     #|.rscroll{flex:1;overflow-y:auto;display:flex;flex-direction:column}
     #|.ph{padding:7px 10px 5px;font-size:10px;font-weight:600;color:#667;text-transform:uppercase;letter-spacing:.8px;user-select:none}
@@ -1949,7 +2165,8 @@ pub fn app_html() -> String {
       #|<div class='t' data-tool='rect' title='矩形（拖拽）' onclick='globalThis.__tool("rect")'>▤</div>
       #|<div class='t' data-tool='ellipse' title='椭圆（拖拽）' onclick='globalThis.__tool("ellipse")'>⬭</div>
       #|<div class='t' data-tool='line' title='折线（逐点点击；双击或回车结束）' onclick='globalThis.__tool("line")'>╱</div>
-      #|<div class='t' data-tool='poly' title='多边形（逐点点击 ≥3 点；双击/回车闭合，Esc 放弃）' onclick='globalThis.__tool("poly")'>⬠</div>
+      #|<div class='t' data-tool='poly' title='多边形图层（逐点点击 ≥3 点；双击/回车闭合，Esc 放弃）' onclick='globalThis.__tool("poly")'>⬠</div>
+      #|<div class='t' data-tool='lasso' title='任意形状选区（套索：逐点点击 ≥3 点圈出一块，只改这块；选区 = 该层的蒙版。双击/回车圈定，Esc 放弃）' onclick='globalThis.__tool("lasso")'>🪢</div>
       #|<div class='ts'></div>
       #|<div class='t' title='放大' onclick='globalThis.__zoom("1.25")'>🔍+</div>
       #|<div class='t' title='缩小' onclick='globalThis.__zoom("0.8")'>🔍−</div>
@@ -2146,7 +2363,7 @@ pub fn register_globals() -> Unit {
   js_reg1("__back", fn(id : String) { do_reorder(id, "back") })
   js_reg1("__tool", fn(name : String) {
     // 切换工具时把没闭合的点说清楚再放弃：静默丢掉已点的点，人会以为画上去了
-    if name != "line" && name != "poly" && g_pts.val.length() > 0 {
+    if !is_point_tool(name) && g_pts.val.length() > 0 {
       do_poly_cancel()
     }
     js_set_tool(name)
@@ -2162,6 +2379,7 @@ pub fn register_globals() -> Unit {
         "ellipse" => "⬭ 椭圆：拖拽一个框"
         "line" => poly_hint("line", 0)
         "poly" => poly_hint("poly", 0)
+        "lasso" => poly_hint("lasso", 0)
         _ => "🖐 移动：图层面板选中后拖动"
       },
     )

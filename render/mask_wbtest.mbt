@@ -450,3 +450,70 @@ test "多边形蒙版：**层级**渲染也要裁（快速路径的『覆盖恒�
   assert_eq(@codec.rgba_get(img, 15, 15), 0xFFFFFFFF, msg="盒内三角形外必须被裁（快速路径不许当矩形）")
   assert_eq(@codec.rgba_get(img, 18, 18), 0xFFFFFFFF, msg="更外侧同样被裁")
 }
+
+///|
+/// **层不在原点**时的蒙版坐标：`m.x/m.y` 是**本层局部**坐标（`mask_cover_at` 收的
+/// 就是局部点），而矩形层的**快速填充**路径在画布坐标里算盒 —— 它此前直接把
+/// 局部盒当画布盒，于是"覆盖恒为 1"的那块被画到了**错位置**。
+///
+/// 实测（修前）：层在 (30,30) 50×50、蒙版局部 (40,40,10,10) ⇒ 画布 (45,45) 也是红的
+/// （那是"静默加亮"：那一像素按 cover=1 合成，而它其实在蒙版外）。
+test "蒙版盒是层局部坐标：矩形层不在原点时，快速路径不许多画一块" {
+  let doc = @core.new_document("mask-moved", 200, 200)
+  let l = @core.default_layer("r", "r", 30.0, 30.0, 50.0, 50.0)
+  let red = { ..l, fill: @core.Fill::Solid(0xFFFF0000) }
+  let m : @core.LayerMask = {
+    kind: @core.ShapeKind::Rect,
+    x: 40.0,
+    y: 40.0,
+    w: 10.0,
+    h: 10.0,
+    radius: 0.0,
+    feather: 0.0,
+    roughen: 0.0,
+    invert: false,
+    points: [],
+  }
+  doc.layers.push({ ..red, mask: Some(m) })
+  let img = render_doc(doc, RenderEnv::new())
+  // 局部 (40..50)² ⇒ 画布 (70..80)² 才是"覆盖恒为 1"的那块
+  assert_eq(@codec.rgba_get(img, 75, 75), 0xFFFF0000, msg="盒内（局部 45,45）保留")
+  // 局部 (15,15)：在层内、蒙版外 ⇒ 必须被裁。修前这里是红的（快速路径按画布算）
+  assert_eq(@codec.rgba_get(img, 45, 45), 0xFFFFFFFF, msg="蒙版外必须被裁：局部坐标不许当画布坐标用")
+  assert_eq(@codec.rgba_get(img, 35, 35), 0xFFFFFFFF, msg="更靠左上同样被裁")
+}
+
+///|
+/// **套索（多边形蒙版）用在不在原点的层上**：盒子与顶点都是层局部坐标。
+/// 这是人侧套索的真实形态（在画布上拖出来的点要换算成层局部），
+/// 也是"任意形状选区"能不能用于照片层/素材层的分水岭。
+test "多边形蒙版（套索）在不在原点的层上也按局部坐标裁" {
+  let doc = @core.new_document("poly-moved", 200, 200)
+  let l = @core.default_layer("r", "r", 20.0, 20.0, 60.0, 50.0)
+  let red = { ..l, fill: @core.Fill::Solid(0xFFFF0000) }
+  let tri : @core.LayerMask = {
+    kind: @core.ShapeKind::Polygon,
+    // 层在画布 (20,20)，而蒙版盒是**层局部**坐标 ⇒ 盖满整层就是 (0,0,60,50)。
+    // 写成 (20,20,60,50)（画布坐标）会整体偏一层的位置——这正是人侧套索
+    // 此前踩的那条：盒与顶点都必须是层局部。
+    x: 0.0,
+    y: 0.0,
+    w: 60.0,
+    h: 50.0,
+    radius: 0.0,
+    feather: 0.0,
+    roughen: 0.0,
+    invert: false,
+    points: [(0.0, 0.0), (60.0, 0.0), (30.0, 50.0)],
+  }
+  doc.layers.push({ ..red, mask: Some(tri) })
+  let img = render_doc(doc, RenderEnv::new())
+  // 画布 (50,36) = 局部 (30,16) ⇒ 三角形内
+  assert_eq(@codec.rgba_get(img, 50, 36), 0xFFFF0000, msg="三角形内保留（左上角顶点在画布 (20,20)）")
+  // 画布 (25,25) = 局部 (5,5) ⇒ 内（y=5 时三角形横跨 x∈[3,57]）
+  assert_eq(@codec.rgba_get(img, 25, 25), 0xFFFF0000, msg="贴着左上角也在三角形内")
+  // 画布 (76,66) = 局部 (56,46) ⇒ 盒内、三角形外（y=46 时横跨 x∈[27.6,32.4]）
+  assert_eq(@codec.rgba_get(img, 76, 66), 0xFFFFFFFF, msg="盒内形状外必须被裁")
+  // 画布 (18,18) 在层外（层从 (20,20) 起）⇒ 白底
+  assert_eq(@codec.rgba_get(img, 18, 18), 0xFFFFFFFF, msg="层外仍是白底")
+}

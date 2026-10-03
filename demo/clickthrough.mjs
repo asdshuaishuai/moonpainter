@@ -582,19 +582,34 @@ check(
 );
 
 // ⑩ 蒙版：加 → 反转 → 摘（三态都要能从报告面读出来）
-await globalThis.__sel('e1'); // 蒙版同样作用于选中的层
-await globalThis.__mask_ready('rect', '20,20,30,15');
-const mk = layer('e1').mask;
-await globalThis.__mask_invert('e1');
-const mk2 = layer('e1').mask;
-await globalThis.__mask_clear('e1');
+// 靶子自己新建（根级、不转不翻）：蒙版坐标是**层局部**的，人侧对转过/翻过/
+// 在组里的层会明确拒绝——拿别的块留下的层来测，测的就成了"那层恰好合不合格"。
+exec('add-rect x=20 y=20 w=30 h=15 fill=#22CC88FF name=蒙版靶');
+await globalThis.__refresh();
+await flush();
+const maskTarget = layers().find((l) => l.name === '蒙版靶');
+await globalThis.__sel(maskTarget.id);
+// 蒙版只盖这层的**左上四分之一**：盒（画布 20,20,15,15）换算到层局部是 (0,0,15,15)。
+// 判据两头咬：①报告面的盒是**层局部**（x=0,y=0）；②盒内保留、盒外被裁
+// —— 后半句是矩形层**快速路径**的端到端把手（它曾把局部盒当画布盒用，于是
+// "覆盖恒为 1"的那块画到了别处；只有重建 wasm 才照得出来）。
+await globalThis.__mask_ready('rect', '20,20,15,15');
+await flush();
+const mk = layer(maskTarget.id).mask;
+const mkIn = exec('probe x=25 y=25').color;
+const mkOutRaw = exec('probe x=45 y=25');
+const mkOut = mkOutRaw.color;
+await globalThis.__mask_invert(maskTarget.id);
+const mk2 = layer(maskTarget.id).mask;
+await globalThis.__mask_clear(maskTarget.id);
 check(
-  '蒙版：加得上（报得出矩形与坐标）→ 反选认账（invert 翻面）→ 摘得掉（三者都可读）',
+  '蒙版：加得上（盒换算到层局部 + 盒内保留/盒外被裁）→ 反选认账（invert 翻面）→ 摘得掉',
   // ⚠️ 反选**不改 kind**：它在报告里是 `mask.invert: true`（实测；第一版我断言
   // "kind 变了"，红了之后现象指向"反选没生效"，其实是我的判据念错了名字）。
-  !!mk && mk.kind === 'rect' && mk.w === 30 && !!mk2 && mk2.invert === true &&
-    mk.invert !== true && layer('e1').mask === undefined,
-  `加=${mk && mk.kind}:${mk && mk.w} 反转=${mk2 && mk2.kind} 摘=${layer('e1').mask === undefined}｜层=${layers().map((l) => l.id).join()}｜状态栏=${status()}`,
+  !!mk && mk.kind === 'rect' && mk.w === 15 && mk.x === 0 && mk.y === 0 &&
+    mkIn === '#22CC88FF' && mkOut === '#FFFFFFFF' && !!mk2 && mk2.invert === true &&
+    mk.invert !== true && layer(maskTarget.id).mask === undefined,
+  `加=${mk && mk.kind}:${mk && mk.w}(x=${mk && mk.x},y=${mk && mk.y}) 盒内=${mkIn} 盒外=${mkOut}(${JSON.stringify(mkOutRaw)}) 画布=${exec('stats').width}x${exec('stats').height} 反转=${mk2 && mk2.kind} 摘=${layer(maskTarget.id).mask === undefined}｜状态栏=${status()}`,
 );
 
 // ⑪ 调整层与滤镜：改算子/改数值（原地改，不重建）+ 一键滤镜真的建层
@@ -757,6 +772,62 @@ check(
     '局部调整动线：加调整层后它被选中（属性面板切到它），拖 ▭ 蒙版落在**调整层**上、照片层不被动',
     !!adj && adj.kind === 'adjust' && propsSel && !!adjMask && adjMask.w === 200 && photoMask === undefined,
     `选中=${propsSel} 调整层mask=${adjMask && adjMask.w} 照片层mask=${photoMask}｜状态栏=${status()}`,
+  );
+}
+
+// ⑳ 任意形状选区（套索 🪢）：逐点圈定 → 该层拿到 **kind=polygon** 的蒙版（不是矩形）。
+// 判据两头咬：①`query-layer` 报 polygon 且盒 = 点列紧包围盒、顶点是盒内局部坐标；
+// ②**盒内、三角形外**那块必须被裁掉——只判①的话"套索退化成矩形"照样绿。
+{
+  // `__cmd` 不收参数（它读控制台输入框），建层走 headless 执行 + 刷新界面
+  exec('add-rect x=20 y=20 w=60 h=50 fill=#FF0000FF name=套索靶');
+  await globalThis.__refresh();
+  await flush();
+  const target = layers().find((l) => l.name === '套索靶');
+  globalThis.__sel(target.id);
+  globalThis.__tool('lasso');
+  await globalThis.__poly_click('20,20');
+  await globalThis.__poly_click('80,20');
+  await globalThis.__poly_click('50,70');
+  await flush();
+  const midHint = status();
+  await globalThis.__poly_finish();
+  await flush();
+  const m = layer(target.id).mask || {};
+  const nPts = (m.points || []).length;
+  const inTri = exec('probe x=50 y=36').color;
+  const inBoxOut = exec('probe x=76 y=66').color;
+  check(
+    // ⚠️ 盒是**层局部**坐标：这一层在画布 (20,20)，所以画布上拖的 (20,20)~(80,70)
+    // 换算过来是局部 (0,0,60,50)。修前这里直接把画布坐标当局部 ⇒ 盒报 (20,20)
+    // 而画面整体偏一层的位置（同一条断言当时是红的，现象指向"三角形跑到别处"）。
+    '套索：逐点圈定 → 该层拿到 kind=polygon 蒙版（盒=紧包围盒**换算到层局部** 0,0,60,50 + 3 个盒内顶点）',
+    m.kind === 'polygon' && m.x === 0 && m.y === 0 && m.w === 60 && m.h === 50 && nPts === 3,
+    `${JSON.stringify(m)}｜点中途提示=${midHint}`,
+  );
+  check(
+    '套索：形状内保留、**盒内形状外**被裁（退化成矩形就会红；层不在原点也算对）',
+    inTri === '#FF0000FF' && inBoxOut === '#FFFFFFFF',
+    `内=${inTri} 盒内外=${inBoxOut}｜状态栏=${status()}`,
+  );
+  // 负控：转过角度的层，人侧换算不了（局部盒不再是轴对齐矩形）⇒ 必须**说清并
+  // 不加蒙版**，而不是猜一个位置。判据两头咬：状态栏说了原因、且蒙版没被改。
+  await globalThis.__rotate(target.id, '30');
+  await flush();
+  const maskBefore = JSON.stringify(layer(target.id).mask);
+  globalThis.__tool('lasso');
+  await globalThis.__poly_click('20,20');
+  await globalThis.__poly_click('80,20');
+  await globalThis.__poly_click('50,70');
+  await flush();
+  await globalThis.__poly_finish();
+  await flush();
+  const refusal = status();
+  await globalThis.__poly_cancel();
+  check(
+    '套索：转过的层明确拒绝（说清原因 + 蒙版逐字未动），不猜位置',
+    refusal.includes('转过角度') && JSON.stringify(layer(target.id).mask) === maskBefore,
+    `状态栏=${refusal}｜rot=${layer(target.id).rot}｜蒙版 ${maskBefore} → ${JSON.stringify(layer(target.id).mask)}`,
   );
 }
 

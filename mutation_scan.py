@@ -2550,6 +2550,26 @@ MUTS = [
         "killed",
     ),
     (
+        "R70",
+        "蒙版快速盒丢掉层平移（局部盒当画布盒用：覆盖恒为 1 的块画到错位置）",
+        "render/scene.mbt",
+        """  let ox = l.x + m.x
+  let oy = l.y + m.y""",
+        """  let ox = m.x
+  let oy = m.y""",
+        "killed",
+    ),
+    (
+        "R71",
+        "快速盒不留子样本余量（最右一列按 cover=1 合成，通用路径其实不到 1）",
+        "render/scene.mbt",
+        """  let bx1 = clamp_int((ox + a1 - SUBSAMPLE_MAX).floor(), -1000000000, 1000000000)
+  let by1 = clamp_int((oy + b1 - SUBSAMPLE_MAX).floor(), -1000000000, 1000000000)""",
+        """  let bx1 = clamp_int((ox + a1).floor(), -1000000000, 1000000000)
+  let by1 = clamp_int((oy + b1).floor(), -1000000000, 1000000000)""",
+        "killed",
+    ),
+    (
         "R68",
         "多边形内距丢掉符号（羽化朝反方向长，覆盖度看着仍有过渡）",
         "render/scene.mbt",

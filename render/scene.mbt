@@ -733,7 +733,7 @@ fn solid_rect_interior(
   match l.mask {
     None => Some((ix0, iy0, ix1, iy1))
     Some(m) =>
-      match mask_full_box(m) {
+      match mask_full_box(l, m) {
         None => None
         Some((mx0, my0, mx1, my1)) => {
           let ax0 = if mx0 > ix0 { mx0 } else { ix0 }
@@ -787,7 +787,17 @@ const INTERIOR_EPS : Double = 1.0e-6
 /// （小的那一圈退回通用路径，画面一样）；大了就是把 cover < 1 的像素按 1.0 合成，
 /// 那是**静默加亮**。椭圆那一支用"内接正方形"（半轴 / √2）再配 `t` 里的 ε 余量。
 /// `invert` 直接把区域变成"形状外"（无界），不在此路。
-fn mask_full_box(m : @core.LayerMask) -> (Int, Int, Int, Int)? {
+///
+/// ⚠️ **坐标系**：蒙版的 `x/y` 是**本层局部**坐标（`mask_cover_at` 收的就是局部点，
+/// 与它同一套），而本函数的调用方在**画布**坐标里算盒（`l.x + …`）。这里必须把
+/// 局部盒平移回画布再求像素盒。实测不换算时：层在 (30,30)、蒙版局部 (40,40,10,10)
+/// 会在画布 (40..50)² 多画一块"覆盖恒为 1"的红（本该只画 (70..80)²）——
+/// 快速路径按 1.0 合成越界像素，正是本函数开头说的"静默加亮"。
+///
+/// 调用方已保证本层 `rotation_deg == 0`、两个 flip 都是假、且祖先链没有变换
+/// （`frame_transformed`），所以"局部 → 画布"就是加 `(l.x, l.y)`；这两道闸在
+/// `solid_rect_interior` 里，改那里时别拆掉。
+fn mask_full_box(l : @core.Layer, m : @core.LayerMask) -> (Int, Int, Int, Int)? {
   if m.invert {
     return None
   }
@@ -820,15 +830,29 @@ fn mask_full_box(m : @core.LayerMask) -> (Int, Int, Int, Int)? {
     return None
   }
   // 局部盒 → 像素中心盒：`px - m.x ∈ [a0, a1]` ⇒ `px ∈ [ceil(m.x+a0), floor(m.x+a1)]`
-  let bx0 = clamp_int((m.x + a0).ceil(), -1000000000, 1000000000)
-  let by0 = clamp_int((m.y + b0).ceil(), -1000000000, 1000000000)
-  let bx1 = clamp_int((m.x + a1).floor(), -1000000000, 1000000000)
-  let by1 = clamp_int((m.y + b1).floor(), -1000000000, 1000000000)
+  // （`m.x/m.y` 先平移回画布：见上面的坐标系说明）
+  let ox = l.x + m.x
+  let oy = l.y + m.y
+  let bx0 = clamp_int((ox + a0).ceil(), -1000000000, 1000000000)
+  let by0 = clamp_int((oy + b0).ceil(), -1000000000, 1000000000)
+  let bx1 = clamp_int((ox + a1 - SUBSAMPLE_MAX).floor(), -1000000000, 1000000000)
+  let by1 = clamp_int((oy + b1 - SUBSAMPLE_MAX).floor(), -1000000000, 1000000000)
   if bx1 < bx0 || by1 < by0 {
     return None
   }
   Some((bx0, by0, bx1 + 1, by1 + 1))
 }
+
+///|
+///|
+/// 2×2 子样本里最大的那个偏移（`subsample_2x2` 取 0.25/0.75 ⇒ **0.75**）。
+///
+/// 快速路径按 `cover = 1.0` 整块合成，所以"盒里的像素"必须连**最靠后的那个
+/// 子样本**都恰好满覆盖：最后一列的样本落在 `px + 0.75`，若只按像素中心
+/// （`floor(m.x + a1)`）收边，那一列会以 1.0 合成，而通用路径在那里其实不到 1
+/// （`feather=4` 时约 0.94）—— 就是本文件反复说的"静默加亮"。
+/// ⚠️ 这个常量与 `subsample_2x2` 是**同一件事**，改采样点必须同时改这里。
+const SUBSAMPLE_MAX : Double = 0.75
 
 ///|
 /// `1/√2`：椭圆那一支求"内接正方形"用。
@@ -1374,11 +1398,19 @@ fn mask_support_box(l : @core.Layer, buf : @codec.RgbaBuf) -> (Int, Int, Int, In
     return all
   }
   let slack = m.roughen.ceil() + 1.0
+  // 蒙版盒是**本层局部**坐标（`mask_cover_at` 那一套），而这个窗是**画布**像素窗
+  // （循环遍历 `buf`）⇒ 两个角经正变换换算过去。旋转/翻转下四角外接盒只是保守
+  // 上界（窗大一点只多花时间，覆盖度仍由 `mask_cover_at` 逐点精确算），
+  // 而窗小了才会**静默漏掉**蒙版该管的那块像素。
+  let (cx0, cy0) = to_canvas(l, m.x - slack, m.y - slack)
+  let (cx1, cy1) = to_canvas(l, m.x + m.w + slack, m.y + m.h + slack)
+  let (wx0, wx1) = if cx0 < cx1 { (cx0, cx1) } else { (cx1, cx0) }
+  let (wy0, wy1) = if cy0 < cy1 { (cy0, cy1) } else { (cy1, cy0) }
   (
-    clamp_int((m.x - slack).floor(), 0, buf.width),
-    clamp_int((m.y - slack).floor(), 0, buf.height),
-    clamp_int((m.x + m.w + slack).ceil(), 0, buf.width),
-    clamp_int((m.y + m.h + slack).ceil(), 0, buf.height),
+    clamp_int(wx0.floor(), 0, buf.width),
+    clamp_int(wy0.floor(), 0, buf.height),
+    clamp_int(wx1.ceil(), 0, buf.width),
+    clamp_int(wy1.ceil(), 0, buf.height),
   )
 }
 
