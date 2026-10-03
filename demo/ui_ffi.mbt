@@ -183,8 +183,42 @@ extern "js" fn js_log_line(text : String, color : String) -> Unit =
   #|   }
 
 ///|
+///处理器抛异常时的用户面反馈**只有这一处实现**（`js_reg0`/`js_reg1`/`js_reg2s`
+/// 共用 `globalThis.__mpErr`）。原先只有 `js_reg0` 包了 try/catch（吞进
+/// `console.error`），而 `js_reg1`/`js_reg2s` 是裸赋值——同一个"点了会不会
+/// 静默失败"的问题在两处有两种答案，而**两处都不给用户看**。
+/// 装钩子（幂等）：状态栏 + AI 日志报原话，并记进 `__handler_errors` 供驱动器断言。
+extern "js" fn js_install_handler_error_hook() -> Unit =
+  #| () => {
+  #|     if (globalThis.__mpErr) return;
+  #|     globalThis.__handler_errors = globalThis.__handler_errors || [];
+  #|     globalThis.__mpErr = (name, e) => {
+  #|       const msg = String((e && (e.message || e)) || e);
+  #|       console.error('MP:', e);
+  #|       globalThis.__handler_errors.push({ name, msg });
+  #|       const s = document.getElementById('sbar-text');
+  #|       if (s) s.textContent = '⚠ ' + name + ' 出错：' + msg;
+  #|       const l = document.getElementById('ailog');
+  #|       if (l) {
+  #|         const d = document.createElement('div');
+  #|         d.textContent = '❌ ' + name + ' 出错：' + msg;
+  #|         d.style.cssText = 'padding:3px 8px;font-size:12px;color:#f66';
+  #|         l.appendChild(d);
+  #|       }
+  #|     };
+  #|   }
+
+///|
 extern "js" fn js_reg0(name : String, f : () -> @js_async.Promise[Unit]) -> Unit =
-  #| (name, f) => { globalThis[name] = async () => { try { await f(); } catch (e) { console.error('MP:', e); } }; }
+  #| (name, f) => {
+  #|     globalThis[name] = async () => {
+  #|       try {
+  #|         await f();
+  #|       } catch (e) {
+  #|         globalThis.__mpErr(name, e);
+  #|       }
+  #|     };
+  #|   }
 
 ///|
 ///|
@@ -195,11 +229,27 @@ pub extern "js" fn js_global_is_fn(name : String) -> Bool =
 
 ///|
 extern "js" fn js_reg1(name : String, f : (String) -> Unit) -> Unit =
-  #| (name, f) => { globalThis[name] = f; }
+  #| (name, f) => {
+  #|     globalThis[name] = (a) => {
+  #|       try {
+  #|         f(a);
+  #|       } catch (e) {
+  #|         globalThis.__mpErr(name, e);
+  #|       }
+  #|     };
+  #|   }
 
 ///|
 extern "js" fn js_reg2s(name : String, f : (String, String) -> Unit) -> Unit =
-  #| (name, f) => { globalThis[name] = f; }
+  #| (name, f) => {
+  #|     globalThis[name] = (a, b) => {
+  #|       try {
+  #|         f(a, b);
+  #|       } catch (e) {
+  #|         globalThis.__mpErr(name, e);
+  #|       }
+  #|     };
+  #|   }
 
 // ---------------------------------------------------------------------------
 // 画布交互（B4）：工具状态、指针事件、裁剪覆盖层、缩放、提示输入

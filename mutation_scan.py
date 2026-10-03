@@ -1685,10 +1685,10 @@ MUTS = [
   if lim != "" {
     return err(lim)
   }
-  snapshot(s, doc, "set-canvas \{w}x\{h}")""",
+  snapshot(s, doc, "set-canvas \\{w}x\\{h}")""",
         """  let lim = @render.render_limit_error(w, h)
   let _ = lim
-  snapshot(s, doc, "set-canvas \{w}x\{h}")""",
+  snapshot(s, doc, "set-canvas \\{w}x\\{h}")""",
         "killed",
     ),
     (
@@ -1697,7 +1697,7 @@ MUTS = [
         "agent/ops.mbt",
         """  let rlim = @render.render_limit_error(doc.width, doc.height)
   if rlim != "" {
-    v.push("P0 render 画布超出可渲染上限：\{rlim}")
+    v.push("P0 render 画布超出可渲染上限：\\{rlim}")
   }""",
         """  let rlim = @render.render_limit_error(doc.width, doc.height)
   let _ = rlim""",

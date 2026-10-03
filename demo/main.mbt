@@ -2011,6 +2011,12 @@ async fn on_file_selected() -> Unit {
 /// 把所有事件处理器挂到 `globalThis` 上（页面里 `onclick='globalThis.__x()'` 靠它）。
 /// `pub` 是为了让测试能注册一遍再去核对页面 HTML 的引用——见 `app_html`。
 pub fn register_globals() -> Unit {
+  // 处理器异常的用户面反馈只有一处实现（`__mpErr`）：三个注册变体共用它。
+  // ⚠️ 这行曾被"注入验证的还原点"抹掉过——`git checkout -- demo/main.mbt` 把
+  // **未提交的真实改动**跟注入一起还原了，于是 `catch` 里调一个没装上的钩子，
+  // 处理器一炸就是整页 TypeError（比原来"只进 console"更坏）。**还原点要用
+  // 当前文件的副本，或者先把真实改动提交掉**。
+  js_install_handler_error_hook()
   js_reg0("__run", fn() -> @js_async.Promise[Unit] { @js_async.Promise::from_async(async fn() { ai_turn() }) })
   js_reg0("__save", fn() -> @js_async.Promise[Unit] { @js_async.Promise::from_async(async fn() { do_save() }) })
   js_reg0("__export", fn() -> @js_async.Promise[Unit] { @js_async.Promise::from_async(async fn() { do_export() }) })
