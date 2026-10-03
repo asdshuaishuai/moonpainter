@@ -94,11 +94,91 @@ fn sc_field_num(j : Json, k : String) -> Double {
 }
 
 ///|
+/// 回包里的数值数组（`census` 的 `hue_bins`/`sat_bins`/`hsl_bins` 这种）。
+/// 缺了或不是数组 ⇒ **空数组**：下面每条读出来都是哨兵/0，判据照样会说话。
+fn sc_arr(j : Json, k : String) -> Array[Json] {
+  match json_get(j, k) {
+    Some(Json::Array(a)) => a
+    _ => []
+  }
+}
+
+///|
+fn sc_arr_at(j : Json, k : String, i : Int) -> Double {
+  let a = sc_arr(j, k)
+  if i < 0 || i >= a.length() {
+    return -1.0e18
+  }
+  match a[i] {
+    Json::Number(n, ..) => n
+    _ => -1.0e18
+  }
+}
+
+///|
+/// 数组求和（非数字元素按 0 记——判据要的是"桶里数的总数"，不是类型检查）。
+fn sc_arr_sum(j : Json, k : String) -> Double {
+  let mut s = 0.0
+  for v in sc_arr(j, k) {
+    match v {
+      Json::Number(n, ..) => s = s + n
+      _ => ()
+    }
+  }
+  s
+}
+
+///|
+/// 非零元素个数（一张纯色图在某个颜色空间里应该**恰好一个**桶非零）。
+fn sc_arr_nonzero(j : Json, k : String) -> Int {
+  let mut c = 0
+  for v in sc_arr(j, k) {
+    match v {
+      Json::Number(n, ..) => if n != 0.0 { c = c + 1 }
+      _ => ()
+    }
+  }
+  c
+}
+
+///|
+/// `select-preview` 第一个连通域的 `area`（在 `component_facts[0]` 里）。
+/// 判据与证据**都读它**：同一件事两处写一遍，烂的一定是没人读的那处。
+fn sc_facts_area(j : Json) -> Double {
+  let facts = sc_arr(j, "component_facts")
+  if facts.length() == 0 {
+    return -1.0e18
+  }
+  match json_get(facts[0], "area") {
+    Some(Json::Number(n, ..)) => n
+    _ => -1.0e18
+  }
+}
+
+///|
+/// 相对容差比较。**浮点数值断言一律走它**：写死绝对误差（1e-9 或 1e-12）都会
+/// 在某个量级上变脆，而这条在 a≈b 时不会平白放大误差。
+fn sc_near(a : Double, b : Double) -> Bool {
+  let d = if a > b { a - b } else { b - a }
+  let m = if a > b { a } else { b }
+  d <= 1.0e-9 * (if m > 1.0 { m } else { 1.0 })
+}
+
+///|
 /// 几何选择子（画布左下 20×30 那一块）：`select-preview`/`census within=` 吃的
 /// 就是它。**取 20×30 而不是 0.5×1**：选择子坐标的归一化/像素两种读法在仓库里
 /// 都出现过，取"两种读法下都覆盖到东西"的值，判据才不会因为口径而变成空集。
+fn sc_geo_sel_wh(w : Double, h : Double) -> String {
+  "{\"basis\":\"base\",\"expr\":{\"t\":\"geo\",\"shape\":\"rect\",\"w\":{\"x\":0,\"y\":0,\"w\":" +
+  w.to_string() + ",\"h\":" + h.to_string() + ",\"feather\":0}}}"
+}
+
+///|
+/// 与 `sc_geo_sel_wh` 同源（**别手写第二遍 JSON**：40×30 与 5×5 那两处手写的
+/// 都漏了一个 `}`，引擎回「选择子解析失败：对象未闭合」——判据看着像选择子
+/// 有问题，实际是模板抄错）。
 fn sc_geo_sel() -> String {
-  "{\"basis\":\"base\",\"expr\":{\"t\":\"geo\",\"shape\":\"rect\",\"w\":{\"x\":0,\"y\":0,\"w\":20,\"h\":30,\"feather\":0}}}"
+  sc_geo_sel_wh(20.0, 30.0)
 }
 
 ///|
@@ -567,6 +647,92 @@ pub fn selfcheck_cases() -> Array[SCase] {
       },
     },
     {
+      name: "census/probe 的数是从像素真算出来的（桶和 == 总数、纯色只有一个桶、边缘两头都咬）",
+      steps: [
+        sc_s("new 40 30 uuid=sc-num"),
+        // 左半红、右半白 ⇒ x=20 处有一条**竖直边缘**（用纯色图验"没有边缘"，
+        // 用半红半白验"有边缘"：只验前者的话，"edge_conf 恒为 0"也能通过）。
+        sc_s("add-rect id=w x=0 y=0 w=40 h=30 fill=#FFFFFFFF name=W"),
+        sc_s("add-rect id=r x=0 y=0 w=20 h=30 fill=#FF0000FF name=R"),
+        sc_s("census"),
+        sc_s("probe x=5 y=15 r=4"),
+        sc_s("probe x=20 y=15 r=4"),
+        sc_s("probe x=35 y=15 r=4"),
+      ],
+      check: fn(rs) {
+        let c = rs[3]
+        let total = sc_get_num(c, "total")
+        let counted = sc_get_num(c, "counted")
+        // ① 三组桶**各自**求和必须等于 counted：一组对不上就是"桶里丢/重了像素"
+        //    ——而回包照样好看（`hue_bins` 全是 0 也能过"字段在"那种断言）。
+        let sums_ok = sc_near(sc_arr_sum(c, "hue_bins"), counted) &&
+          sc_near(sc_arr_sum(c, "sat_bins"), counted) &&
+          sc_near(sc_arr_sum(c, "hsl_bins"), counted)
+        // ② 这张图只有红与白**两种颜色** ⇒ 色相桶非零数必须 ≤ 2（红一个；白无彩
+        //    度、不该贡献色相桶）。写成 ≤2 而不是 ==1：白纸归哪个桶是颜色空间的
+        //    实现细节，判据不该替它做决定——但"十几个桶都非零"一定是错的。
+        let hue_ok = sc_arr_nonzero(c, "hue_bins") <= 2
+        // ③ dominant_bin 必须落在**非零**的那个桶上（自洽：报出来的"主桶"不能是空桶）
+        let dom = sc_get_num(c, "dominant_bin").to_int()
+        let dom_ok = sc_arr_at(c, "hsl_bins", dom) > 0.0
+        // ④ 边缘：纯红内部 0、白纸 0、红白交界 > 0（**两头都咬**）
+        let in_red = sc_get_num(rs[4], "edge_conf") == 0.0
+        let on_edge = sc_get_num(rs[5], "edge_conf") > 0.0
+        let in_white = sc_get_num(rs[6], "edge_conf") == 0.0
+        total == 1200.0 && counted == total && sums_ok && hue_ok && dom_ok && in_red && on_edge &&
+        in_white
+      },
+      want: "total=counted=1200；三组桶各自求和=1200；色相非零桶≤2；dominant_bin 落在非零桶；纯红内/白纸 edge_conf=0 而交界 >0",
+      evidence: fn(rs) {
+        let c = rs[3]
+        "total " + json_num_str(c, "total") + " / counted " + json_num_str(c, "counted") +
+        "｜桶和 hue " + sc_pre(sc_arr_sum(c, "hue_bins").to_string()) + " sat " +
+        sc_pre(sc_arr_sum(c, "sat_bins").to_string()) + " hsl " +
+        sc_pre(sc_arr_sum(c, "hsl_bins").to_string()) + "｜非零色相桶 " +
+        sc_arr_nonzero(c, "hue_bins").to_string() + "｜dominant " +
+        json_num_str(c, "dominant_bin") + "（该桶 " +
+        sc_pre(sc_arr_at(c, "hsl_bins", sc_get_num(c, "dominant_bin").to_int()).to_string()) +
+        "）｜edge_conf 红内 " + json_num_str(rs[4], "edge_conf") + " 交界 " +
+        json_num_str(rs[5], "edge_conf") + " 白纸 " + json_num_str(rs[6], "edge_conf")
+      },
+    },
+    {
+      name: "select-preview：覆盖率与选区面积自洽（全图=1、小选区=面积占比）",
+      steps: [
+        sc_s("new 40 30 uuid=sc-sel"),
+        sc_s("add-rect id=r x=0 y=0 w=40 h=30 fill=#FF0000FF name=R"),
+        fn(_) { "select-preview " + b64_text(sc_geo_sel_wh(40.0, 30.0)) },
+        fn(_) { "select-preview " + b64_text(sc_geo_sel_wh(5.0, 5.0)) },
+      ],
+      check: fn(rs) {
+        let all = rs[2]
+        let tiny = rs[3]
+        let cov_all = sc_get_num(all, "coverage")
+        let cov_tiny = sc_get_num(tiny, "coverage")
+        // **关系**断言优先于绝对数字：`coverage × 画布面积 == area` 对任何画布
+        // 都成立，写死 0.020833… 只是把某一次的实测值抄进来。
+        // ⚠️ `area` 在 `component_facts[0]` 里（不在顶层）；`coverage`/`components`
+        // 在顶层——这是实测读出来的回包形状（第一版我按顶层读，判据会以
+        // "断言不成立"的样子红，指向别处）。
+        let facts_area = sc_facts_area(tiny)
+        sc_near(cov_all, 1.0) &&
+        sc_get_num(all, "components") == 1.0 &&
+        sc_near(cov_tiny, 25.0 / 1200.0) &&
+        facts_area == 25.0 &&
+        sc_near(cov_tiny * 1200.0, facts_area)
+      },
+      want: "全图 coverage=1、components=1；5×5 的 coverage=25/1200 且 coverage×1200==area",
+      evidence: fn(rs) {
+        let all = rs[2]
+        let tiny = rs[3]
+        let facts_area = sc_facts_area(tiny)
+        "全图 coverage " + json_num_str(all, "coverage") + " components " +
+        json_num_str(all, "components") + "｜5×5 coverage " + json_num_str(tiny, "coverage") +
+        " area " + sc_pre(facts_area.to_string()) + "｜coverage×1200 " +
+        sc_pre((sc_get_num(tiny, "coverage") * 1200.0).to_string())
+      },
+    },
+    {
       name: "字典自证：help 与 list-tools 都报得出建层命令（help 是 list-tools 的别名）",
       steps: [sc_s("help"), sc_s("list-tools")],
       check: fn(rs) {
@@ -656,15 +822,28 @@ fn selfcheck_rows(work : WasmEngine) -> Array[(String, Bool, String, String)] {
         break
       }
     }
+    // **回包数组补到 `steps` 的长度**（缺的填 `null`）：判据写错下标时要变成
+    // "一条红的"，而不是 `Array::at` panic 把整个面板炸空。实测栽过一次——
+    // 我把 census 那格的下标整体写偏一位（`rs[4]` 而 census 在 `rs[3]`），
+    // 清单当场 panic，浏览器里**一个字都看不到**：最坏的表现形式（比一条 ✗ 坏，
+    // 因为它连"哪条红了"都不说）。
+    let full : Array[Json] = []
+    for i = 0; i < c.steps.length(); i = i + 1 {
+      if i < replies.length() {
+        full.push(replies[i])
+      } else {
+        full.push(Json::null())
+      }
+    }
     let check = c.check
     let evidence = c.evidence
-    let passed = failed == "" && check(replies)
+    let passed = failed == "" && check(full)
     let ev = if failed != "" {
       failed
     } else if passed {
-      evidence(replies)
+      evidence(full)
     } else {
-      "断言不成立（期望 " + c.want + "）｜实测 " + evidence(replies)
+      "断言不成立（期望 " + c.want + "）｜实测 " + evidence(full)
     }
     rows.push((c.name, passed, c.want, ev))
   }
