@@ -71,27 +71,34 @@ test "caps：逐 kind 的完整能力表（人类面板据此画控件）" {
   let _ = run(s, "group grp c1")
   let _ = run(s, "add-adjust id=a1 op=brightness value=0.5")
   let _ = run(s, "add-image id=i1 x=200 y=10 w=40 h=20 b64=" + PNG_B64)
-  // 有面的层：四条都在（矩形的圆角、位图的资产另算）
+  // 有面的层：这几条都在（矩形的圆角、位图的资产另算）；
+  // `opacity` 对调整层**不报**（实测不参与渲染，见下）
   for id in ["r1", "e1", "g1", "l1"] {
     assert_true(
-      caps_str(s, id) == "move,resize,rotate,flip,mask",
+      caps_str(s, id) == "move,resize,opacity,rotate,flip,mask",
       msg="\{id} 的能力表：\{caps_str(s, id)}",
     )
   }
   // 文本：位置读、盒子不参与渲染、旋转/翻转入口就拒
   assert_true(
-    caps_str(s, "t1") == "move,mask,text,font_size",
+    caps_str(s, "t1") == "move,opacity,mask,text,font_size",
     msg="文本层的能力表：\{caps_str(s, "t1")}",
   )
   // 笔触：位置真的挪笔触、盒子不参与渲染
-  assert_true(caps_str(s, "p1") == "move,mask", msg="笔触层：\{caps_str(s, "p1")}")
+  assert_true(
+    caps_str(s, "p1") == "move,opacity,mask",
+    msg="笔触层：\{caps_str(s, "p1")}",
+  )
   // 组：只有"能有子层"；x/y 与盒子都不读（实测画面逐位不变）
-  assert_true(caps_str(s, "grp") == "children", msg="组的能力表：\{caps_str(s, "grp")}")
+  assert_true(
+    caps_str(s, "grp") == "opacity,children",
+    msg="组的能力表：\{caps_str(s, "grp")}",
+  )
   // 调整层：只有蒙版与算子；位置/盒子/旋转/翻转都不读
   assert_true(caps_str(s, "a1") == "mask,adjust", msg="调整层：\{caps_str(s, "a1")}")
   // 位图：换图是一条能力（`set-image`）
   assert_true(
-    caps_str(s, "i1") == "move,resize,rotate,flip,mask,asset",
+    caps_str(s, "i1") == "move,resize,opacity,rotate,flip,mask,asset",
     msg="位图的能力表：\{caps_str(s, "i1")}",
   )
   // 正控的反面：`list-layers` 也报同一张表（两处报同一件事，别只报一条路）
@@ -101,6 +108,9 @@ test "caps：逐 kind 的完整能力表（人类面板据此画控件）" {
 
 ///|
 test "caps 与渲染器对照：说有必须有画面变化，说没有必须逐位相同" {
+  // 每一维都要有独立用例（四十八那课的教训）：`opacity` 这一维是量出来的
+  // ——调整层的 α 一条渲染路径都不读（`value` 才是它的强度），
+  // 而面板上那个滑杆对任何 kind 都画着 ⇒ 又一个静默入口。
   // (标签, 建层行们, 目标 id)。每条都在**新会话**里造，互不干扰。
   let probes : Array[(String, Array[String], String)] = [
     (
@@ -145,6 +155,7 @@ test "caps 与渲染器对照：说有必须有画面变化，说没有必须逐
     ("resize", "resize t 80 40"),
     ("rotate", "rotate t 30"),
     ("flip", "flip t h"),
+    ("opacity", "set-style t opacity=0.3"),
   ]
   for p in probes {
     let label = p.0

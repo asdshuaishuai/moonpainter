@@ -204,9 +204,21 @@ fn do_move_delta(dx_s : String, dy_s : String) -> Unit {
     Some(x) => x
     None => parse_json_safe("null")
   }
+  // 判据（纯函数）在前：`move` 对这些 kind 回 ok 而画面逐位不变，
+  // 照发就是"拖了没反应还没人说话"——手势层也走能力表（PLAN 五十一）。
+  let refusal = move_gesture_refusal(l)
+  if refusal != "" {
+    js_status_bar("🖐 " + refusal)
+    return
+  }
   let lx = json_num(l, "x")
   let ly = json_num(l, "y")
-  let _ = eng("move \{g_sel.val} \{d2s(lx + dx)} \{d2s(ly + dy)}")
+  let r = eng("move \{g_sel.val} \{d2s(lx + dx)} \{d2s(ly + dy)}")
+  if !eng_ok(r) {
+    // 人类侧入口必须报**引擎原话**（同 `do_ui_cmd`）
+    js_status_bar("⚠ " + eng_s(r, "error"))
+    return
+  }
   eng_render(800)
   refresh_props()
 }
@@ -337,16 +349,12 @@ fn do_mask_invert(id : String) -> Unit {
       }
     None => "true"
   }
-  let _ = engine_exec_line("set-mask \{id} \{cur}")
-  eng_render(800)
-  refresh_ui()
+  let _ = do_ui_cmd("set-mask \{id} \{cur}")
 }
 
 ///|
 fn do_mask_clear(id : String) -> Unit {
-  let _ = engine_exec_line("remove-mask \{id}")
-  eng_render(800)
-  refresh_ui()
+  let _ = do_ui_cmd("remove-mask \{id}")
 }
 
 ///|
@@ -408,8 +416,7 @@ fn do_filter(op : String, value_s : String) -> Unit {
 /// 图层不透明度滑杆。
 fn do_opacity(id : String, v_s : String) -> Unit {
   let v = parse_double_safe(v_s)
-  let _ = engine_exec_line("set-style \{id} opacity=\{d2s(v / 100.0)}")
-  eng_render(800)
+  let _ = do_ui_cmd("set-style \{id} opacity=\{d2s(v / 100.0)}")
 }
 
 ///|
@@ -651,6 +658,49 @@ fn fresh_group_id(layers : Array[Json]) -> String {
 }
 
 ///|
+/// 从一层 JSON 里读能力表（引擎 `query-layer`/`list-layers` 的 `caps`）。
+/// 与 `caps_reported` 配对用：**缺字段**（前端/引擎版本不匹配）与**空表**
+/// （这个层真的没有可改的变换能力）是两件事，不许合成一件。
+fn caps_of(l : Json) -> Array[String] {
+  match json_get(l, "caps") {
+    Some(Json::Array(a)) =>
+      a.map(fn(t) {
+        match t {
+          Json::String(x) => x
+          _ => ""
+        }
+      })
+    _ => []
+  }
+}
+
+///|
+fn caps_reported(l : Json) -> Bool {
+  match json_get(l, "caps") {
+    Some(_) => true
+    None => false
+  }
+}
+
+///|
+/// 拖动这个层会不会**改变画面**？空串 = 可以拖，非空 = 拒绝的理由。
+///
+/// 判据只看引擎报的 `caps`，**不看 kind**：`move` 对组/调整层回 `ok` 而画面
+/// 逐位不变（实测，见 PLAN 五十一）——手势照发就是**静默失败的手势**，
+/// 和"面板画出改了没反应的输入框"是同一类问题（静默失败的入口比没有入口更坏）。
+/// 提成纯函数是为了**不用引擎也能正反两向测**（拼 HTML/判据这一半必须在测试里）。
+fn move_gesture_refusal(l : Json) -> String {
+  if !caps_reported(l) {
+    return "引擎没报 caps（前端/引擎版本可能不匹配）：拖动已停用"
+  }
+  if caps_of(l).contains("move") {
+    return ""
+  }
+  let kind = json_get_str(l, "kind")
+  "这个层（\{kind}）的 x/y 不参与渲染（组画的是子层、调整层作用于其下的合成）：拖动不会改变画面"
+}
+
+///|
 /// 属性面板的 HTML：**纯函数**（输入 `query-layer` 的那一层 + `list-layers` 的根级数组）。
 /// 原先它长在 `refresh_props` 里、只有浏览器点开某个图层才生成，测试拿不到——
 /// 与 `layers_html` 同一次提取：能测的那半要测得到（`build_demo.sh#html-wiring`
@@ -693,20 +743,8 @@ fn props_html(l : Json, roots : Array[Json]) -> String {
   // 一切"这个控件画不画"都问它——判断两处实现必然先烂（PLAN 五十一）。
   // `has_caps` 与空表要分开：缺字段是**前端/引擎版本不匹配**（该明说），
   // 空表是"这个层真的没有可改的变换能力"。
-  let has_caps = match json_get(l, "caps") {
-    Some(_) => true
-    None => false
-  }
-  let caps : Array[String] = match json_get(l, "caps") {
-    Some(Json::Array(a)) =>
-      a.map(fn(t) {
-        match t {
-          Json::String(x) => x
-          _ => ""
-        }
-      })
-    _ => []
-  }
+  let has_caps = caps_reported(l)
+  let caps = caps_of(l)
   let can = fn(c : String) -> Bool { caps.contains(c) }
   // 调整层显示算子
   let adj = match json_get(l, "adjust") {
@@ -826,14 +864,22 @@ fn props_html(l : Json, roots : Array[Json]) -> String {
     sb.write_string("\")'>✕</button></span>")
   }
   sb.write_string("</div>")
-  // 不透明度滑杆（change 提交）
-  sb.write_string("<div class='osl'><span class='pk'>α</span><input type='range' min='0' max='100' value='\{opacity_pct(gop)}' oninput='globalThis.__optip(\"")
-  sb.write_string(gid)
-  sb.write_string("\",this.value)' onchange='globalThis.__op(\"")
-  sb.write_string(gid)
-  sb.write_string("\",this.value)'/><span class='pv' id='opv'>")
-  sb.write_string(gop)
-  sb.write_string("</span></div>")
+  // 不透明度滑杆（change 提交）。⚠️ 这一格也是能力：调整层的 α **不参与渲染**
+  // （强度走算子的 `value`；实测 opacity=0.3 与 1.0 的 render sha 逐位相同）——
+  // 给它画一个拖了没反应的滑杆就是静默入口，所以问 caps（PLAN 五十二）。
+  if can("opacity") {
+    sb.write_string("<div class='osl'><span class='pk'>α</span><input type='range' min='0' max='100' value='\{opacity_pct(gop)}' oninput='globalThis.__optip(\"")
+    sb.write_string(gid)
+    sb.write_string("\",this.value)' onchange='globalThis.__op(\"")
+    sb.write_string(gid)
+    sb.write_string("\",this.value)'/><span class='pv' id='opv'>")
+    sb.write_string(gop)
+    sb.write_string("</span></div>")
+  } else {
+    sb.write_string(
+      "<div class='osl'><span class='pk'>α</span><span class='pv' title='调整层的不透明度不参与渲染：它的强度是算子的「数值」（value）'>不适用（强度用「数值」）</span></div>",
+    )
+  }
   sb.write_string("<div class='pact'><button onclick='globalThis.__del(\"")
   sb.write_string(gid)
   sb.write_string("\")'>删除</button><button onclick='globalThis.__front(\"")
@@ -987,25 +1033,21 @@ fn do_vis(id : String) -> Unit {
     Some(Json::True) => "false"
     _ => "true"
   }
-  let _ = engine_exec_line("visible \{id} \{cur}")
-  eng_render(800)
-  refresh_ui()
+  let _ = do_ui_cmd("visible \{id} \{cur}")
 }
 
 fn do_del(id : String) -> Unit {
-  let _ = engine_exec_line("delete \{id}")
-  if g_paint.val == id {
-    g_paint.val = ""
+  // 成功才动本地状态：删失败（例如 id 已经不在）还把选中清掉，人就更懵了
+  if do_ui_cmd("delete \{id}") {
+    if g_paint.val == id {
+      g_paint.val = ""
+    }
+    g_sel.val = ""
   }
-  g_sel.val = ""
-  eng_render(800)
-  refresh_ui()
 }
 
 fn do_reorder(id : String, where_ : String) -> Unit {
-  let _ = engine_exec_line("reorder \{id} \{where_}")
-  eng_render(800)
-  refresh_ui()
+  let _ = do_ui_cmd("reorder \{id} \{where_}")
 }
 
 ///|
@@ -1020,18 +1062,18 @@ fn do_group_sel(id : String) -> Unit {
     _ => []
   }
   let gid = fresh_group_id(layers)
-  let _ = engine_exec_line("group \{gid} \{id}")
-  g_sel.val = gid
-  eng_render(800)
-  refresh_ui()
+  // `group` 的成员必须是**根级**层：已经在组里的层点「编组」会被引擎拒——
+  // 那句拒绝必须摆到状态栏（此前丢弃回包 ⇒ 点了什么都不发生、也没有一句话）
+  if do_ui_cmd("group \{gid} \{id}") {
+    g_sel.val = gid
+  }
 }
 
 ///|
 fn do_ungroup_sel(id : String) -> Unit {
-  let _ = engine_exec_line("ungroup \{id}")
-  g_sel.val = ""
-  eng_render(800)
-  refresh_ui()
+  if do_ui_cmd("ungroup \{id}") {
+    g_sel.val = ""
+  }
 }
 
 ///|
@@ -1207,14 +1249,17 @@ fn shape_line(
 /// 这一层是这轮补的——此前人类侧的入口大多是 `let _ = engine_exec_line(…)`，
 /// 失败了连"没反应"都算不上（画面不动，人以为自己点错了）。引擎的拒绝理由
 /// 是它唯一的说明书（"羽化必须 ≥ 0"、"画布单边 ≤ 4096"），必须传给人。
-fn do_ui_cmd(line : String) -> Unit {
-  // `engine_exec_line` 回的是**字符串**（原始 JSON），走 `eng` 解析成 Json
+fn do_ui_cmd(line : String) -> Bool {
+  // `engine_exec_line` 回的是**字符串**（原始 JSON），走 `eng` 解析成 Json。
+  // 返回成败：调用方若要顺带改本地状态（清选中、记新组 id），必须**只在成功后**改。
   let j = eng(line)
   if eng_ok(j) {
     eng_render(800)
     refresh_ui()
+    true
   } else {
     js_status_bar("⚠ " + eng_s(j, "error"))
+    false
   }
 }
 
@@ -1235,9 +1280,9 @@ fn do_shape_ready(kind : String, box : String) -> Unit {
       // 就等于没有入口）。两条命令各写一遍，参数部分共用。
       let args = "x=\{x0} y=\{y0} w=\{w} h=\{h} fill=\{fill} name="
       if kind == "ellipse" {
-        do_ui_cmd("add-ellipse " + args + "椭圆")
+        let _ = do_ui_cmd("add-ellipse " + args + "椭圆")
       } else {
-        do_ui_cmd("add-rect " + args + "矩形")
+        let _ = do_ui_cmd("add-rect " + args + "矩形")
       }
     }
     None => js_status_bar("⚠ 画布坐标没读出来（\{box}）")
@@ -1283,7 +1328,7 @@ fn do_poly_finish() -> Unit {
   let line = shape_line(kind, pts, c, c, if sw == "" { "2" } else { sw })
   g_pts.val = []
   js_poly_preview("")
-  do_ui_cmd(line)
+  let _ = do_ui_cmd(line)
 }
 
 ///|
@@ -1315,7 +1360,7 @@ fn do_rename(id : String, name : String) -> Unit {
     js_status_bar("⚠ 层名不能为空")
     return
   }
-  do_ui_cmd("rename " + id + " " + quote_arg(n))
+  let _ = do_ui_cmd("rename " + id + " " + quote_arg(n))
 }
 
 ///|
@@ -1344,13 +1389,13 @@ fn do_set_axis(id : String, key : String, v : String) -> Unit {
   } else {
     "resize " + id + " " + w + " " + v
   }
-  do_ui_cmd(line)
+  let _ = do_ui_cmd(line)
 }
 
 ///|
 /// 绕层中心旋转（`rotate`）。
 fn do_rotate(id : String, v : String) -> Unit {
-  do_ui_cmd("rotate " + id + " " + v)
+  let _ = do_ui_cmd("rotate " + id + " " + v)
 }
 
 ///|
@@ -1376,7 +1421,7 @@ fn do_flip(id : String, axis : String) -> Unit {
   } else {
     json_true(l, "flip_v")
   }
-  do_ui_cmd("flip " + id + " " + flip_word(fh, fv))
+  let _ = do_ui_cmd("flip " + id + " " + flip_word(fh, fv))
 }
 
 ///|
@@ -1387,7 +1432,7 @@ fn do_text_set(id : String, txt : String) -> Unit {
     js_status_bar("⚠ 文字内容不能为空（空文本层会被 lint 报）")
     return
   }
-  do_ui_cmd("set-text " + id + " " + quote_arg(txt))
+  let _ = do_ui_cmd("set-text " + id + " " + quote_arg(txt))
 }
 
 ///|
@@ -1403,7 +1448,7 @@ fn do_text_font(id : String, v : String) -> Unit {
     None => parse_json_safe("null")
   }
   let t = json_get_str(l, "text")
-  do_ui_cmd("set-text " + id + " " + quote_arg(t) + " font_size=" + v)
+  let _ = do_ui_cmd("set-text " + id + " " + quote_arg(t) + " font_size=" + v)
 }
 
 ///|
@@ -1411,7 +1456,7 @@ fn do_text_font(id : String, v : String) -> Unit {
 /// 引擎把关（invert/grayscale 不收 value、越界拒绝），错误原话转给人。
 fn do_adj(id : String, which : String, v : String) -> Unit {
   let key = if which == "op" { "op=" } else { "value=" }
-  do_ui_cmd("set-adjust " + id + " " + key + v)
+  let _ = do_ui_cmd("set-adjust " + id + " " + key + v)
 }
 
 ///|
@@ -1423,13 +1468,13 @@ fn do_tag_add(id : String, t : String) -> Unit {
     js_status_bar("⚠ 标签不能为空")
     return
   }
-  do_ui_cmd("tag " + id + " " + quote_arg(tag))
+  let _ = do_ui_cmd("tag " + id + " " + quote_arg(tag))
 }
 
 ///|
 /// 摘标签（`untag`，与 `tag` 对偶）。
 fn do_tag_del(id : String, t : String) -> Unit {
-  do_ui_cmd("untag " + id + " " + quote_arg(t))
+  let _ = do_ui_cmd("untag " + id + " " + quote_arg(t))
 }
 
 ///|
@@ -1453,7 +1498,7 @@ fn canvas_dim(elem : String, dflt : String) -> String {
 fn do_set_canvas() -> Unit {
   let w = canvas_dim("cw", "800")
   let h = canvas_dim("ch", "600")
-  do_ui_cmd("set-canvas " + w + " " + h)
+  let _ = do_ui_cmd("set-canvas " + w + " " + h)
 }
 
 ///|
@@ -1475,13 +1520,14 @@ fn do_reparent(id : String, target : String) -> Unit {
     return
   }
   if parent != "" {
-    let _ = engine_exec_line("group-remove \{parent} \{id}")
+    // 两步都经统一入口：哪一步失败就把**引擎原话**摆出来（成败决定下一步）
+    if !do_ui_cmd("group-remove \{parent} \{id}") {
+      return
+    }
   }
   if target != "" {
-    let _ = engine_exec_line("group-add \{target} \{id}")
+    let _ = do_ui_cmd("group-add \{target} \{id}")
   }
-  eng_render(800)
-  refresh_ui()
 }
 
 fn do_undo() -> Unit {

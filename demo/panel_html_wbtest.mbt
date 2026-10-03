@@ -42,7 +42,7 @@ test "属性面板：组给「解组」、非组给「编组」+「父级」下�
   let roots = panel_layers()
   // 组：只能解组（组不能再被编组——引擎侧 `group-add` 拒组当成员）
   let g = parse_json_safe(
-    "{\"id\":\"g1\",\"name\":\"组一\",\"kind\":\"group\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"children\"]}",
+    "{\"id\":\"g1\",\"name\":\"组一\",\"kind\":\"group\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"opacity\",\"children\"]}",
   )
   let hg = props_html(g, roots)
   assert_true(has_sub(hg, "globalThis.__ungroup_sel(\"g1\")"), msg=hg)
@@ -54,7 +54,7 @@ test "属性面板：组给「解组」、非组给「编组」+「父级」下�
   }
   // 非组、且在根级：给「编组」+ 父级下拉，且"根级"这一项是选中态
   let r = parse_json_safe(
-    "{\"id\":\"l1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"resize\",\"rotate\",\"flip\",\"mask\"]}",
+    "{\"id\":\"l1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"resize\",\"opacity\",\"rotate\",\"flip\",\"mask\"]}",
   )
   let hr = props_html(r, roots)
   assert_true(has_sub(hr, "globalThis.__group_sel(\"l1\")"), msg=hr)
@@ -118,7 +118,7 @@ test "属性面板：可改的属性都有入口（改名/坐标/尺寸/旋转/�
   // （蒙版/标签/层序全丢，调整层还会被推到栈顶改变作用范围）。
   let roots = panel_layers()
   let r = parse_json_safe(
-    "{\"id\":\"l1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":10,\"y\":20,\"w\":30,\"h\":40,\"rot\":15,\"flip_h\":true,\"flip_v\":false,\"opacity\":1,\"blend\":\"normal\",\"tags\":[\"hero\",\"主体\"],\"caps\":[\"move\",\"resize\",\"rotate\",\"flip\",\"mask\"]}",
+    "{\"id\":\"l1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":10,\"y\":20,\"w\":30,\"h\":40,\"rot\":15,\"flip_h\":true,\"flip_v\":false,\"opacity\":1,\"blend\":\"normal\",\"tags\":[\"hero\",\"主体\"],\"caps\":[\"move\",\"resize\",\"opacity\",\"rotate\",\"flip\",\"mask\"]}",
   )
   let h = props_html(r, roots)
   for name in [
@@ -146,7 +146,7 @@ test "属性面板：可改的属性都有入口（改名/坐标/尺寸/旋转/�
 test "属性面板：文字层给内容+字号，调整层给算子+数值（各自专属）" {
   let roots = panel_layers()
   let t = parse_json_safe(
-    "{\"id\":\"t1\",\"name\":\"标题\",\"kind\":\"text\",\"x\":0,\"y\":0,\"w\":40,\"h\":16,\"text\":\"你好\",\"font_size\":16,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"mask\",\"text\",\"font_size\"]}",
+    "{\"id\":\"t1\",\"name\":\"标题\",\"kind\":\"text\",\"x\":0,\"y\":0,\"w\":40,\"h\":16,\"text\":\"你好\",\"font_size\":16,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"opacity\",\"mask\",\"text\",\"font_size\"]}",
   )
   let ht = props_html(t, roots)
   assert_true(has_sub(ht, "globalThis.__text_set(\"t1\",this.value)"), msg=ht)
@@ -161,6 +161,7 @@ test "属性面板：文字层给内容+字号，调整层给算子+数值（各
   assert_true(lacks_sub(ht, "__seth"), msg="文本层不该有 H 输入框：\{ht}")
   assert_true(lacks_sub(ht, "__rotate"), msg="文本层不该有旋转输入框：\{ht}")
   assert_true(lacks_sub(ht, "__flip"), msg="文本层不该有翻转按钮：\{ht}")
+  assert_true(has_sub(ht, "globalThis.__op("), msg="文本层的 α 是真的（半透明字）：\{ht}")
   let a = parse_json_safe(
     "{\"id\":\"a1\",\"name\":\"调亮\",\"kind\":\"adjust\",\"adjust\":{\"op\":\"brightness\",\"value\":0.25},\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"mask\",\"adjust\"]}",
   )
@@ -175,6 +176,10 @@ test "属性面板：文字层给内容+字号，调整层给算子+数值（各
   assert_true(lacks_sub(ha, "__setx"), msg="调整层不该有 X 输入框：\{ha}")
   assert_true(lacks_sub(ha, "__setw"), msg="调整层不该有 W 输入框：\{ha}")
   assert_true(has_sub(ha, "不参与渲染"), msg="少画控件必须说明理由：\{ha}")
+  // α 也是能力：调整层的 opacity 不参与渲染（强度走「数值」）⇒ 不画滑杆、给理由；
+  // 正控在同一条测试的文本层/矩形那两处（`__op` 必须在）
+  assert_true(lacks_sub(ha, "__op("), msg="调整层不该有 α 滑杆：\{ha}")
+  assert_true(has_sub(ha, "强度用「数值」"), msg="少画滑杆也要说清替代：\{ha}")
 }
 
 ///|
@@ -231,12 +236,12 @@ test "换图：文件选择走「原地换掉」还是「导入新层」由状�
   // 面板：image 层才有「换图」按钮，且按钮先记状态再触发文件选择
   let roots = panel_layers()
   let img = parse_json_safe(
-    "{\"id\":\"i1\",\"name\":\"照片\",\"kind\":\"image\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"asset\":\"deadbeef\",\"caps\":[\"move\",\"resize\",\"rotate\",\"flip\",\"mask\",\"asset\"]}",
+    "{\"id\":\"i1\",\"name\":\"照片\",\"kind\":\"image\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"asset\":\"deadbeef\",\"caps\":[\"move\",\"resize\",\"opacity\",\"rotate\",\"flip\",\"mask\",\"asset\"]}",
   )
   let hi = props_html(img, roots)
   assert_true(has_sub(hi, "globalThis.__img_swap(\"i1\");document.getElementById(\"file-in\").click()"), msg=hi)
   let rect = parse_json_safe(
-    "{\"id\":\"l1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"resize\",\"rotate\",\"flip\",\"mask\"]}",
+    "{\"id\":\"l1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"resize\",\"opacity\",\"rotate\",\"flip\",\"mask\"]}",
   )
   assert_true(lacks_sub(props_html(rect, roots), "__img_swap"), msg="矩形上不该有「换图」")
 }
@@ -245,7 +250,7 @@ test "换图：文件选择走「原地换掉」还是「导入新层」由状�
 test "属性面板：笔触层不发 W/H 输入框（改了画面不动 = 静默入口），X/Y 照旧" {
   let roots = panel_layers()
   let r = parse_json_safe(
-    "{\"id\":\"p1\",\"name\":\"笔触\",\"kind\":\"raster\",\"x\":0,\"y\":0,\"w\":320,\"h\":240,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"mask\"]}",
+    "{\"id\":\"p1\",\"name\":\"笔触\",\"kind\":\"raster\",\"x\":0,\"y\":0,\"w\":320,\"h\":240,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"opacity\",\"mask\"]}",
   )
   let h = props_html(r, roots)
   // 反控：不发那两个「改了不生效」的控件
@@ -259,7 +264,7 @@ test "属性面板：笔触层不发 W/H 输入框（改了画面不动 = 静默
   assert_true(has_sub(h, "globalThis.__sety("), msg=h)
   // 正控③：别的 kind 照旧发 W/H（判据两头都咬得住）
   let rr = parse_json_safe(
-    "{\"id\":\"r1\",\"name\":\"矩形\",\"kind\":\"rect\",\"x\":1,\"y\":2,\"w\":30,\"h\":40,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"resize\",\"rotate\",\"flip\",\"mask\"]}",
+    "{\"id\":\"r1\",\"name\":\"矩形\",\"kind\":\"rect\",\"x\":1,\"y\":2,\"w\":30,\"h\":40,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"resize\",\"opacity\",\"rotate\",\"flip\",\"mask\"]}",
   )
   let hr = props_html(rr, roots)
   assert_true(has_sub(hr, "globalThis.__setw("), msg=hr)
@@ -276,13 +281,42 @@ test "属性面板：引擎没报 caps 时一个能力控件都不画，并说�
     "{\"id\":\"z1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":10,\"y\":20,\"w\":30,\"h\":40,\"opacity\":1,\"blend\":\"normal\"}",
   )
   let h = props_html(r, roots)
-  for name in ["__setx", "__sety", "__setw", "__seth", "__rotate", "__flip", "__mask_invert"] {
+  for name in [
+    "__setx", "__sety", "__setw", "__seth", "__rotate", "__flip", "__mask_invert", "__op",
+  ] {
     assert_true(lacks_sub(h, name), msg="没有 caps 就不该画 \{name}：\{h}")
   }
-  // 与 caps 无关的控件照旧（层名/透明度/删除/置顶/置底/标签）
-  for name in ["__rename", "__op", "__del", "__front", "__back", "__tag_add"] {
+  // 与 caps 无关的控件照旧（层名/删除/置顶/置底/标签）
+  for name in ["__rename", "__del", "__front", "__back", "__tag_add"] {
     assert_true(has_sub(h, name), msg="没 caps 也要有的通用控件 \{name}：\{h}")
   }
   // 而且要**说清**为什么少了一排控件（静默少画会让人以为界面坏了）
   assert_true(has_sub(h, "没报 caps"), msg="少画必须说明理由：\{h}")
+}
+
+///|
+test "拖动判据：caps 说没有 move 就不发命令，并说清为什么（不是拖了没反应）" {
+  // `move` 在组/调整层上回 `ok` 而画面逐位不变（实测，PLAN 五十一）——
+  // 手势层照发就是**静默失败的手势**。判据提成纯函数（`move_gesture_refusal`），
+  // 所以这条测试**不用引擎**就能把正反两向都咬住。
+  let rect = parse_json_safe(
+    "{\"id\":\"r1\",\"kind\":\"rect\",\"caps\":[\"move\",\"resize\",\"opacity\",\"rotate\",\"flip\",\"mask\"]}",
+  )
+  assert_true(move_gesture_refusal(rect) == "", msg="矩形能拖：\{move_gesture_refusal(rect)}")
+  let p = parse_json_safe(
+    "{\"id\":\"p1\",\"kind\":\"raster\",\"caps\":[\"move\",\"opacity\",\"mask\"]}",
+  )
+  assert_true(move_gesture_refusal(p) == "", msg="笔触的 x/y 是真的（挪笔触）：\{move_gesture_refusal(p)}")
+  // 组与调整层：拒绝，且理由里要**点出 kind 与为什么**
+  let g = parse_json_safe("{\"id\":\"g1\",\"kind\":\"group\",\"caps\":[\"opacity\",\"children\"]}")
+  let gr = move_gesture_refusal(g)
+  assert_true(gr.contains("不参与渲染"), msg=gr)
+  assert_true(gr.contains("group"), msg="理由要点出是哪种层：\{gr}")
+  let a = parse_json_safe("{\"id\":\"a1\",\"kind\":\"adjust\",\"caps\":[\"mask\",\"adjust\"]}")
+  assert_true(move_gesture_refusal(a).contains("adjust"), msg=move_gesture_refusal(a))
+  // 没有 caps（版本不匹配）：停用并且**明说**是版本问题，别把锅甩给这个层
+  let n = parse_json_safe("{\"id\":\"n1\",\"kind\":\"rect\"}")
+  let nr = move_gesture_refusal(n)
+  assert_true(nr.contains("没报 caps"), msg=nr)
+  assert_true(!nr.contains("不参与渲染"), msg="缺 caps（版本不匹配）与「这个层没有能力」是两件事：\{nr}")
 }

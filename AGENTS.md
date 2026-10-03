@@ -488,6 +488,7 @@ moon run --target native cli    # stdin 行协议；help 查看全部 63 个命�
   demo 一个引擎包都不 import 了；
 - mooncakes 依赖进模块前必须查 `supported_targets`（例：moonllm 锁 +native，
   浏览器 demo 不可用）；
+- ⚠️ `moon check` 不覆盖 demo 包（js-only）：编译口径是 `./build_demo.sh`。
 - 工具回包给 LLM 一律截断（shorten），render 的 PNG 走 attachments 不走文本
   （`render` / `select_preview` / `mvsl_impact` 三个图像类工具同规）；
 - **自由文本参数必须用双引号包裹**：`text="Hello World"`、`name="My Layer"`。

@@ -1975,6 +1975,14 @@ MUTS = [
         "killed",
     ),
     (
+        "Q59",
+        "能力表说调整层也有 opacity（面板于是给调整层画一个拖了没反应的 α 滑杆）",
+        "agent/ops.mbt",
+        '  if !(k is @core.ShapeKind::Adjust) {\n    caps.push("opacity")\n  }',
+        '  if true {\n    caps.push("opacity")\n  }',
+        "killed",
+    ),
+    (
         "Q56",
         "能力表把字段名写错（读点矩阵查不到 ⇒ 这个能力永远不报，画面参数静默不可达）",
         "agent/ops.mbt",

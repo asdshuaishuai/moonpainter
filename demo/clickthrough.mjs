@@ -204,6 +204,39 @@ globalThis.__rename(pid, '');
 check('空名字：入口直接拦（引擎那边空名字会写进指纹而列表上只剩空行）', /不能为空/.test(status()), status());
 check('被拦下的时候文档没变（指纹不动）', exec('fingerprint').fingerprint === fp, exec('fingerprint').fingerprint);
 
+// ⑨ 会失败的入口必须**把引擎原话摆出来**（PLAN 五十二：这批处理器原先
+//    `let _ = engine_exec_line(…)` 丢掉回包 ⇒ 点了什么都不发生、也没有一句话）
+exec('add-rect x=0 y=0 w=40 h=40 fill=#FF0000FF id=gm1');
+exec('add-rect x=50 y=0 w=40 h=40 fill=#00FF00FF id=gm2');
+exec('group gm gm1 gm2');
+// ①组上用蒙版：组不读蒙版（`caps` 里没有 mask）⇒ 引擎拒，理由要看得见
+globalThis.__mask_invert('gm');
+await flush();
+check(
+  '组上用蒙版：状态栏报引擎原话（此前丢回包 = 点了没反应）',
+  /⚠/.test(status()) && /mask 不生效/.test(status()),
+  status(),
+);
+// ②已经在组里的层再点「编组」：`group` 的成员必须是根级层 ⇒ 被拒且文档不变
+const fpGroup = exec('fingerprint').fingerprint;
+globalThis.__group_sel('gm1');
+await flush();
+check(
+  '组里的层再编组：状态栏报引擎原话，且文档没变',
+  /⚠/.test(status()) && /不是根级层/.test(status()) && exec('fingerprint').fingerprint === fpGroup,
+  status(),
+);
+// ③正控：同一个按钮在**根级**层上是真能编组的（判据两头都咬得住）
+exec('group-remove gm gm1');
+await flush();
+globalThis.__group_sel('gm1');
+await flush();
+check(
+  '正控：根级层点「编组」真的建出组（不是所有点击都报错）',
+  !/⚠/.test(status()) && layers().some((l) => l.kind === 'group' && (l.children || []).some((c) => c.id === 'gm1')),
+  status(),
+);
+
 const bad = results.filter((r) => !r.ok);
 console.log(
   JSON.stringify({
