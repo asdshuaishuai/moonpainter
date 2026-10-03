@@ -1959,6 +1959,57 @@ MUTS = [
         "killed",
     ),
     (
+        "Q88",
+        "象限角退回级数（`rot_sincos` 的精确值分支没了：90°+270° 复合不再恒等，硬边字形差 48 像素）",
+        "render/scene.mbt",
+        """  let k = deg / 90.0
+  let ki = k.to_int()
+  if k == ki.to_double() {
+    // 归一到 0..3（`to_int`/取余都是向零截断，负数要补一圈）
+    let m = ki % 4
+    let q = if m < 0 { m + 4 } else { m }
+    if q == 0 {
+      (1.0, 0.0)
+    } else if q == 1 {
+      (0.0, 1.0)
+    } else if q == 2 {
+      (-1.0, 0.0)
+    } else {
+      (0.0, -1.0)
+    }
+  } else {
+    let rad = deg * 3.141592653589793 / 180.0
+    (cos_rad(rad), sin_rad(rad))
+  }""",
+        """  let rad = deg * 3.141592653589793 / 180.0
+  (cos_rad(rad), sin_rad(rad))""",
+        "killed",
+    ),
+    (
+        "Q89",
+        "象限表写错一格（270° 给成 +90° 的正弦：轴对齐变换整体镜像）",
+        "render/scene.mbt",
+        """    } else {
+      (0.0, -1.0)
+    }
+  } else {
+    let rad = deg * 3.141592653589793 / 180.0""",
+        """    } else {
+      (0.0, 1.0)
+    }
+  } else {
+    let rad = deg * 3.141592653589793 / 180.0""",
+        "killed",
+    ),
+    (
+        "Q90",
+        "负角度的象限归一化没了（-180° 落到最后一格 ⇒ 变成 -90°）",
+        "render/scene.mbt",
+        """    let q = if m < 0 { m + 4 } else { m }""",
+        """    let q = m""",
+        "killed",
+    ),
+    (
         "Q83",
         "文本层不走**本层**变换（字形只按层位平移：`rotate t1 90` 回 ok 而画面不动）",
         "render/scene.mbt",
@@ -2179,18 +2230,14 @@ MUTS = [
         "组帧忘了做逆旋转（组的 rotate 在渲染里变成恒等）",
         "render/scene.mbt",
         r"""  if f.rot != 0.0 {
-    let rad = f.rot * 3.141592653589793 / 180.0
-    let cos_t = cos_rad(rad)
-    let sin_t = sin_rad(rad)
+    let (cos_t, sin_t) = rot_sincos(f.rot)
     let u2 = u * cos_t + v * sin_t
     let v2 = -u * sin_t + v * cos_t
     u = u2
     v = v2
   }""",
         r"""  if false {
-    let rad = f.rot * 3.141592653589793 / 180.0
-    let cos_t = cos_rad(rad)
-    let sin_t = sin_rad(rad)
+    let (cos_t, sin_t) = rot_sincos(f.rot)
     let u2 = u * cos_t + v * sin_t
     let v2 = -u * sin_t + v * cos_t
     u = u2

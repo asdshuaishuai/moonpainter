@@ -201,9 +201,7 @@ fn to_local_frame(f : Frame, px : Double, py : Double) -> (Double, Double) {
   let mut u = px - cx
   let mut v = py - cy
   if f.rot != 0.0 {
-    let rad = f.rot * 3.141592653589793 / 180.0
-    let cos_t = cos_rad(rad)
-    let sin_t = sin_rad(rad)
+    let (cos_t, sin_t) = rot_sincos(f.rot)
     let u2 = u * cos_t + v * sin_t
     let v2 = -u * sin_t + v * cos_t
     u = u2
@@ -254,9 +252,7 @@ fn to_canvas_frame_pt(f : Frame, lx : Double, ly : Double) -> (Double, Double) {
     v = -v
   }
   if f.rot != 0.0 {
-    let rad = f.rot * 3.141592653589793 / 180.0
-    let cos_t = cos_rad(rad)
-    let sin_t = sin_rad(rad)
+    let (cos_t, sin_t) = rot_sincos(f.rot)
     let u2 = u * cos_t - v * sin_t
     let v2 = u * sin_t + v * cos_t
     u = u2
@@ -318,9 +314,7 @@ fn to_local_p(
     lx = px - l.x
     ly = py - l.y
   } else {
-    let rad = l.rotation_deg * 3.141592653589793 / 180.0
-    let cos_t = cos_rad(rad)
-    let sin_t = sin_rad(rad)
+    let (cos_t, sin_t) = rot_sincos(l.rotation_deg)
     let dx = px - (l.x + pvx)
     let dy = py - (l.y + pvy)
     lx = dx * cos_t + dy * sin_t + pvx
@@ -378,9 +372,7 @@ fn to_canvas_p(
   if l.rotation_deg == 0.0 {
     return (l.x + x, l.y + y)
   }
-  let rad = l.rotation_deg * 3.141592653589793 / 180.0
-  let cos_t = cos_rad(rad)
-  let sin_t = sin_rad(rad)
+  let (cos_t, sin_t) = rot_sincos(l.rotation_deg)
   let cx = l.x + pvx
   let cy = l.y + pvy
   let dx = x - pvx
@@ -2566,8 +2558,46 @@ fn sin_rad(x : Double) -> Double {
 }
 
 ///|
+///|
+/// ⚠️ 它是 `sin_rad(x + π/2)` ⇒ **在 `x = π/2` 处落到级数最差点**（求值点是
+/// `sin(π)`，`x² ≈ 9.87` 超出级数设计的 `|v| ≤ π`）：实测 `cos(π/2)` 误差
+/// **2.1e-5**（`sin` 路径只有 6.6e-10）。所以**象限角不要走这里**——走
+/// `rot_sincos`（它给精确值，PLAN 六十二）。这里留着是为了任意角度的通用性。
 fn cos_rad(x : Double) -> Double {
   sin_rad(x + 1.5707963267948966)
+}
+
+///|
+/// **角度（度）→ (cos, sin)**，四处变换（`to_local_frame`/`to_canvas_frame_pt`/
+/// `to_local_p`/`to_canvas_p`）**共用这一处**。
+///
+/// ⚠️ 象限角（90° 的整数倍）直接给**精确值**，这是必须的：`cos_rad(x)` 是
+/// `sin_rad(x + π/2)`，在 `x = π/2` 处它落到级数最差点（`sin(π)`，`x² ≈ 9.87`
+/// 超出级数设计的 `|v| ≤ π`），实测 `cos(π/2)` 误差 **2.1e-5**（`sin` 路径只有
+/// 6.6e-10）、`cos(π/4)` 误差 2.9e-7。轴对齐的编辑（`rotate 90` 是最高频的
+/// 那一个）因此会偏离整数格：实测"内层组转 90° + 外层组转 270°"（数学上恒等）
+/// 复合后局部坐标差 **2.5e-4**，硬边字形整格翻过去、画面差 48 个像素（PLAN
+/// 六十二）。给了精确值之后轴对齐的整条链**逐位恒等**。
+fn rot_sincos(deg : Double) -> (Double, Double) {
+  let k = deg / 90.0
+  let ki = k.to_int()
+  if k == ki.to_double() {
+    // 归一到 0..3（`to_int`/取余都是向零截断，负数要补一圈）
+    let m = ki % 4
+    let q = if m < 0 { m + 4 } else { m }
+    if q == 0 {
+      (1.0, 0.0)
+    } else if q == 1 {
+      (0.0, 1.0)
+    } else if q == 2 {
+      (-1.0, 0.0)
+    } else {
+      (0.0, -1.0)
+    }
+  } else {
+    let rad = deg * 3.141592653589793 / 180.0
+    (cos_rad(rad), sin_rad(rad))
+  }
 }
 
 ///|

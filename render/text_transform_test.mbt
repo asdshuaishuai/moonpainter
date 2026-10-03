@@ -76,6 +76,21 @@ fn ttx_ink(buf : @codec.RgbaBuf) -> (Int, Int, Int, Int, Int) {
 }
 
 ///|
+/// 两张图的**逐点差异数**（0 = 逐位相同）。包围盒 + 墨迹数相等还可能"内部换了
+/// 像素"，轴对齐可逆性这条判据要能咬住整张图。
+fn ttx_diff(a : @codec.RgbaBuf, b : @codec.RgbaBuf) -> Int {
+  let mut n = 0
+  for y in 0..<100 {
+    for x in 0..<100 {
+      if a.pixels[y * 100 + x] != b.pixels[y * 100 + x] {
+        n = n + 1
+      }
+    }
+  }
+  n
+}
+
+///|
 /// 单点有没有墨——**保中心**的变换（flip/180°）上包围盒没有判别力，
 /// 这里也是点探针唯一有判别力的地方。
 fn ttx_at(buf : @codec.RgbaBuf, x : Int, y : Int) -> Bool {
@@ -100,9 +115,12 @@ test "文本层自己的 rotate/flip：字形逐点过完整变换链（原先�
   let flat = @render.render_doc(ttx_flat_doc("ttx-flat"), env)
   let r90 = @render.render_doc(ttx_doc("ttx-r90", 90.0, false, false), env)
   // 实测几何（100×100，字盒 24×28 ⇒ 轴心 (32,34)）：
-  //   不转 (20,28)..(39,47) 墨 208；自转 90° (18,22)..(38,42) 墨 208（守恒，见下）
+  //   不转 (20,28)..(39,47) 墨 208；自转 90° (19,22)..(38,41) 墨 208（守恒）。
+  // ⚠️ 90° 这一格从 (18,22)..(38,42) 走到 (19,22)..(38,41) 是**象限角精确化**
+  // 的结果（PLAN 六十二）：精确 90° 把 20×20 的墨迹映成 20×20，而级数近似的
+  // 版本糊成 21×21（边缘各多一行/一列）。**这是有意为之的 golden 变化**。
   assert_eq(ttx_ink(flat), (20, 28, 39, 47, 208), msg="不转时的墨迹")
-  assert_eq(ttx_ink(r90), (18, 22, 38, 42, 208), msg="转 90° 后的墨迹")
+  assert_eq(ttx_ink(r90), (19, 22, 38, 41, 208), msg="转 90° 后的墨迹")
   // 点探针（两个方向都咬）。`H` 的位图是 `[17,17,31,17,17]`：cols 0/1/3/4 只有
   // 行 2 与 6（上下两条横杠），col 2 是整条竖笔（行 2..6）——**不是**两条竖笔 +
   // 中间横杠（第一版照常识猜了个 H，探针当场红给我看）。转 90° 后它变成
@@ -132,12 +150,12 @@ test "文本层自己的 rotate/flip：字形逐点过完整变换链（原先�
   // flip 与 180°：包围盒会变（"H" 左右不对称），墨迹数同样守恒
   assert_eq(ttx_ink(@render.render_doc(ttx_doc("ttx-fh", 0.0, true, false), env)), (25, 28, 44, 47, 208), msg="flip_h 后的墨迹")
   assert_eq(ttx_ink(@render.render_doc(ttx_doc("ttx-fv", 0.0, false, true), env)), (20, 21, 39, 40, 208), msg="flip_v 后的墨迹")
-  assert_eq(ttx_ink(@render.render_doc(ttx_doc("ttx-r180", 180.0, false, false), env)), (24, 20, 44, 40, 208), msg="180° 后的墨迹")
+  assert_eq(ttx_ink(@render.render_doc(ttx_doc("ttx-r180", 180.0, false, false), env)), (25, 21, 44, 40, 208), msg="180° 后的墨迹")
   // **两者逐位相同**：本层绕自己的盒子中心转，与"组绕（同一个）内容中心转"是
   // 同一条路径（同一个 `effective_box`）——这条相等本身就是判据。
   assert_eq(
     ttx_ink(@render.render_doc(ttx_group_doc("ttx-grp90", 90.0, false, false), env)),
-    (18, 22, 38, 42, 208),
+    (19, 22, 38, 41, 208),
     msg="**组**转 90°（子层不带变换）的墨迹：与子层自转 90° 必须一格不差",
   )
   // **正控**：组不带变换时必须与"压根没有组"逐位相同
@@ -169,15 +187,54 @@ test "文本层自己的 rotate/flip：字形逐点过完整变换链（原先�
   })
   assert_eq(
     ttx_ink(@render.render_doc(nested, env)),
-    (18, 22, 38, 42, 208),
+    (19, 22, 38, 41, 208),
     msg="两层组（内层转 90°）的墨迹：`frames` 是链，不许只看最外层",
   )
+  // ⚠️ **轴对齐的复合必须逐位恒等**（PLAN 六十二）：内层组转 90°、外层组转
+  // 270°，数学上是 360° = 恒等。象限角精确化之前这里差 **48 个像素**（复合后
+  // 局部坐标差 2.5e-4，硬边字形整格翻过去）；现在逐位相同。
+  let inv = @core.new_document("ttx-inv", 100, 100)
+  inv.layers.push({
+    ..@core.default_layer("g2", "g2", 20.0, 20.0, 24.0, 28.0),
+    kind: @core.ShapeKind::Group,
+    rotation_deg: 270.0,
+    children: [
+      {
+        ..@core.default_layer("g1", "g1", 20.0, 20.0, 24.0, 28.0),
+        kind: @core.ShapeKind::Group,
+        rotation_deg: 90.0,
+        children: [ttx(0.0)],
+      },
+    ],
+  })
+  let inv_img = @render.render_doc(inv, env)
+  assert_eq(ttx_ink(inv_img), (20, 28, 39, 47, 208), msg="90°+270° 复合后的墨迹：该与不转时一模一样")
+  assert_eq(ttx_diff(inv_img, flat), 0, msg="90°+270° 复合必须**逐位**恒等（差一个像素都要报）")
+  // 反向：**单层** 90° 与复合 90°（内层 90° 外层 0）也必须逐位相同
+  assert_eq(ttx_diff(r90, @render.render_doc(ttx_group_doc("ttx-g90b", 90.0, false, false), env)), 0, msg="单层 90° 与组转 90° 逐位相同")
+  // **正控**：180°+180° 也该恒等（同一条路径的另一个象限）
+  let inv2 = @core.new_document("ttx-inv2", 100, 100)
+  inv2.layers.push({
+    ..@core.default_layer("h2", "h2", 20.0, 20.0, 24.0, 28.0),
+    kind: @core.ShapeKind::Group,
+    rotation_deg: 180.0,
+    children: [
+      {
+        ..@core.default_layer("h1", "h1", 20.0, 20.0, 24.0, 28.0),
+        kind: @core.ShapeKind::Group,
+        rotation_deg: 180.0,
+        children: [ttx(0.0)],
+      },
+    ],
+  })
+  assert_eq(ttx_diff(@render.render_doc(inv2, env), flat), 0, msg="180°+180° 也必须逐位恒等")
   // pick 与渲染同一把尺子：转过的文本在**新**位置拾得到、旧位置拾不到
   let flat_doc = ttx_flat_doc("ttx-pick-flat")
   let r90_doc = ttx_doc("ttx-pick-r90", 90.0, false, false)
   assert_eq(@render.pick(flat_doc, 22.0, 30.0), Some("t1"), msg="不转时上横杠拾得到")
   assert_eq(@render.pick(flat_doc, 36.0, 24.0), None, msg="不转时 (36,24) 在盒外")
   assert_eq(@render.pick(r90_doc, 36.0, 24.0), Some("t1"), msg="转 90° 后右侧竖杠拾得到")
+  assert_eq(@render.pick(r90_doc, 37.0, 40.0), Some("t1"), msg="转 90° 后右侧竖杠下端拾得到")
   assert_eq(@render.pick(r90_doc, 30.0, 40.0), None, msg="转 90° 后旧的竖笔深处空了")
 }
 
@@ -217,4 +274,32 @@ test "文本层的蒙版按**层局部**坐标采样（旧实现拿画布坐标 
   // `pick` 与渲染同一把尺子（它一直用局部坐标 ⇒ 旧实现下这两个信号是矛盾的）
   assert_eq(@render.pick(d, 22.0, 30.0), Some("t1"), msg="蒙版内的点拾得到")
   assert_eq(@render.pick(d, 37.0, 30.0), None, msg="蒙版外的点拾不到（判据不许比渲染器松）")
+}
+
+///|
+test "非象限角：字形走级数近似，偏置必须**大于**整条链的误差（否则边界格乱翻）" {
+  let env = @render.RenderEnv::new()
+  // 30°/45° 都是级数近似（`cos(π/4)` 实测误差 2.9e-7、`cos(30°)` 4.9e-8）；
+  // 硬边字形的格判定里那个 `+1.0e-4` 偏置就是为它们准备的。
+  assert_eq(
+    ttx_ink(@render.render_doc(ttx_doc("ttx-r30", 30.0, false, false), env)),
+    (15, 24, 41, 49, 207),
+    msg="转 30° 的墨迹",
+  )
+  // ⚠️ 45° 这一格是**偏置的判据**：把偏置从 1e-4 改成 1e-9（小于级数误差
+  // 在 30px 上的累积 ~1e-5）时，边界格会翻过去 —— 实测墨迹 196 → **203**
+  // （变异 Q87 守这一格）。偏置取多大是**误差预算**决定的，不是随手写的数：
+  // 象限角已经精确（0/90/180/270 与它们的复合逐位恒等），剩下的误差只来自
+  // 任意角度的级数近似 ⇒ 偏置要盖住它。
+  assert_eq(
+    ttx_ink(@render.render_doc(ttx_doc("ttx-r45", 45.0, false, false), env)),
+    (15, 22, 41, 49, 196),
+    msg="转 45° 的墨迹（偏置改小会变成 203 ⇒ 这一格专门守偏置）",
+  )
+  // 270° 是象限角：精确路径，与 90° 同一格判据的另一半
+  assert_eq(
+    ttx_ink(@render.render_doc(ttx_doc("ttx-r270", 270.0, false, false), env)),
+    (26, 27, 45, 46, 208),
+    msg="转 270° 的墨迹（象限角：精确）",
+  )
 }
