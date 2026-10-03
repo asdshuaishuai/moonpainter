@@ -1097,6 +1097,19 @@ fn stroke_cover_error(l : @core.Layer) -> String? {
 /// ⇒ 画出来的线比 `stroke_w` 窄。实测 8×4 盒 + `stroke_w=20` 只画出 13×13 的
 /// 方块（圆头与两侧全没了）；旋转 30° 后还会更偏（窗是轴对齐的，胶囊不是）。
 /// 只报"落在画布内"的那部分：窗外且画布外的部分本来就没有损失。
+///|
+/// `v` 夹到 `[0, hi]`（NaN 也落回 0：`.to_double()` 出来的 NaN 比较全 false，
+/// 这里不给它留下"既不小于也不大于"的第三种走法）。脚手架只有一处。
+fn lo_hi(v : Double, lo : Double, hi : Double) -> Double {
+  if v > hi {
+    hi
+  } else if v > lo {
+    v
+  } else {
+    lo
+  }
+}
+
 fn stroke_clip_error(l : @core.Layer, cw : Int, ch : Int) -> String? {
   if !(l.kind is @core.ShapeKind::Line) || l.stroke.width <= 0.0 {
     return None
@@ -1152,6 +1165,87 @@ fn stroke_clip_error(l : @core.Layer, cw : Int, ch : Int) -> String? {
   }
   Some(
     "P2 stroke 层 \{l.id} 的描边（宽 \{@core.fmt_num(l.stroke.width)}）伸出渲染窗超过松弛量：窗 = 层盒子的对角线为边 + 2px（\{wx0},\{wy0}–\{wx1},\{wy1}），伸到窗外的两侧与圆头不会被画 ⇒ 画出来比 stroke_w 窄；要么把 stroke_w 调小，要么把盒子 w/h 放大到装得下描边",
+  )
+}
+
+///|
+/// 笔触层的盒子装不下自己的笔触。**这是文本层那条的兄弟**，但错位的方式不同：
+/// 文本层的盒子**参与渲染**（渲染器不按盒子裁剪，于是字画到盒子外）；而笔触层的
+/// `w/h` **一条渲染路径都不读**——`paint_raster` 的窗口是
+/// `dabs_window(l, buf.width, buf.height)`（画布尺寸）。所以缩盒子画面**逐位不变**
+/// （实测 320×240 缩到 10×10，`render_sha256` 一模一样），变的只有**报告面**：
+/// `query-layer` 与 `overlay=1` 的层线框照盒子报 ⇒ "看得见的范围"与"报出来的
+/// 范围"分家。
+///
+/// 判据与渲染器**同一把尺子**：dab 的落笔范围（局部 `d.x ± d.r`，`dabs` 存的
+/// 就是局部坐标、`x/y` 负责平移）先换算到画布坐标、再按**画布**裁剪——画布外
+/// 那部分本来就画不出来，不该算错位（同 `stroke_clip_error` 只报"画布内"的
+/// 那部分）。裁剪后一个像素都不剩 ⇒ 没有可见的错位，不报。
+/// 等号算装得下（容差 `1e-9`，同文本层那条）；`r <= 0` 的 dab 不落墨、不计。
+/// 命令面**不拦** `resize`（缩盒子是合法操作，只是会让报告与画面分家），
+/// 所以这一条就是那件事唯一的出口。
+fn raster_box_error(l : @core.Layer, cw : Int, ch : Int) -> String? {
+  if !(l.kind is @core.ShapeKind::Raster) || l.dabs.length() == 0 {
+    return None
+  }
+  let mut x0 = 0.0
+  let mut y0 = 0.0
+  let mut x1 = 0.0
+  let mut y1 = 0.0
+  let mut any = false
+  for d in l.dabs {
+    if d.r <= 0.0 {
+      continue
+    }
+    let dx0 = d.x - d.r
+    let dy0 = d.y - d.r
+    let dx1 = d.x + d.r
+    let dy1 = d.y + d.r
+    if any {
+      if dx0 < x0 {
+        x0 = dx0
+      }
+      if dy0 < y0 {
+        y0 = dy0
+      }
+      if dx1 > x1 {
+        x1 = dx1
+      }
+      if dy1 > y1 {
+        y1 = dy1
+      }
+    } else {
+      any = true
+      x0 = dx0
+      y0 = dy0
+      x1 = dx1
+      y1 = dy1
+    }
+  }
+  if !any {
+    return None
+  }
+  let cwd = cw.to_double()
+  let chd = ch.to_double()
+  let cx0 = lo_hi(l.x + x0, 0.0, cwd)
+  let cy0 = lo_hi(l.y + y0, 0.0, chd)
+  let cx1 = lo_hi(l.x + x1, 0.0, cwd)
+  let cy1 = lo_hi(l.y + y1, 0.0, chd)
+  if cx1 <= cx0 || cy1 <= cy0 {
+    return None
+  }
+  let bx0 = l.x
+  let by0 = l.y
+  let bx1 = l.x + l.w
+  let by1 = l.y + l.h
+  let eps = 0.000000001
+  if cx0 + eps >= bx0 && cy0 + eps >= by0 && cx1 <= bx1 + eps && cy1 <= by1 + eps {
+    return None
+  }
+  let vis = "\{@core.fmt_num(cx0)},\{@core.fmt_num(cy0)}–\{@core.fmt_num(cx1)},\{@core.fmt_num(cy1)}"
+  let box = "\{@core.fmt_num(bx0)},\{@core.fmt_num(by0)}–\{@core.fmt_num(bx1)},\{@core.fmt_num(by1)}"
+  Some(
+    "P2 geom 笔触层 \{l.id} 的盒子装不下自己的笔触（可见范围 \{vis} 超出盒子 \{box}）：w/h 不参与渲染（笔触窗口是画布尺寸），但 query-layer 与 overlay 线框照盒子报 ⇒ 报出来的范围与画面分家；把盒子 resize 到装得下（或把笔触 move 回盒子内）",
   )
 }
 
@@ -1307,6 +1401,10 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
     // （PLAN 十九）。判据各只有一处，命令面**不拦**——把描边调宽是合法操作，
     // 结果只是"变成实心块"或"被裁窄"，同 `adjust value=0` 那条分工：
     // 入口拦"非法/无效字段"，lint 拦"合法但画出来的不是他要的"。
+    match raster_box_error(l, doc.width, doc.height) {
+      Some(m) => v.push(m)
+      None => ()
+    }
     match stroke_cover_error(l) {
       Some(m) => v.push(m)
       None => ()
