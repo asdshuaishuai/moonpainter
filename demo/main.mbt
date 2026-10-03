@@ -689,6 +689,25 @@ fn props_html(l : Json, roots : Array[Json]) -> String {
       })
     _ => []
   }
+  // 能力表（引擎 `query-layer` 报的 `caps`）：面板**不抄 kind 名单**，
+  // 一切"这个控件画不画"都问它——判断两处实现必然先烂（PLAN 五十一）。
+  // `has_caps` 与空表要分开：缺字段是**前端/引擎版本不匹配**（该明说），
+  // 空表是"这个层真的没有可改的变换能力"。
+  let has_caps = match json_get(l, "caps") {
+    Some(_) => true
+    None => false
+  }
+  let caps : Array[String] = match json_get(l, "caps") {
+    Some(Json::Array(a)) =>
+      a.map(fn(t) {
+        match t {
+          Json::String(x) => x
+          _ => ""
+        }
+      })
+    _ => []
+  }
+  let can = fn(c : String) -> Bool { caps.contains(c) }
   // 调整层显示算子
   let adj = match json_get(l, "adjust") {
     Some(a) => {
@@ -728,41 +747,68 @@ fn props_html(l : Json, roots : Array[Json]) -> String {
   // "字符串首词是命令名"统计人类面覆盖，所以这里写的就是那份名册。
   sb.write_string("<div class='pedit'>")
   sb.write_string(txt_input("层名", gname, "__rename", gid))
-  sb.write_string(num_input("X", gx, "__setx", gid))
-  sb.write_string(num_input("Y", gy, "__sety", gid))
-  if gkind == "raster" {
-    // 笔触层的 `w/h` **不参与渲染**（`paint_raster` 的窗口是画布尺寸）⇒ 改它画面
-    // 一个像素不动，只会让 `query-layer`/`overlay` 报出的范围与画面分家（引擎侧
-    // `raster_box_error` 会报）。发一个"改了没反应"的输入框就是**静默失败的入口**，
-    // 所以这里不发控件、只把当前值与理由印出来；`move`（X/Y）是真的挪笔触，照旧给。
+  if !has_caps {
+    // 宁可少画、也要说清为什么：静默少一排控件，人会以为界面坏了。
     sb.write_string(
-      "<span class='pk'>W/H</span><span class='pv' title='笔触层的 w/h 不参与渲染（笔触窗口是画布尺寸）：改它画面不会变，只会让 query-layer 与 overlay 线框跟画面分家（lint 的 raster_box_error 会报）'>" +
-      html_attr(gw) + "×" + html_attr(gh) + "（不参与渲染，故不可改；挪笔触用 X/Y）</span>",
+      "<span class='pv' title='本页从引擎的 query-layer 读 caps（能力表）决定画哪些控件；读不到就一个都不画，免得画出改了没反应的控件'>（引擎没报 caps：能力相关控件已隐藏，前端与引擎版本可能不匹配）</span>",
     )
   } else {
-    sb.write_string(num_input("W", gw, "__setw", gid))
-    sb.write_string(num_input("H", gh, "__seth", gid))
+    if can("move") {
+      sb.write_string(num_input("X", gx, "__setx", gid))
+      sb.write_string(num_input("Y", gy, "__sety", gid))
+    } else {
+      // `move` 对这个 kind **没有画面效果**（实测：组/调整层 x/y 不读）——
+      // 发一个改了不动的输入框就是静默失败的入口（PLAN 五十一）。
+      sb.write_string(
+        "<span class='pk'>X/Y</span><span class='pv' title='这个 kind 的 x/y 不参与渲染：move 回 ok 而画面逐位不变'>" +
+        html_attr(gx) + "," + html_attr(gy) + "（不参与渲染）</span>",
+      )
+    }
+    if can("resize") {
+      sb.write_string(num_input("W", gw, "__setw", gid))
+      sb.write_string(num_input("H", gh, "__seth", gid))
+    } else {
+      sb.write_string(
+        "<span class='pk'>W/H</span><span class='pv' title='这个 kind 的 w/h 不参与渲染（文本按字号画、笔触的窗口是画布尺寸、组画的是子层、调整层作用于其下合成）：改它画面不会变，盒子与墨不符时 lint 会报'>" +
+        html_attr(gw) + "×" + html_attr(gh) + "（不参与渲染，故不可改）</span>",
+      )
+    }
+    if can("rotate") {
+      sb.write_string(num_input("旋转", grot, "__rotate", gid))
+    } else {
+      sb.write_string(
+        "<span class='pk'>旋转</span><span class='pv' title='这个 kind 不读 rotation_deg：rotate 会被引擎拒绝（错误原话在状态栏）'>不适用</span>",
+      )
+    }
+    if can("flip") {
+      sb.write_string("<button class='ghost' title='水平翻转' onclick='globalThis.__flip(\"")
+      sb.write_string(gid)
+      sb.write_string("\",\"h\")'>⇋</button>")
+      sb.write_string("<button class='ghost' title='垂直翻转' onclick='globalThis.__flip(\"")
+      sb.write_string(gid)
+      sb.write_string("\",\"v\")'>⇅</button>")
+    } else {
+      sb.write_string(
+        "<span class='pk'>翻转</span><span class='pv' title='这个 kind 不读 flip_h/flip_v：flip 会被引擎拒绝'>不适用</span>",
+      )
+    }
   }
-  sb.write_string(num_input("旋转", grot, "__rotate", gid))
-  sb.write_string("<button class='ghost' title='水平翻转' onclick='globalThis.__flip(\"")
-  sb.write_string(gid)
-  sb.write_string("\",\"h\")'>⇋</button>")
-  sb.write_string("<button class='ghost' title='垂直翻转' onclick='globalThis.__flip(\"")
-  sb.write_string(gid)
-  sb.write_string("\",\"v\")'>⇅</button>")
   sb.write_string("</div>")
-  if gkind == "image" {
+  if can("asset") {
     sb.write_string("<div class='pedit'><button class='ghost' title='原地换掉这张图：层序/蒙版/标签/透明度/翻转/旋转都不动' onclick='globalThis.__img_swap(\"")
     sb.write_string(gid)
     sb.write_string("\");document.getElementById(\"file-in\").click()'>换图</button></div>")
   }
-  if gkind == "text" {
+  if can("text") {
     sb.write_string("<div class='pedit'>")
     sb.write_string(txt_input("文字内容", gtext, "__text_set", gid))
+  }
+  if can("font_size") {
+    sb.write_string("<div class='pedit'>")
     sb.write_string(num_input("字号", gfs, "__text_font", gid))
     sb.write_string("</div>")
   }
-  if gkind == "adjust" {
+  if can("adjust") {
     sb.write_string("<div class='pedit'>")
     sb.write_string(txt_input("算子", adj_op, "__adj_op", gid))
     sb.write_string(num_input("数值", adj_val, "__adj_val", gid))
@@ -794,11 +840,15 @@ fn props_html(l : Json, roots : Array[Json]) -> String {
   sb.write_string(gid)
   sb.write_string("\")'>置顶</button><button onclick='globalThis.__back(\"")
   sb.write_string(gid)
-  sb.write_string("\")'>置底</button><button onclick='globalThis.__mask_invert(\"")
-  sb.write_string(gid)
-  sb.write_string("\")'>蒙版反选</button><button class='ghost' onclick='globalThis.__mask_clear(\"")
-  sb.write_string(gid)
-  sb.write_string("\")'>去蒙版</button>")
+  sb.write_string("\")'>置底</button>")
+  // 蒙版也是能力之一（组不读蒙版：引擎会拒 `add-mask`），照 caps 画
+  if can("mask") {
+    sb.write_string("<button onclick='globalThis.__mask_invert(\"")
+    sb.write_string(gid)
+    sb.write_string("\")'>蒙版反选</button><button class='ghost' onclick='globalThis.__mask_clear(\"")
+    sb.write_string(gid)
+    sb.write_string("\")'>去蒙版</button>")
+  }
   // 分组：人类侧的入口。组 → 「解组」；非组 → 「编组」+「父级」下拉
   // （根级 / 各根级组，覆盖 group-add 与 group-remove 两个方向）。
   // `roots` 是**参数**（调用方取一次 `list-layers` 就够）——纯函数里不许再调
@@ -807,7 +857,7 @@ fn props_html(l : Json, roots : Array[Json]) -> String {
     Some(p) => p
     None => ""
   }
-  if gkind == "group" {
+  if can("children") {
     sb.write_string("<button class='ghost' onclick='globalThis.__ungroup_sel(\"")
     sb.write_string(gid)
     sb.write_string("\")'>解组</button>")

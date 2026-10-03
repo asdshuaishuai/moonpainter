@@ -436,6 +436,19 @@ fn layer_summary(l : @core.Layer) -> String {
   sb.write_string(",\"visible\":\{l.visible}")
   sb.write_string(",\"opacity\":\{@core.fmt_num(l.opacity)}")
   sb.write_string(",\"blend\":\"\{blend_str(l.blend)}\"")
+  // 能力表（"这条命令对这个 kind 的画面有没有效果"）——人类前端据此画控件，
+  // **别在 demo 里再抄一遍 kind 名单**：判断两处实现必然先烂。
+  sb.write_string(",\"caps\":[")
+  let mut cap_first = true
+  for c in layer_caps(l) {
+    if cap_first {
+      cap_first = false
+    } else {
+      sb.write_string(",")
+    }
+    sb.write_string("\"\{c}\"")
+  }
+  sb.write_string("]")
   sb.write_string(",\"rot\":\{@core.fmt_num(l.rotation_deg)}")
   // 圆的圆角与翻转此前**只写不读**：`set-style radius=`/`flip` 改了画面与
   // 指纹，但 `query-layer`/`list-layers` 都不报，于是调用方无处回读——

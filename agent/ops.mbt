@@ -1250,6 +1250,70 @@ fn raster_box_error(l : @core.Layer, cw : Int, ch : Int) -> String? {
 }
 
 ///|
+/// 一个层对若干**变换/编辑命令**的画面效果（`query-layer`/`list-layers` 报出来，
+/// 人类前端据此决定**画不画控件**）。
+///
+/// 它回答的不是"命令收不收"（那是入口门禁），而是**"收下之后画面会不会变"**：
+/// 实测 `move` 在组/调整层上回 `ok` 而画面一像素不动、`resize` 在文本/笔触层上
+/// 同样（`w/h` 一条渲染路径都不读）。控件画在那儿只会让人以为改坏了——
+/// 读点矩阵那一节留下的"人类侧还差一格"就是靠这条能力表补上的。
+///
+/// **判据一处**：有面的那些格子（rotate/flip/mask/text/font_size/adjust/asset/
+/// children）直接读**读点矩阵那一行**（`kind_only_row`，与两条入口路径同一行、
+/// 同一句措辞）；字段名打错时这里是"少报"（`None => false`）而不是"全报"，
+/// 且 `agent/caps_test.mbt` 逐 kind 断言**完整** caps，打错当场红。
+///
+/// `move`/`resize` 判的是**容器字段** `x/y/w/h`——每个层都有盒子，"写了/没写"
+/// 分不出来，矩阵那套 `dead` 判据用不上——名单来自 PLAN 五十一 的逐 kind 实测，
+/// 并由同一条对照测试钉住：**caps 说有 ⇒ 渲染 sha 必须变；说没有 ⇒ 必须逐位相同**。
+/// 实测名单（探针非退化；指纹变才算"命令真生效"）：
+///   矩形/椭圆/位图：`x/y` 平移、`w/h` 参与（位图是**拉伸到盒子**）；
+///   多边形/线段：`x/y` 平移；`w/h` 是**渲染窗**（`paint_window`）⇒ 改它可能裁剪；
+///   文本：`x/y` 读（字按 `font_size` 画）、**盒子不参与渲染**（实测显式 `w=/h=`
+///         与缺省盒 render sha 逐位相同）；
+///   笔触：`x/y` 平移笔触、**盒子不参与渲染**（窗口是画布尺寸）；
+///   组/调整层：`x/y` 与盒子**都不读**（组画的是子层、调整层作用于其下的合成）。
+pub fn layer_caps(l : @core.Layer) -> Array[String] {
+  let caps : Array[String] = []
+  let reads = fn(field : String) -> Bool {
+    match kind_only_row(field) {
+      Some(c) => c.kinds.contains(kind_str(l.kind))
+      None => false
+    }
+  }
+  let k = l.kind
+  let text_kind = k is @core.ShapeKind::Text
+  let raster_kind = k is @core.ShapeKind::Raster
+  let face = k is @core.ShapeKind::Rect ||
+    k is @core.ShapeKind::Ellipse ||
+    k is @core.ShapeKind::Polygon ||
+    k is @core.ShapeKind::Line ||
+    k is @core.ShapeKind::Image
+  // 顺序即文档顺序（DESIGN §3 的 caps 列表按这个顺序报）
+  if face || text_kind || raster_kind {
+    caps.push("move")
+  }
+  if face {
+    caps.push("resize")
+  }
+  for p in [
+    ("rotate", "rotation_deg"),
+    ("flip", "flip_h"),
+    ("mask", "mask"),
+    ("text", "text"),
+    ("font_size", "font_size"),
+    ("adjust", "adjust"),
+    ("asset", "asset_hash"),
+    ("children", "children"),
+  ] {
+    if reads(p.1) {
+      caps.push(p.0)
+    }
+  }
+  caps
+}
+
+///|
 pub fn lint_doc(doc : @core.Document) -> Array[String] {
   let v : Array[String] = []
   // P0 画布限额

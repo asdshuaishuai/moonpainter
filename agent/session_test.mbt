@@ -490,9 +490,24 @@ test "蒙版反选的读-改-写往返（前端「蒙版反选」按钮依赖的
   let q2 = run(s, "query-layer r")
   assert_true(q2.contains("\"invert\":false"), msg=q2)
   // 4) 去蒙版后 query-layer 上不再有 mask 字段（前端据此把标记撤掉）
+  // ⚠️ 必须**精确解析**字段，不能 `contains("mask")`：`caps` 数组里就有
+  // 字面量 `"mask"`（铁律 11——子串断言会被同一份回包里的另一个字段满足，
+  // 实测这条断言就是这么被打红的）。
   let _ = run(s, "remove-mask r")
   let q3 = run(s, "query-layer r")
-  assert_true(!q3.contains("\"mask\""), msg="去蒙版后不该再报 mask：\{q3}")
+  let o3 = match @core.parse_json(q3) {
+    Ok(o) => o
+    Err(e) => abort("query-layer 回包不是 JSON（\{e}）：\{q3}")
+  }
+  let l3 = match o3.get("layer") {
+    Some(x) => x
+    None => abort("缺 layer：\{q3}")
+  }
+  assert_true(l3.get("mask") is None, msg="去蒙版后不该再报 mask 字段：\{q3}")
+  // 正控：**有**蒙版时那个字段必须在（否则上面那条断言只是在守"永远不报"）
+  let _ = run(s, "add-mask r kind=rect x=0 y=0 w=20 h=20")
+  let q4 = run(s, "query-layer r")
+  assert_true(q4.contains("\"mask\":"), msg="有蒙版时要报 mask 字段：\{q4}")
 }
 
 ///|

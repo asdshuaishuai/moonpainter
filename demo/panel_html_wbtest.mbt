@@ -42,15 +42,19 @@ test "属性面板：组给「解组」、非组给「编组」+「父级」下�
   let roots = panel_layers()
   // 组：只能解组（组不能再被编组——引擎侧 `group-add` 拒组当成员）
   let g = parse_json_safe(
-    "{\"id\":\"g1\",\"name\":\"组一\",\"kind\":\"group\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\"}",
+    "{\"id\":\"g1\",\"name\":\"组一\",\"kind\":\"group\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"children\"]}",
   )
   let hg = props_html(g, roots)
   assert_true(has_sub(hg, "globalThis.__ungroup_sel(\"g1\")"), msg=hg)
   assert_true(lacks_sub(hg, "__group_sel"), msg="组不该再有「编组」按钮：\{hg}")
   assert_true(lacks_sub(hg, "__reparent"), msg="组没有父级下拉（不支持嵌套编组）：\{hg}")
+  // 组的 x/y 与盒子都不读、旋转/翻转入口就拒、蒙版也不读 ⇒ 五个控件一个都不画
+  for name in ["__setx", "__setw", "__rotate", "__flip", "__mask_invert"] {
+    assert_true(lacks_sub(hg, name), msg="组不该有 \{name} 控件：\{hg}")
+  }
   // 非组、且在根级：给「编组」+ 父级下拉，且"根级"这一项是选中态
   let r = parse_json_safe(
-    "{\"id\":\"l1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\"}",
+    "{\"id\":\"l1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"resize\",\"rotate\",\"flip\",\"mask\"]}",
   )
   let hr = props_html(r, roots)
   assert_true(has_sub(hr, "globalThis.__group_sel(\"l1\")"), msg=hr)
@@ -114,7 +118,7 @@ test "属性面板：可改的属性都有入口（改名/坐标/尺寸/旋转/�
   // （蒙版/标签/层序全丢，调整层还会被推到栈顶改变作用范围）。
   let roots = panel_layers()
   let r = parse_json_safe(
-    "{\"id\":\"l1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":10,\"y\":20,\"w\":30,\"h\":40,\"rot\":15,\"flip_h\":true,\"flip_v\":false,\"opacity\":1,\"blend\":\"normal\",\"tags\":[\"hero\",\"主体\"]}",
+    "{\"id\":\"l1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":10,\"y\":20,\"w\":30,\"h\":40,\"rot\":15,\"flip_h\":true,\"flip_v\":false,\"opacity\":1,\"blend\":\"normal\",\"tags\":[\"hero\",\"主体\"],\"caps\":[\"move\",\"resize\",\"rotate\",\"flip\",\"mask\"]}",
   )
   let h = props_html(r, roots)
   for name in [
@@ -142,15 +146,23 @@ test "属性面板：可改的属性都有入口（改名/坐标/尺寸/旋转/�
 test "属性面板：文字层给内容+字号，调整层给算子+数值（各自专属）" {
   let roots = panel_layers()
   let t = parse_json_safe(
-    "{\"id\":\"t1\",\"name\":\"标题\",\"kind\":\"text\",\"x\":0,\"y\":0,\"w\":40,\"h\":16,\"text\":\"你好\",\"font_size\":16,\"opacity\":1,\"blend\":\"normal\"}",
+    "{\"id\":\"t1\",\"name\":\"标题\",\"kind\":\"text\",\"x\":0,\"y\":0,\"w\":40,\"h\":16,\"text\":\"你好\",\"font_size\":16,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"mask\",\"text\",\"font_size\"]}",
   )
   let ht = props_html(t, roots)
   assert_true(has_sub(ht, "globalThis.__text_set(\"t1\",this.value)"), msg=ht)
   assert_true(has_sub(ht, "globalThis.__text_font(\"t1\",this.value)"), msg=ht)
   assert_true(has_sub(ht, "value='你好'"), msg="文字内容没回显：\{ht}")
   assert_true(lacks_sub(ht, "__adj_op"), msg=ht)
+  // caps 说没有的能力，**一个控件都不许画**（此前旋转/翻转对任何 kind 都画，
+  // 人类点下去只换来状态栏里的引擎拒绝原话）：文本层读 x/y 与 text/font_size，
+  // 但**不读**盒子与 rotation/flip（引擎侧 caps 逐格实测，见 PLAN 五十一）。
+  assert_true(has_sub(ht, "globalThis.__setx("), msg="文本层的 x/y 是真的（字按 font_size 画在 x/y 上）：\{ht}")
+  assert_true(lacks_sub(ht, "__setw"), msg="文本层不该有 W 输入框：\{ht}")
+  assert_true(lacks_sub(ht, "__seth"), msg="文本层不该有 H 输入框：\{ht}")
+  assert_true(lacks_sub(ht, "__rotate"), msg="文本层不该有旋转输入框：\{ht}")
+  assert_true(lacks_sub(ht, "__flip"), msg="文本层不该有翻转按钮：\{ht}")
   let a = parse_json_safe(
-    "{\"id\":\"a1\",\"name\":\"调亮\",\"kind\":\"adjust\",\"adjust\":{\"op\":\"brightness\",\"value\":0.25},\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\"}",
+    "{\"id\":\"a1\",\"name\":\"调亮\",\"kind\":\"adjust\",\"adjust\":{\"op\":\"brightness\",\"value\":0.25},\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"mask\",\"adjust\"]}",
   )
   let ha = props_html(a, roots)
   assert_true(has_sub(ha, "globalThis.__adj_op(\"a1\",this.value)"), msg=ha)
@@ -158,6 +170,11 @@ test "属性面板：文字层给内容+字号，调整层给算子+数值（各
   assert_true(has_sub(ha, "value='brightness'"), msg=ha)
   assert_true(has_sub(ha, "value='0.25'"), msg=ha)
   assert_true(lacks_sub(ha, "__text_set"), msg=ha)
+  // 调整层作用于**其下的合成**，它的 x/y 与盒子都不读（实测 move/resize
+  // 回 ok、指纹变、画面逐位不变）⇒ X/Y 与 W/H 都不该是输入框，而要印出理由
+  assert_true(lacks_sub(ha, "__setx"), msg="调整层不该有 X 输入框：\{ha}")
+  assert_true(lacks_sub(ha, "__setw"), msg="调整层不该有 W 输入框：\{ha}")
+  assert_true(has_sub(ha, "不参与渲染"), msg="少画控件必须说明理由：\{ha}")
 }
 
 ///|
@@ -214,12 +231,12 @@ test "换图：文件选择走「原地换掉」还是「导入新层」由状�
   // 面板：image 层才有「换图」按钮，且按钮先记状态再触发文件选择
   let roots = panel_layers()
   let img = parse_json_safe(
-    "{\"id\":\"i1\",\"name\":\"照片\",\"kind\":\"image\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"asset\":\"deadbeef\"}",
+    "{\"id\":\"i1\",\"name\":\"照片\",\"kind\":\"image\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"asset\":\"deadbeef\",\"caps\":[\"move\",\"resize\",\"rotate\",\"flip\",\"mask\",\"asset\"]}",
   )
   let hi = props_html(img, roots)
   assert_true(has_sub(hi, "globalThis.__img_swap(\"i1\");document.getElementById(\"file-in\").click()"), msg=hi)
   let rect = parse_json_safe(
-    "{\"id\":\"l1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\"}",
+    "{\"id\":\"l1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"resize\",\"rotate\",\"flip\",\"mask\"]}",
   )
   assert_true(lacks_sub(props_html(rect, roots), "__img_swap"), msg="矩形上不该有「换图」")
 }
@@ -228,7 +245,7 @@ test "换图：文件选择走「原地换掉」还是「导入新层」由状�
 test "属性面板：笔触层不发 W/H 输入框（改了画面不动 = 静默入口），X/Y 照旧" {
   let roots = panel_layers()
   let r = parse_json_safe(
-    "{\"id\":\"p1\",\"name\":\"笔触\",\"kind\":\"raster\",\"x\":0,\"y\":0,\"w\":320,\"h\":240,\"opacity\":1,\"blend\":\"normal\"}",
+    "{\"id\":\"p1\",\"name\":\"笔触\",\"kind\":\"raster\",\"x\":0,\"y\":0,\"w\":320,\"h\":240,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"mask\"]}",
   )
   let h = props_html(r, roots)
   // 反控：不发那两个「改了不生效」的控件
@@ -242,9 +259,30 @@ test "属性面板：笔触层不发 W/H 输入框（改了画面不动 = 静默
   assert_true(has_sub(h, "globalThis.__sety("), msg=h)
   // 正控③：别的 kind 照旧发 W/H（判据两头都咬得住）
   let rr = parse_json_safe(
-    "{\"id\":\"r1\",\"name\":\"矩形\",\"kind\":\"rect\",\"x\":1,\"y\":2,\"w\":30,\"h\":40,\"opacity\":1,\"blend\":\"normal\"}",
+    "{\"id\":\"r1\",\"name\":\"矩形\",\"kind\":\"rect\",\"x\":1,\"y\":2,\"w\":30,\"h\":40,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"resize\",\"rotate\",\"flip\",\"mask\"]}",
   )
   let hr = props_html(rr, roots)
   assert_true(has_sub(hr, "globalThis.__setw("), msg=hr)
   assert_true(has_sub(hr, "globalThis.__seth("), msg=hr)
+}
+
+///|
+test "属性面板：引擎没报 caps 时一个能力控件都不画，并说清为什么（版本不匹配）" {
+  // `caps` 是前端与引擎之间的**唯一**能力判据。缺了它只有两种诚实的做法：
+  // 少画（人看到"这里没控件"）或报错。**不许猜 kind**——那就是把能力表在
+  // demo 里抄了第二份，而两份必然先烂（PLAN 五十一）。
+  let roots = panel_layers()
+  let r = parse_json_safe(
+    "{\"id\":\"z1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":10,\"y\":20,\"w\":30,\"h\":40,\"opacity\":1,\"blend\":\"normal\"}",
+  )
+  let h = props_html(r, roots)
+  for name in ["__setx", "__sety", "__setw", "__seth", "__rotate", "__flip", "__mask_invert"] {
+    assert_true(lacks_sub(h, name), msg="没有 caps 就不该画 \{name}：\{h}")
+  }
+  // 与 caps 无关的控件照旧（层名/透明度/删除/置顶/置底/标签）
+  for name in ["__rename", "__op", "__del", "__front", "__back", "__tag_add"] {
+    assert_true(has_sub(h, name), msg="没 caps 也要有的通用控件 \{name}：\{h}")
+  }
+  // 而且要**说清**为什么少了一排控件（静默少画会让人以为界面坏了）
+  assert_true(has_sub(h, "没报 caps"), msg="少画必须说明理由：\{h}")
 }
