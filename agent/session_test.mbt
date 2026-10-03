@@ -565,23 +565,30 @@ test "蒙版羽化：feather 按内距线性过渡，0 时仍是硬边" {
   let _ = run(s, "add-mask r kind=rect x=0 y=0 w=20 h=20")
   let hard = @render.render_doc(unwrap_doc(s), env)
   assert_eq(@codec.rgba_get(hard, 1, 1), 0xFFFF0000)
-  // feather=4：内距 1/2/3/4 → 覆盖 0.25/0.5/0.75/1.0
-  // （红 25/50/75/100% 压在白底上 → 255×0.75=191、×0.5=127、×0.25=64）
+  // feather=4：蒙版按**4 个子样本各自的覆盖度取平均**（与形状同一套样本，
+  // 见 PLAN 五十六）。像素 (k,k) 的四个样本落在 (k+0.25..k+0.75)，内距 =
+  // 该样本到蒙版边界的距离 ⇒ 覆盖 = 内距/4。实测平均：
+  //   k=1 → 0.34375、k=2 → 0.59375、k=3 → 0.84375、k=4 → 1.0
+  // （红按覆盖度压在白底上：255×(1−avg) → 167/104/40/0）
+  // ⚠️ 改前这里是「按像素中心算一个覆盖度乘上去」（0.375/0.625/0.875）——
+  // 那是**两把尺子**：形状按 4 个子样本判、蒙版按中心判。实测反例 (13,7)：
+  // 中心在蒙版外（覆盖 0）、子样本在内，于是 `pick` 与渲染打架。
   let _ = run(s, "remove-mask r")
   let _ = run(s, "add-mask r kind=rect x=0 y=0 w=20 h=20 feather=4")
   let soft = @render.render_doc(unwrap_doc(s), env)
-  assert_eq(@codec.rgba_get(soft, 1, 1), 0xFFFFBFBF) // 覆盖 0.25
-  assert_eq(@codec.rgba_get(soft, 2, 2), 0xFFFF7F7F) // 覆盖 0.50
-  assert_eq(@codec.rgba_get(soft, 3, 3), 0xFFFF4040) // 覆盖 0.75
-  assert_eq(@codec.rgba_get(soft, 4, 4), 0xFFFF0000) // 覆盖 1.00（内距达 feather）
+  assert_eq(@codec.rgba_get(soft, 1, 1), 0xFFFFA7A7) // 平均覆盖 0.34375
+  assert_eq(@codec.rgba_get(soft, 2, 2), 0xFFFF6868) // 平均覆盖 0.59375
+  assert_eq(@codec.rgba_get(soft, 3, 3), 0xFFFF2828) // 平均覆盖 0.84375
+  assert_eq(@codec.rgba_get(soft, 4, 4), 0xFFFF0000) // 平均覆盖 1.00（内距达 feather）
   assert_eq(@codec.rgba_get(soft, 10, 10), 0xFFFF0000) // 深处仍是满覆盖
   assert_eq(@codec.rgba_get(soft, 25, 25), 0xFFFFFFFF) // 蒙版外仍完全不渲染
   // 羽化只影响边界带：远离边界的区域与 hard 完全一致
   assert_eq(@codec.rgba_get(soft, 15, 15), @codec.rgba_get(hard, 15, 15))
-  // 反选后过渡带跟着反向：覆盖度 = 1 − 原覆盖度
+  // 反选后过渡带跟着反向：每个样本的覆盖度取 1−原覆盖度，再按样本平均
+  // （(1,1) 实测 0.6875/0.6875/0.6875/0.5625 → 0.65625 ⇒ 255×0.34375 = 88 = 0x58）
   let _ = run(s, "set-mask r invert=true")
   let inv = @render.render_doc(unwrap_doc(s), env)
-  assert_eq(@codec.rgba_get(inv, 1, 1), 0xFFFF4040) // 1−0.25 = 0.75
+  assert_eq(@codec.rgba_get(inv, 1, 1), 0xFFFF5858) // 1−0.34375 = 0.65625
   assert_eq(@codec.rgba_get(inv, 4, 4), 0xFFFFFFFF) // 1−1.00 = 0（原满覆盖处全透）
   assert_eq(@codec.rgba_get(inv, 25, 25), 0xFFFF0000) // 原蒙版外反而满覆盖
   // 坏 feather 不再静默变 0

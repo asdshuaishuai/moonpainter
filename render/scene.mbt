@@ -75,6 +75,158 @@ let subsample_2x2 : Array[(Double, Double)] = [
 ]
 
 ///|
+/// 祖先链里有没有**真的会改变落点**的变换（rot/flip 非默认）。
+/// 快速路径（`solid_rect_interior`/`mask_full_box`）都按"层自己的局部盒"算，
+/// 只有恒等祖先下才成立——一处判据，别在每处各写一遍。
+fn frame_transformed(frames : Transform) -> Bool {
+  for f in frames {
+    if f.rotation_deg != 0.0 || f.flip_h || f.flip_v {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// 把一层压进祖先链（容器的变换在**子层之前**生效）。
+fn frames_for(frames : Transform, l : @core.Layer) -> Transform {
+  let out : Transform = []
+  for f in frames {
+    out.push(f)
+  }
+  out.push(l)
+  out
+}
+
+///|
+/// 层矩形上的点 → 该层的**父坐标系**（`to_local_in` + `to_local` 的组合）。
+/// 蒙版/边界这类"贴着层矩形"的量都用它，别各自再算一遍。
+fn screen(l : @core.Layer, frames : Transform, lx : Double, ly : Double) -> (Double, Double) {
+  layer_to_canvas(l, frames, lx, ly)
+}
+
+///|
+/// 层矩形上的点 → 该层的父坐标系（`canvas_to_layer` 的逆）。
+fn layer_to_canvas(l : @core.Layer, frames : Transform, lx : Double, ly : Double) -> (Double, Double) {
+  let (x, y) = to_canvas(l, lx, ly)
+  to_canvas_in(frames, x, y)
+}
+
+///|
+/// 该层父坐标系里的点 → 层矩形上的点（`screen` 的逆，`pick`/渲染共用）。
+fn canvas_to_layer(l : @core.Layer, frames : Transform, x : Double, y : Double) -> (Double, Double) {
+  let (fx, fy) = to_local_in(frames, x, y)
+  to_local(l, fx, fy)
+}
+
+///|
+/// 层矩形上的点 → 该层父坐标系（`layer_to_canvas` 的简写别名）。
+
+///|
+/// **祖先变换链**：把一个画布点逐级逆映射进某个容器的坐标系里。
+///
+/// `agent.shift_layer_tree` 是"搬内容"的写侧，这里是对称的读侧——**一处实现**
+/// （渲染、`pick`、`paint_window`、`mask_cover_at` 都经它），正变换
+/// `to_canvas_in` 与 `to_local_in` 成对（`to_canvas_frame_pt` / `to_local_frame`
+/// 是单帧那一对）。空数组（根级层）就是恒等变换。
+/// ⚠️ 帧里装的只会是**组**：组的 `x/y` 已被 `move` 折叠进后代，所以帧的变换
+/// **不含平移**（见 `to_local_frame`）。
+pub type Transform = Array[@core.Layer]
+
+///|
+/// **组帧的逆变换**：绕组盒中心的 rot/flip，**不含平移**。
+///
+/// ⚠️ 为什么不复用 `to_local`：组的 `x/y` 已经被 `move` **折叠进每个后代**了
+/// （`agent.shift_layer_tree` 把 delta 落到整棵子树、组盒自己也搬，PLAN 五十五）
+/// ——再让祖先链减一次 `x/y` 就是**双重偏移**：实测 `move grp 15 10` 之后
+/// 子层的窗被算到 2×15 之外，`probe (20,15)` 变白而 (30,15) 是红（PLAN 五十六）。
+/// 所以组帧只做"绕中心旋转 + 绕中心镜像"。
+fn to_local_frame(f : @core.Layer, px : Double, py : Double) -> (Double, Double) {
+  let cx = f.x + f.w / 2.0
+  let cy = f.y + f.h / 2.0
+  let mut u = px - cx
+  let mut v = py - cy
+  if f.rotation_deg != 0.0 {
+    let rad = f.rotation_deg * 3.141592653589793 / 180.0
+    let cos_t = cos_rad(rad)
+    let sin_t = sin_rad(rad)
+    let u2 = u * cos_t + v * sin_t
+    let v2 = -u * sin_t + v * cos_t
+    u = u2
+    v = v2
+  }
+  if f.flip_h {
+    u = -u
+  }
+  if f.flip_v {
+    v = -v
+  }
+  // ⚠️ 加回**中心**（不是 `w/2`）：组的平移已经折叠进后代，所以"组的坐标系"
+  // 与画布坐标系**同一个原点**——无变换时这一对正逆变换必须都是**恒等**
+  // （加 `w/2` 会让子层的坐标再偏一个 `f.x/f.y`，实测 `move grp 15 10` 后
+  // (20,15) 变白）。
+  (u + cx, v + cy)
+}
+
+///|
+/// 点 → 容器局部坐标（逆向：先到最外层容器，再逐级往里）。
+///
+/// `frames` 里装的只会是**组**（`frames_for` 只在组分支调用），所以这里走
+/// 组帧的专用逆变换（不含平移，见 `to_local_frame`）。
+pub fn to_local_in(frames : Transform, px : Double, py : Double) -> (Double, Double) {
+  let mut x = px
+  let mut y = py
+  for f in frames {
+    let (nx, ny) = to_local_frame(f, x, y)
+    x = nx
+    y = ny
+  }
+  (x, y)
+}
+
+///|
+/// 组局部坐标 → 画布点（`to_local_frame` 的**逆**，与它成对）。
+fn to_canvas_frame_pt(f : @core.Layer, lx : Double, ly : Double) -> (Double, Double) {
+  let cx = f.x + f.w / 2.0
+  let cy = f.y + f.h / 2.0
+  let mut u = lx - cx
+  let mut v = ly - cy
+  if f.flip_h {
+    u = -u
+  }
+  if f.flip_v {
+    v = -v
+  }
+  if f.rotation_deg != 0.0 {
+    let rad = f.rotation_deg * 3.141592653589793 / 180.0
+    let cos_t = cos_rad(rad)
+    let sin_t = sin_rad(rad)
+    let u2 = u * cos_t - v * sin_t
+    let v2 = u * sin_t + v * cos_t
+    u = u2
+    v = v2
+  }
+  // 与 `to_local_frame` 对称：加回中心（无变换时恒等，见那边的注释）
+  (f.x + f.w / 2.0 + u, f.y + f.h / 2.0 + v)
+}
+
+///|
+/// 容器局部坐标 → 画布点（`to_local_in` 的**逆**，与它成对——正逆分开写就会
+/// 有一边先烂，`render/parent_transform_test.mbt` 用往返测试锁住）。
+pub fn to_canvas_in(frames : Transform, lx : Double, ly : Double) -> (Double, Double) {
+  let mut x = lx
+  let mut y = ly
+  let mut i = frames.length() - 1
+  while i >= 0 {
+    let (nx, ny) = to_canvas_frame_pt(frames[i], x, y)
+    x = nx
+    y = ny
+    i = i - 1
+  }
+  (x, y)
+}
+
+///|
 /// 设备坐标 → 层局部坐标（含绕层中心的逆旋转）。
 pub fn to_local(
   l : @core.Layer,
@@ -351,15 +503,52 @@ fn fill_color_at(
 /// 窗只到 x≤25）在 (30,10) 被 `pick` 报成"有这层"，而 `probe` 是白纸。
 /// 同一件事两个实现，就会一边说有一边说没有。
 pub fn paint_window(l : @core.Layer) -> (Int, Int, Int, Int) {
+  paint_window_in(l, [])
+}
+
+///|
+/// 带**祖先变换链**的渲染窗：组的 rot/flip 会把子层的实际落点搬走，窗必须跟着
+/// 走——否则旋转后的内容被裁在自己那个（没转的）盒子里（实测：组盒 60×10 的
+/// 横条转 90° 后应是一根**竖条**，却被裁成 60×35 的一团，见 PLAN 五十六）。
+///
+/// 判据与 `paint_window` 同一处（这里就是它的实现），所以 `pick` 与渲染不可能
+/// 分叉——窗只是"保守上界"，精确判定仍在 `inside_fill`/`inside_stroke`。
+fn paint_window_in(l : @core.Layer, frames : Transform) -> (Int, Int, Int, Int) {
   let reach = Double::sqrt(l.w * l.w + l.h * l.h)
-  let cx = l.x + l.w / 2.0
-  let cy = l.y + l.h / 2.0
-  (
-    (cx - reach / 2.0).to_int() - 2,
-    (cy - reach / 2.0).to_int() - 2,
-    (cx + reach / 2.0).to_int() + 2,
-    (cy + reach / 2.0).to_int() + 2,
-  )
+  if frames.length() == 0 {
+    // 根级层（没有祖先变换）：保留**原式**，逐位不变——四角外接盒与它数学上
+    // 等价，但浮点舍入可能差 1px，而"窗差一像素"就是画面差一像素。
+    let cx0 = l.x + l.w / 2.0
+    let cy0 = l.y + l.h / 2.0
+    return (
+      (cx0 - reach / 2.0).to_int() - 2,
+      (cy0 - reach / 2.0).to_int() - 2,
+      (cx0 + reach / 2.0).to_int() + 2,
+      (cy0 + reach / 2.0).to_int() + 2,
+    )
+  }
+  // 以对角线为边的方形（旋转任意角度都装得下），四个角逐点过祖先链，
+  // 再取它们的外接盒——变换后的形状一定落在这四个角的外接盒里。
+  let hx = reach / 2.0
+  let hw = l.w / 2.0
+  let hh = l.h / 2.0
+  let mut x0 = 1.0e18
+  let mut y0 = 1.0e18
+  let mut x1 = -1.0e18
+  let mut y1 = -1.0e18
+  for c in [
+    (hw - hx, hh - hx),
+    (hw + hx, hh - hx),
+    (hw - hx, hh + hx),
+    (hw + hx, hh + hx),
+  ] {
+    let (px, py) = screen(l, frames, c.0, c.1)
+    if px < x0 { x0 = px }
+    if py < y0 { y0 = py }
+    if px > x1 { x1 = px }
+    if py > y1 { y1 = py }
+  }
+  (x0.to_int() - 2, y0.to_int() - 2, x1.to_int() + 2, y1.to_int() + 2)
 }
 
 ///|
@@ -578,6 +767,7 @@ fn paint_layer(
   buf : @codec.RgbaBuf,
   env : RenderEnv,
   inherited_opacity : Double,
+  frames : Transform,
 ) -> Unit {
   if !l.visible || l.opacity <= 0.0 {
     return
@@ -589,9 +779,13 @@ fn paint_layer(
   match l.kind {
     @core.ShapeKind::Group => {
       // 组 α=1：逐子层直接叠到底图（与"没有这一层组"逐位相同的快路径）
+      // **组的变换**（rot/flip）在这里落地：把组自己压进祖先链，子层的
+      // `to_local` 就会经过它——渲染、`pick`、`mask_cover_at` 共用同一条链
+      // （此前组只"搬内容"、不能变换，见 PLAN 五十六）。
+      let inner = frames_for(frames, l)
       if eff_opacity >= 1.0 {
         for c in l.children {
-          paint_layer(c, buf, env, 1.0)
+          paint_layer(c, buf, env, 1.0, inner)
         }
         return
       }
@@ -603,17 +797,41 @@ fn paint_layer(
       let scratch = @codec.rgba_new(buf.width, buf.height)
       @codec.fill_rect_rgba(scratch, 0, 0, buf.width, buf.height, 0x00000000)
       for c in l.children {
-        paint_layer(c, scratch, env, 1.0)
+        paint_layer(c, scratch, env, 1.0, inner)
       }
+      // 组画面叠回父坐标系。组自身没有 rot/flip 时就是"同一张画布、逐像素叠"
+      // ——与改前**逐位相同**的快路径（浮点重采样会差几个色阶，所以不能省）。
+      let plain = l.rotation_deg == 0.0 && !l.flip_h && !l.flip_v
       let total = buf.width * buf.height
       let mut i = 0
       while i < total {
-        let p = scratch.pixels[i]
-        if (p & 0xFF000000) != 0 {
-          // 源 alpha = 组画面的 alpha × 组 α：`compose_src` 是"层不透明度并入
-          // 源 alpha"的**唯一**一处实现，别在这里再抄一遍舍入
-          let src = compose_src(255, p, 1.0, eff_opacity)
-          buf.pixels[i] = composite_pixel(buf.pixels[i], src, l.blend)
+        if plain {
+          let p = scratch.pixels[i]
+          if (p & 0xFF000000) != 0 {
+            // 源 alpha = 组画面的 alpha × 组 α：`compose_src` 是"层不透明度并入
+            // 源 alpha"的**唯一**一处实现，别在这里再抄一遍舍入
+            let src = compose_src(255, p, 1.0, eff_opacity)
+            buf.pixels[i] = composite_pixel(buf.pixels[i], src, l.blend)
+          }
+        } else {
+          // 组有变换：把这张画面当成贴在组矩形上的"一片纹素"，
+          // 逐目标像素在**组的坐标系**里取样（与形状层同一条采样路径）。
+          let px = i % buf.width
+          let py = i / buf.width
+          for sub in subsample_2x2 {
+            // 先在**组坐标系**里取样，再正向映回画布去读那张画面
+            let (gx, gy) = canvas_to_layer(l, frames, px.to_double() + sub.0, py.to_double() + sub.1)
+            let (cx, cy) = screen(l, frames, gx, gy)
+            let sx = cx.to_int()
+            let sy = cy.to_int()
+            if sx >= 0 && sy >= 0 && sx < buf.width && sy < buf.height {
+              let p = scratch.pixels[sy * buf.width + sx]
+              if (p & 0xFF000000) != 0 {
+                let src = compose_src(255, p, 1.0, eff_opacity)
+                buf.pixels[i] = composite_pixel(buf.pixels[i], src, l.blend)
+              }
+            }
+          }
         }
         i = i + 1
       }
@@ -624,7 +842,7 @@ fn paint_layer(
       // 调整层：对当前缓冲（其下全部可见层的合成结果）施加算子；
       // **蒙版与层不透明度都在这里生效**，两者合成同一个"这一像素上算子生效
       // 多少"（见 `apply_adjust_layer`：软强度只有一处混合公式）
-      apply_adjust_layer(l, buf, eff_opacity)
+      apply_adjust_layer(l, buf, eff_opacity, frames)
       return
     }
     @core.ShapeKind::Text => {
@@ -632,13 +850,13 @@ fn paint_layer(
       return
     }
     @core.ShapeKind::Raster => {
-      paint_raster(l, buf, env, eff_opacity)
+      paint_raster(l, buf, env, eff_opacity, frames)
       return
     }
     _ => ()
   }
   // 保守渲染窗（与 `pick` 共用 `paint_window`：一处实现，两处判断不许分叉）
-  let (x0, y0, x1, y1) = paint_window(l)
+  let (x0, y0, x1, y1) = paint_window_in(l, frames)
   let px0 = if x0 < 0 { 0 } else { x0 }
   let py0 = if y0 < 0 { 0 } else { y0 }
   let px1 = if x1 > buf.width { buf.width } else { x1 }
@@ -647,7 +865,17 @@ fn paint_layer(
   // 常量，逐像素的 4 次形状测试是白做的（12MP 整幅层上这是全部代价）。
   // 先按常量源色填掉，再让下面的通用循环**跳过**这块（窗内其余像素——边界、
   // 旋转、蒙版、描边、渐变——照旧走通用路径，一条语义都没分叉）。
-  let interior = solid_rect_interior(l, l.fill, px0, py0, px1, py1)
+  //
+  // ⚠️ **祖先有变换时整块跳过**：`solid_rect_interior` 只看这一层自己的
+  // rot/flip，不知道组把它转了 90°——于是它会按**没转**的盒子整块填色，
+  // 通用段再画一遍转过的那份，画面里**两个副本**同时存在（实测 60×10 的横条
+  // 转 90° 后红像素 850 个、范围 60×35：横条与竖条都在，PLAN 五十六）。
+  // 快速段是**纯性能**优化，退化成通用路径画面一样，所以在变换下退出去最省心。
+  let interior = if frame_transformed(frames) {
+    None
+  } else {
+    solid_rect_interior(l, l.fill, px0, py0, px1, py1)
+  }
   let (fx0, fy0, fx1, fy1) = match interior {
     Some(b) => b
     None => (0, 0, 0, 0)
@@ -679,21 +907,34 @@ fn paint_layer(
         px = fx1
         continue
       }
-      // 2×2 子采样
+      // 2×2 子采样。`mask_sum` 累加**每个样本的蒙版覆盖度**（与形状命中同一套
+      // 样本），最后除以 4 折进覆盖度——蒙版不再是"循环外按中心乘一次"。
       let mut fill_hits = 0
       let mut stroke_hits = 0
+      let mut mask_sum = 0.0
       let sample_colors = sample_scratch
       for i, s in subsample_2x2 {
-        let (lx, ly) = to_local(
-          l,
-          px.to_double() + s.0,
-          py.to_double() + s.1,
-        )
+        let (lx, ly) = canvas_to_layer(l, frames, px.to_double() + s.0, py.to_double() + s.1)
+        // ⚠️ 蒙版与形状必须用**同一套子样本**，而且软覆盖要**按比例累加**、
+        // 不能二值命中：羽化蒙版的 4 个样本覆盖 0.31/0.31/0.31/0.44 取"都在
+        // 蒙版里 ⇒ 覆盖 1.0"就把羽化量化成了 0/0.25/0.5/0.75/1 五档——实测
+        // (1,1) 会从 0xFFFFBFBF 变成满红。实测反例还有：软羽化下 (13,7) 的中心
+        // 在蒙版外、子样本 (·,7.75) 在内，一处按中心一处按样本 ⇒ pick 与渲染
+        // 打架（PLAN 五十六）。
+        let mf_sample = mask_cover_at(l, lx, ly)
+        if mf_sample <= 0.0 {
+          sample_colors[i] = 0x00000000
+          continue
+        }
         let stroke_in = inside_stroke(l, lx, ly)
         if stroke_in {
           stroke_hits = stroke_hits + 1
+          // 只有**形状真的命中**的样本才把蒙版覆盖算进这笔账（形状不在、
+          // 蒙版在的样本，这个像素上本来就没有这一层的墨）
+          mask_sum = mask_sum + mf_sample
           sample_colors[i] = l.stroke.color
         } else if inside_fill(l, lx, ly) {
+          mask_sum = mask_sum + mf_sample
           fill_hits = fill_hits + 1
           let color = match l.kind {
             @core.ShapeKind::Image => {
@@ -710,10 +951,14 @@ fn paint_layer(
         }
       }
       let (cover, color) = subsample_result(fill_hits, stroke_hits, sample_colors)
-      if cover > 0 {
+      // 蒙版因子 = **命中样本**上覆盖度的平均（不是除以 4：除以 4 就把
+      // "形状只命中一半"也算进蒙版账，同一个量乘两遍——实测无蒙版的 golden
+      // 都变浅了）。没有形状命中的样本这个像素根本不合成。
+      let hits = fill_hits + stroke_hits
+      let mf = if hits > 0 { mask_sum / hits.to_double() } else { 1.0 }
+      if cover > 0 && mf > 0.0 {
         // 蒙版因子先于合成融入源 alpha（蒙版外→源透明→下层透出）；
         // 折算本身在 `compose_src` 一处，与快速路径共用。
-        let mf = mask_cover_at(l, px.to_double(), py.to_double())
         let src = compose_src(cover, color, mf, eff_opacity)
         let dst = @codec.rgba_get(buf, px, py)
         @codec.rgba_set(buf, px, py, composite_pixel(dst, src, l.blend))
@@ -733,6 +978,7 @@ fn paint_raster(
   buf : @codec.RgbaBuf,
   env : RenderEnv,
   eff_opacity : Double,
+  frames : Transform,
 ) -> Unit {
   if l.dabs.length() == 0 {
     return
@@ -769,7 +1015,8 @@ fn paint_raster(
       let sp = scratch.pixels[y * buf.width + x]
       let sa = (sp >> 24) & 0xFF
       if sa > 0 {
-        let mf = mask_cover_at(l, x.to_double() + 0.5, y.to_double() + 0.5)
+        let (mf_x, mf_y) = canvas_to_layer(l, frames, x.to_double() + 0.5, y.to_double() + 0.5)
+        let mf = mask_cover_at(l, mf_x, mf_y)
         let a = sa.to_double() / 255.0 * eff_opacity * mf
         let a255 = (a * 255.0 + 0.5).to_int()
         if a255 > 0 {
@@ -983,7 +1230,12 @@ fn mask_support_box(l : @core.Layer, buf : @codec.RgbaBuf) -> (Int, Int, Int, In
 /// 维护第二张"哪些算子是邻域"的清单。所以带蒙版时一律先在 scratch 上整幅算完、
 /// 再按覆盖度混合：代价是一次整幅拷贝（12MP ≈ 48MB），**只在"带蒙版的调整层"
 /// 这条路上付**，而混合本身只扫蒙版支撑窗。
-fn apply_adjust_layer(l : @core.Layer, buf : @codec.RgbaBuf, eff_opacity : Double) -> Unit {
+fn apply_adjust_layer(
+  l : @core.Layer,
+  buf : @codec.RgbaBuf,
+  eff_opacity : Double,
+  frames : Transform,
+) -> Unit {
   if l.adjust is None || eff_opacity <= 0.0 {
     return
   }
@@ -1012,7 +1264,10 @@ fn apply_adjust_layer(l : @core.Layer, buf : @codec.RgbaBuf, eff_opacity : Doubl
       // "蒙版半覆盖"与"α 一半"必须给出逐位相同的画面（测试钉住这条恒等式）。
       // 没有蒙版时覆盖度恒为 1（不是"跳过混合"）。
       let cover = match l.mask {
-        Some(_) => mask_cover_at(l, x.to_double() + 0.5, y.to_double() + 0.5)
+        Some(_) => {
+          let (mf_x, mf_y) = canvas_to_layer(l, frames, x.to_double() + 0.5, y.to_double() + 0.5)
+          mask_cover_at(l, mf_x, mf_y)
+        }
         None => 1.0
       }
       let strength = cover * eff_opacity
@@ -1550,7 +1805,7 @@ pub fn impact_stages(
     if sub.ops.length() == 0 {
       // 没被引用的层：与原来一样直接画（`paint_layer` 内部自行处理
       // visible/opacity/Group 短路）。
-      paint_layer(l, out, env, 1.0)
+      paint_layer(l, out, env, 1.0, [])
     } else {
       let lb = rasterize_layer(l, w, h, env)
       let sub_stages = match @pixel.run_program(lb, sub) {
@@ -1621,7 +1876,7 @@ pub fn render_layers(
   let buf = @codec.rgba_new(w, h)
   @codec.fill_rect_rgba(buf, 0, 0, w, h, 0xFFFFFFFF)
   for l in doc.layers {
-    paint_layer(l, buf, env, 1.0)
+    paint_layer(l, buf, env, 1.0, [])
   }
   buf
 }
@@ -1640,7 +1895,7 @@ pub fn rasterize_layer(
 ) -> @codec.RgbaBuf {
   let buf = @codec.rgba_new(w, h)
   @codec.fill_rect_rgba(buf, 0, 0, w, h, 0x00000000)
-  paint_layer(l, buf, env, 1.0)
+  paint_layer(l, buf, env, 1.0, [])
   buf
 }
 
@@ -2004,6 +2259,7 @@ fn pick_from(
   x : Double,
   y : Double,
   inherited_opacity : Double,
+  frames : Transform,
 ) -> String? {
   let mut i = layers.length() - 1
   while i >= 0 {
@@ -2017,14 +2273,27 @@ fn pick_from(
       continue
     }
     if l.kind is @core.ShapeKind::Group {
-      match pick_from(l.children, x, y, eff) {
+      // 组的变换：与 `paint_layer` 同一条祖先链（判据一处，见 `to_local_in`）
+      match pick_from(l.children, x, y, eff, frames_for(frames, l)) {
         Some(id) => return Some(id)
         None => ()
       }
       continue
     }
-    let (lx, ly) = to_local(l, x, y)
-    if mask_cover_at(l, lx, ly) <= 0.0 {
+    let (lx, ly) = canvas_to_layer(l, frames, x, y)
+    // 蒙版判据与**渲染同一把尺子**：渲染按 2×2 子样本累积覆盖度，
+    // 所以只要**任一**子样本在蒙版里，这个像素上就有这一层的墨（实测反例：
+    // 毛边 (26,6) 上 (26.75,6.75) 有覆盖、像素中心没有 ⇒ 只看中心会与渲染
+    // 打架）。这里只看点本身就会把八分之一覆盖的像素判成"没画"。
+    let (mx, my) = to_local(l, x, y)
+    let mut cover_max = 0.0
+    for sp in subsample_2x2 {
+      let c = mask_cover_at(l, mx + sp.0, my + sp.1)
+      if c > cover_max {
+        cover_max = c
+      }
+    }
+    if cover_max <= 0.0 {
       continue
     }
     if l.kind is @core.ShapeKind::Raster {
@@ -2075,7 +2344,7 @@ pub fn pick(
   if x < 0.0 || y < 0.0 || x >= doc.width.to_double() || y >= doc.height.to_double() {
     return None
   }
-  pick_from(doc.layers, x, y, 1.0)
+  pick_from(doc.layers, x, y, 1.0, [])
 }
 
 ///|
@@ -2501,6 +2770,9 @@ fn mask_edge_offset(amp : Double, px : Double, py : Double) -> Double {
 /// `roughen <= 0` 时**整段走没有毛边的老分支**（同样的逐位兼容承诺）；
 /// `roughen > 0` 时先按画布坐标的确定性噪声扰动内距，再走同一套阈值/软过渡
 /// —— 于是"毛边 + 羽化"是"先毛化再羽化"，而不是两种互斥模式。
+/// 收的是**这个层矩形上的坐标**（局部）——蒙版就贴在这个矩形上，所以
+/// "父坐标系 → 局部"这一步由调用方经 `canvas_to_layer` 完成（组变换进来之后
+/// 这一步不能省，PLAN 五十六）。形状层、笔触层、调整层三条路径同一个入口。
 fn mask_cover_at(l : @core.Layer, px : Double, py : Double) -> Double {
   let mask = match l.mask {
     Some(m) => m

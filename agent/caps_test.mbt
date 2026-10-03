@@ -90,9 +90,11 @@ test "caps：逐 kind 的完整能力表（人类面板据此画控件）" {
     msg="笔触层：\{caps_str(s, "p1")}",
   )
   // 组：`move` 是"搬后代"（组自己没画面，后代里有读位置的层才算有能力——
-  // 见 `group_has_movable`），另有 `children`；盒子/旋转/翻转都不读
+  // 见 `group_has_movable`）；`rotate`/`flip` 从本轮起也读（渲染器把组压进
+  // 祖先链、子层的 `to_local` 会经过它，见 PLAN 五十六）；另有 `children`；
+  // 盒子（resize）不读，`mask` 也不读（渲染器对组不看 mask）
   assert_true(
-    caps_str(s, "grp") == "move,opacity,children",
+    caps_str(s, "grp") == "move,opacity,rotate,flip,children",
     msg="组的能力表：\{caps_str(s, "grp")}",
   )
   // 调整层：只有蒙版与算子；位置/盒子/旋转/翻转都不读

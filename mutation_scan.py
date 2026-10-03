@@ -763,7 +763,7 @@ MUTS = [
         "R57",
         "pick 忽略蒙版（蒙版外的点也报成「层在那里」）",
         "render/scene.mbt",
-        r"""    if mask_cover_at(l, lx, ly) <= 0.0 {
+        r"""    if cover_max <= 0.0 {
       continue
     }""",
         r"""    if false {
@@ -1997,16 +1997,26 @@ MUTS = [
         "Q62",
         "组的 α 退回逐子层各自打折（重叠区被混合两次：接缝回来了）",
         "render/scene.mbt",
-        "        paint_layer(c, scratch, env, 1.0)",
-        "        paint_layer(c, buf, env, eff_opacity)",
+        "        paint_layer(c, scratch, env, 1.0, inner)",
+        "        paint_layer(c, buf, env, eff_opacity, inner)",
         "killed",
     ),
     (
         "Q63",
         "组的整体打折忘了乘组 α（组画面的 alpha 不折，等于组 α 只有 0/1 两档）",
         "render/scene.mbt",
-        "          let src = compose_src(255, p, 1.0, eff_opacity)",
-        "          let src = compose_src(255, p, 1.0, 1.0)",
+        r"""        if plain {
+          let p = scratch.pixels[i]
+          if (p & 0xFF000000) != 0 {
+            // 源 alpha = 组画面的 alpha × 组 α：`compose_src` 是"层不透明度并入
+            // 源 alpha"的**唯一**一处实现，别在这里再抄一遍舍入
+            let src = compose_src(255, p, 1.0, eff_opacity)""",
+        r"""        if plain {
+          let p = scratch.pixels[i]
+          if (p & 0xFF000000) != 0 {
+            // 源 alpha = 组画面的 alpha × 组 α：`compose_src` 是"层不透明度并入
+            // 源 alpha"的**唯一**一处实现，别在这里再抄一遍舍入
+            let src = compose_src(255, p, 1.0, 1.0)""",
         "killed",
     ),
     (
@@ -2015,6 +2025,82 @@ MUTS = [
         "agent/session.mbt",
         "    update_layer(doc.layers, id, fn(l) { shift_layer_tree(l, dx, dy) })",
         "    update_layer(doc.layers, id, fn(l) { { ..l, x, y } })",
+        "killed",
+    ),
+    (
+        "Q67",
+        "组帧忘了做逆旋转（组的 rotate 在渲染里变成恒等）",
+        "render/scene.mbt",
+        r"""  if f.rotation_deg != 0.0 {
+    let rad = f.rotation_deg * 3.141592653589793 / 180.0
+    let cos_t = cos_rad(rad)
+    let sin_t = sin_rad(rad)
+    let u2 = u * cos_t + v * sin_t
+    let v2 = -u * sin_t + v * cos_t
+    u = u2
+    v = v2
+  }""",
+        r"""  if false {
+    let rad = f.rotation_deg * 3.141592653589793 / 180.0
+    let cos_t = cos_rad(rad)
+    let sin_t = sin_rad(rad)
+    let u2 = u * cos_t + v * sin_t
+    let v2 = -u * sin_t + v * cos_t
+    u = u2
+    v = v2
+  }""",
+        "killed",
+    ),
+    (
+        "Q68",
+        "组的 flip 在祖先链里被丢掉（镜像整棵子树变成恒等）",
+        "render/scene.mbt",
+        r"""  if f.flip_h {
+    u = -u
+  }
+  if f.flip_v {
+    v = -v
+  }
+  // ⚠️ 加回**中心**""",
+        r"""  if false {
+    u = -u
+  }
+  if false {
+    v = -v
+  }
+  // ⚠️ 加回**中心**""",
+        "killed",
+    ),
+    (
+        "Q69",
+        "组的变换在渲染里只对自己生效、没压进子层的祖先链（整棵子树不动）",
+        "render/scene.mbt",
+        r"""        for c in l.children {
+          paint_layer(c, buf, env, 1.0, inner)
+        }""",
+        r"""        for c in l.children {
+          paint_layer(c, buf, env, 1.0, frames)
+        }""",
+        "killed",
+    ),
+    (
+        "Q70",
+        "祖先有变换时快速段没有退出去（按没转的盒子整块填一遍 ⇒ 画面里两个副本）",
+        "render/scene.mbt",
+        r"""  let interior = if frame_transformed(frames) {
+    None
+  } else {
+    solid_rect_interior(l, l.fill, px0, py0, px1, py1)
+  }""",
+        r"""  let interior = solid_rect_interior(l, l.fill, px0, py0, px1, py1)""",
+        "killed",
+    ),
+    (
+        "Q71",
+        "掩版按**像素中心**求值（形状按 4 个子样本判、蒙版按中心判 ⇒ pick 与渲染打架）",
+        "render/scene.mbt",
+        r"""        let mf_sample = mask_cover_at(l, lx, ly)""",
+        r"""        let mf_sample = mask_cover_at(l, px.to_double() + 0.5, py.to_double() + 0.5)""",
         "killed",
     ),
     (
@@ -2114,10 +2200,10 @@ MUTS = [
     ),
     (
         "Q35",
-        "读点矩阵里把某一行的合法 kind 写宽（group 也被当成能读 rotation 的层）",
+        "读点矩阵里把某一行的合法 kind 写宽（group 也被当成能读 blend 的层）",
         "agent/ops.mbt",
-        '      field: "rotation_deg",\n      reader: "有面的层（几何/位图）",\n      hint: "",\n      kinds: ["rect", "ellipse", "polygon", "line", "image"],',
-        '      field: "rotation_deg",\n      reader: "有面的层（几何/位图）",\n      hint: "",\n      kinds: ["rect", "ellipse", "polygon", "line", "image", "group"],',
+        '      field: "blend",\n      reader: "有面的层（几何/位图）",\n      hint: "",\n      kinds: ["rect", "ellipse", "polygon", "line", "image"],',
+        '      field: "blend",\n      reader: "有面的层（几何/位图）",\n      hint: "",\n      kinds: ["rect", "ellipse", "polygon", "line", "image", "group"],',
         "killed",
     ),
     (

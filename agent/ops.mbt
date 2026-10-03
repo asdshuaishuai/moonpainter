@@ -835,9 +835,12 @@ fn kind_only_fields() -> Array[KindOnly] {
     //   白底上也是恒等（第一版把 blend 判成"全都不读"）。
     {
       field: "rotation_deg",
-      reader: "有面的层（几何/位图）",
+      reader: "有面的层（几何/位图）+ **组**（变换整棵子树）",
       hint: "",
-      kinds: ["rect", "ellipse", "polygon", "line", "image"],
+      // `group` 从本轮起也在读（`render.paint_layer` 把组压进祖先链、
+      // 子层的 `to_local` 就会经过它）——读点矩阵必须跟着渲染器走，
+      // 否则"渲染器读了而入口还拒"就是一条凭空的能力上限（PLAN 五十六）。
+      kinds: ["rect", "ellipse", "polygon", "line", "image", "group"],
       dead: fn(l) {
         if l.rotation_deg != 0.0 {
           "rotation_deg=\{@core.fmt_num(l.rotation_deg)}"
@@ -848,16 +851,22 @@ fn kind_only_fields() -> Array[KindOnly] {
     },
     {
       field: "flip_h",
-      reader: "有面的层（几何/位图）",
+      reader: "有面的层（几何/位图）+ **组**（整棵子树镜像）",
       hint: "",
-      kinds: ["rect", "ellipse", "polygon", "line", "image"],
+      // `group` 从本轮起也在读（`render.paint_layer` 把组压进祖先链、
+      // 子层的 `to_local` 就会经过它）——读点矩阵必须跟着渲染器走，
+      // 否则"渲染器读了而入口还拒"就是一条凭空的能力上限（PLAN 五十六）。
+      kinds: ["rect", "ellipse", "polygon", "line", "image", "group"],
       dead: fn(l) { if l.flip_h { "flip_h=true" } else { "" } },
     },
     {
       field: "flip_v",
-      reader: "有面的层（几何/位图）",
+      reader: "有面的层（几何/位图）+ **组**（整棵子树镜像）",
       hint: "",
-      kinds: ["rect", "ellipse", "polygon", "line", "image"],
+      // `group` 从本轮起也在读（`render.paint_layer` 把组压进祖先链、
+      // 子层的 `to_local` 就会经过它）——读点矩阵必须跟着渲染器走，
+      // 否则"渲染器读了而入口还拒"就是一条凭空的能力上限（PLAN 五十六）。
+      kinds: ["rect", "ellipse", "polygon", "line", "image", "group"],
       dead: fn(l) { if l.flip_v { "flip_v=true" } else { "" } },
     },
     {

@@ -315,6 +315,11 @@ test "实心矩形快速路径：蒙版「覆盖恒为 1」的盒——每个像
         while y < iy1 {
           let mut x = ix0
           while x < ix1 {
+            // `mask_cover_at` 收的是**层矩形上的坐标**（局部；蒙版就贴在这个
+            // 矩形上）——这里 x/y 已经是"层矩形上的点"（盒是从
+            // `solid_rect_interior` 的**层局部**遍历里出来的），所以直接传，
+            // 不能再过一遍 `to_local`（那会把点再偏移一次 (10.3,7.7)，实测
+            // 覆盖度掉到 0.075）。
             let c = mask_cover_at(l, x.to_double(), y.to_double())
             assert_eq(
               c,
@@ -339,7 +344,7 @@ test "实心矩形快速路径：蒙版「覆盖恒为 1」的盒——每个像
 }
 
 ///|
-test "实心矩形快速路径 + 蒙版：与通用路径逐位一致（翻转镜像当对照）" {
+test "实心矩形快速路径 + 蒙版：覆盖恒 1 的蒙版必须画得与「没有蒙版」逐位相同" {
   let env = RenderEnv::new()
   let mut dx = 0.0
   while dx < 1.0 {
@@ -347,42 +352,52 @@ test "实心矩形快速路径 + 蒙版：与通用路径逐位一致（翻转�
       ..@core.default_layer("r1", "r1", 10.3 + dx, 7.7, 20.25, 15.5),
       fill: @core.Fill::Solid(0x803366CC),
       opacity: 0.5,
-      // 半径 3（不是更大值）：它与下面那个"切进层里"的蒙版取交之后必须**还剩
-      // 一块**——否则快速段消失，这条对拍会变成"通用路径跟自己比"（实测 r=4
-      // 时交叠就是空的，测试当场红）。
       corner_radius: 3.0,
     }
-    // 大软蒙版（覆盖恒 1 的区域盖住层内部 ⇒ 走快速路径）+ 一个**切进层里**的
-    // 蒙版（一部分走快速路径、一部分走通用路径，两段必须在同一张图上接得严丝合缝）
-    for m in [
-      rect_mask(0.0, 0.0, 64.0, 64.0, 7.0, 0.0, false),
-      rect_mask(0.0, 0.0, 24.0, 64.0, 3.0, 1.0, false),
-    ] {
-      let masked = { ..rect, mask: Some(m) }
-      let mirrored = { ..masked, flip_h: true, flip_v: true }
-      assert_true(
-        solid_rect_interior(masked, masked.fill, 0, 0, 64, 64) is Some(_),
-        msg="这个蒙版该能走快速路径（否则这条对拍白比）",
-      )
-      assert_true(
-        solid_rect_interior(mirrored, mirrored.fill, 0, 0, 64, 64) is None,
-        msg="对照没有退出快速路径 —— 比的是自己跟自己",
-      )
-      let a = render_layers(fast_doc("a", masked), env)
-      let b = render_layers(fast_doc("b", mirrored), env)
-      let mut diff = 0
-      let mut j = 0
-      while j < 64 * 64 {
-        if a.pixels[j] != b.pixels[j] {
-          diff = diff + 1
-        }
-        j = j + 1
+    // **覆盖恒为 1** 的蒙版（整幅、无羽化、无毛边）：快速段的全部假设就是
+    // "盒里覆盖恒 1"，所以这种蒙版的画面必须与**根本没有蒙版**逐位相同——
+    // 两段的接缝（盒边界）上一旦有一处算错，这里立刻红。
+    //
+    // ⚠️ 这条曾经拿"翻转镜像"当对照：蒙版是**贴在层矩形上**的、会跟着层一起
+    // 镜像，于是镜像版画的**不是同一块**（实测 (13,7) 上原件中心在蒙版外、
+    // 镜像版在内 ⇒ 差 266 个像素是**正确行为**）。改前两者都"错得一样"才逐位
+    // 相同——**对拍的前提错了，绿的也不是判据**（PLAN 五十六）。
+    // 也别拿**带羽化**的蒙版跟无蒙版比：那是蒙版本来就该改画面，比出来的
+    // 差异不是接缝（实测 37 个像素）。
+    let full = { ..rect, mask: Some(rect_mask(0.0, 0.0, 64.0, 64.0, 0.0, 0.0, false)) }
+    let nomask = { ..rect, mask: None }
+    assert_true(
+      solid_rect_interior(full, full.fill, 0, 0, 64, 64) is Some(_),
+      msg="覆盖恒 1 的蒙版该能走快速路径（否则这条对拍白比）",
+    )
+    assert_true(
+      solid_rect_interior(nomask, nomask.fill, 0, 0, 64, 64) is Some(_),
+      msg="无蒙版版必须也走快速路径（对照组的前提）",
+    )
+    let a = render_layers(fast_doc("a", full), env)
+    let b = render_layers(fast_doc("b", nomask), env)
+    // 判别力自证：两张图都必须真的画了东西（否则"逐位相同"是空话）
+    let mut solid_px = 0
+    let mut i = 0
+    while i < 64 * 64 {
+      if ((a.pixels[i] >> 24) & 0xFF) == 0xFF {
+        solid_px = solid_px + 1
       }
-      assert_true(
-        diff == 0,
-        msg="dx=\{dx} 蒙版 w=\{m.w} feather=\{m.feather} roughen=\{m.roughen}：快速路径与通用路径差了 \{diff} 个像素",
-      )
+      i = i + 1
     }
+    assert_true(solid_px > 0, msg="快速路径一个像素都没落（dx=\{dx}）")
+    let mut ndiff = 0
+    let mut j = 0
+    while j < 64 * 64 {
+      if a.pixels[j] != b.pixels[j] {
+        ndiff = ndiff + 1
+      }
+      j = j + 1
+    }
+    assert_true(
+      ndiff == 0,
+      msg="dx=\{dx}：覆盖恒 1 的蒙版与无蒙版差了 \{ndiff} 个像素（接缝算错了）",
+    )
     dx = dx + 0.5
   }
 }

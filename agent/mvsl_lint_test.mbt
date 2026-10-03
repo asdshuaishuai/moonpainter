@@ -294,6 +294,9 @@ test "lint：变换/混合/蒙版的读点矩阵（表里每一格都要报，�
       font_size: 24.0,
       rotation_deg: 45.0,
       flip_h: true,
+      // `flip_v` 的"不读"格现在只剩 text/raster/adjust（组已经读了它），
+      // 所以这一格挪到这里来——needle 列表跟着这一格走（PLAN 五十六）
+      flip_v: true,
       blend: @core.BlendMode::Multiply,
     },
   )
@@ -349,8 +352,10 @@ test "lint：变换/混合/蒙版的读点矩阵（表里每一格都要报，�
   ] {
     assert_true(j.contains(needle), msg="表里的 \{needle} 必须被报：\{j}")
   }
-  // 格数也要对：group 5 + text 3 + raster 2 + adjust 2 + line 1（fill）
-  // + polygon 1（stroke）+ image 2（fill+stroke）= 16。
+  // 格数也要对：group **3**（blend/mask/… —— 它的 rotation/flip_h/flip_v 从
+  // 本轮起**合法**，渲染器真的会变换整棵子树，见 PLAN 五十六）
+  // + text 3 + raster 2 + adjust 2 + line 1（fill）
+  // + polygon 1（stroke）+ image 2（fill+stroke）= **14**。
   // 只查"含某个词"会被"多报/少报但恰好含这些词"骗过。
   let mut hits = 0
   for it in items {
@@ -358,7 +363,11 @@ test "lint：变换/混合/蒙版的读点矩阵（表里每一格都要报，�
       hits = hits + 1
     }
   }
-  assert_eq(hits, 16, msg="读点矩阵应报 16 格，实报 \{hits}：\{j}")
+  assert_eq(hits, 14, msg="读点矩阵应报 14 格，实报 \{hits}：\{j}")
+  // **反向**也要咬住：组的 rotation/flip 现在一格都不许报
+  for gone in ["group 却带着 rotation_deg", "group 却带着 flip_h", "group 却带着 flip_v"] {
+    assert_true(!j.contains(gone), msg="组上的变换已经合法，不该再报「\{gone}」：\{j}")
+  }
 
   // ② 正控：**读它的 kind** 上带着同样的字段，一格都不许报（漏报与误报都是 bug）
   let ok = @core.new_document("lint-matrix-ok", 64, 64)
@@ -494,10 +503,12 @@ test "写不生效的字段在入口就拒；写默认值（清字段）必须�
     let r = run(s, ok)
     assert_true(r.contains("\"ok\":true"), msg="`\{ok}` 必须成功：\{r}")
   }
-  // 组：连同蒙版一起拒（mask 在 group 上也不被读）
+  // 组：蒙版/混合仍拒（渲染器对组不读 mask、blend 也只作用于"组自己的画面"）；
+  // ⚠️ `rotate`/`flip` 从本轮起**放行**——组现在真的会变换整棵子树
+  // （PLAN 五十六），所以它们出现在下面那条**正控**里，不再算"不生效"
   let _ = run(s, "group g1 r0")
   for bad in [
-    "rotate g1 45", "flip g1 both", "set-style g1 blend=multiply",
+    "set-style g1 blend=multiply",
     "add-mask g1 x=0 y=0 w=5 h=10", "set-mask g1 invert=true",
   ] {
     let r = run(s, bad)
@@ -506,6 +517,8 @@ test "写不生效的字段在入口就拒；写默认值（清字段）必须�
   // 清字段的写法要放行（否则旧容器里存着死数据的层再也洗不回来）
   for ok in [
     "rotate t0 0", "flip t0 none", "set-style t0 blend=normal", "rotate g1 0", "flip g1 none",
+    // 组上的**非默认**变换也要放行（渲染器读了它 ⇒ 不是"写不生效的字段"）
+    "rotate g1 45", "flip g1 both",
   ] {
     let r = run(s, ok)
     assert_true(r.contains("\"ok\":true"), msg="`\{ok}` 是清字段，必须放行：\{r}")
