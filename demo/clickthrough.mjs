@@ -23,6 +23,9 @@ const els = new Map();
 //     但"点保存时到底有没有把非空字节交给一个 .mpd 文件名"能测，而且这才是会坏的那半）。
 // 仍然**不假装**验证 DOM：没有 CSS、没有布局、没有事件分发。
 globalThis.__downloads = [];
+// 工具状态（笔宽/笔色）：`do_stroke` 从这里读 `size`/`color`，空串会拼出 `r=` 这种
+// 空值参数（引擎拒它）。浏览器里这些由工具栏设置，驱动器给它一组确定值。
+globalThis.MPST = { tool: 'rect', size: '6', color: '#3366FF', strength: 0.35, zoom: 1 };
 function mkEl(id) {
   return {
     id,
@@ -36,7 +39,15 @@ function mkEl(id) {
     style: {},
     dataset: {},
     children: [],
-    classList: { toggle() {}, add() {}, remove() {}, contains: () => false },
+    // classList 用真的集合：`js_toggle_ai` 折面板靠 `classList.toggle('closed')`
+    // 与 `contains` —— 假的实现会让"折叠到底动没动"变成不可观测（判据只能靠猜）。
+    classList: {
+      _s: new Set(),
+      toggle(c) { this._s.has(c) ? this._s.delete(c) : this._s.add(c); },
+      add(c) { this._s.add(c); },
+      remove(c) { this._s.delete(c); },
+      contains(c) { return this._s.has(c); },
+    },
     addEventListener() {},
     setAttribute() {},
     removeAttribute() {},
@@ -450,6 +461,225 @@ check(
 );
 globalThis.__MP_BUILD__ = savedBuild;
 
+// ⑧ 编辑动作 / 属性面板 / 层序 / 几何 / 透明度 —— 高频写操作，全部"点了之后
+// 从引擎读回来验"，而不是看状态栏说了什么。
+exec('new 60 40');
+exec('add-rect id=e1 x=5 y=6 w=20 h=10 fill=#FF0000FF name=E1');
+exec('add-rect id=e2 x=0 y=0 w=8 h=8 fill=#00FF00FF name=E2');
+const order0 = layers().map((l) => l.id);
+await globalThis.__front('e1');
+const orderF = layers().map((l) => l.id);
+await globalThis.__back('e1');
+const orderB = layers().map((l) => l.id);
+check(
+  '「置顶」/「置底」把层序挪到**两端**（不是点了没反应）',
+  orderF[orderF.length - 1] === 'e1' && orderB[0] === 'e1' && orderF.join() !== order0.join(),
+  order0.join('>') + ' → ' + orderF.join('>') + ' → ' + orderB.join('>'),
+);
+
+await globalThis.__setx('e1', '12');
+await globalThis.__sety('e1', '13');
+await globalThis.__setw('e1', '30');
+await globalThis.__seth('e1', '11');
+const g1 = layer('e1');
+check(
+  '属性面板四个输入框：引擎报的 x/y/w/h 就是填进去的（不是只改了输入框）',
+  g1.x === 12 && g1.y === 13 && g1.w === 30 && g1.h === 11,
+  `x=${g1.x} y=${g1.y} w=${g1.w} h=${g1.h}`,
+);
+
+await globalThis.__sel('e1'); // 方向键作用于"选中的层"（空选时它报"先选中图层"）
+await globalThis.__move_delta('3', '-2');
+const g2 = layer('e1');
+check(
+  '方向键移动：按 (dx,dy) 走，宽高不动',
+  g2.x === 15 && g2.y === 11 && g2.w === 30 && g2.h === 11,
+  `x=${g2.x} y=${g2.y} w=${g2.w} h=${g2.h}`,
+);
+
+await globalThis.__rotate('e1', '90');
+await globalThis.__flip('e1', 'h');
+const g3 = layer('e1');
+check(
+  '旋转 90° 与水平翻转：报告面认账（rot=90 / flip_h=true）',
+  g3.rot === 90 && g3.flip_h === true,
+  `rot=${g3.rot} flip_h=${g3.flip_h}`,
+);
+
+await globalThis.__op('e1', '50');
+check(
+  '透明度滑块（0..100 → 0..1）：报告面是 0.5',
+  Math.abs(layer('e1').opacity - 0.5) < 1e-9,
+  String(layer('e1').opacity),
+);
+
+// 删除 → 撤销 → 重做：三步都要"层回得来 + 指纹逐字回得去"
+const fpOps = exec('fingerprint').fingerprint;
+await globalThis.__del('e1');
+const deleted = !layers().some((l) => l.id === 'e1');
+const fpDel = exec('fingerprint').fingerprint;
+await globalThis.__undo('');
+const undone = layers().some((l) => l.id === 'e1') && exec('fingerprint').fingerprint === fpOps;
+await globalThis.__redo('');
+const redone = !layers().some((l) => l.id === 'e1') && exec('fingerprint').fingerprint === fpDel;
+check(
+  '删除 → 撤销 → 重做：层回得来、指纹逐字回得去（三步都对得上）',
+  deleted && undone && redone,
+  `删=${deleted} 撤销=${undone} 重做=${redone}`,
+);
+// 上面为了验"重做"把 e1 留在删除态——后面的用例要用它，撤销放回来。
+// （这条也顺手证明了 undo 栈是按顺序的：redo 之后还能再 undo。）
+await globalThis.__undo('');
+
+await globalThis.__rename('e2', '改过的名字');
+check('重命名：引擎报的 name 就是新名字', layer('e2').name === '改过的名字', layer('e2').name);
+await globalThis.__tag_add('e2', 'hero');
+const tagged = JSON.stringify(layer('e2').tags || []);
+await globalThis.__tag_del('e2', 'hero');
+check(
+  '标签：打得上去也摘得下来（"能打上的名字必须能摘下"）',
+  /hero/.test(tagged) && !/hero/.test(JSON.stringify(layer('e2').tags || [])),
+  tagged + ' → ' + JSON.stringify(layer('e2').tags || []),
+);
+
+// 父级：建组 → 把 e2 加进组 → 再解组（层要回根级）
+exec('add-rect id=gkeep x=0 y=0 w=4 h=4 fill=#0000FFFF name=GK');
+exec('group grp gkeep'); // 位置参数：`group <gid> <id>...`（kv 写法不报错也不建组）
+await globalThis.__reparent('e2', 'grp');
+const inGroup = JSON.stringify(layers()).includes('grp') &&
+  (layers().find((l) => l.id === 'grp')?.children || []).some((c) => c.id === 'e2');
+await globalThis.__ungroup_sel('grp');
+const rootAgain = layers().some((l) => l.id === 'e2') && !layers().some((l) => l.id === 'grp');
+check(
+  '「父级」下拉把层放进组，解组后回到根级（两次都从引擎读回来验）',
+  inGroup && rootAgain,
+  `进组=${inGroup} 回根级=${rootAgain}`,
+);
+
+// ⑨ 文字层：点画布定位 → 输入内容建层 → 改内容（盒子跟着内容走）→ 改字号
+await globalThis.__text_at('10,12'); // 点画布决定文字落点（写进 MPST.textAt）
+el('tinput').value = 'Moon';
+await globalThis.__text_add();
+const tl = layers().find((l) => l.kind === 'text');
+const w0 = tl ? layer(tl.id).w : -1;
+if (tl) {
+  await globalThis.__text_set(tl.id, 'MoonPainter 很长的一行');
+}
+const w1 = tl ? layer(tl.id).w : -1;
+if (tl) {
+  await globalThis.__text_font(tl.id, '28');
+}
+check(
+  '文字：点画布建层（报得出 text），改内容后**盒子跟着内容变**，改字号认账',
+  !!tl && layer(tl.id).text === 'MoonPainter 很长的一行' && w1 > w0 && layer(tl.id).font_size === 28,
+  tl ? `text=${layer(tl.id).text} w ${w0} → ${w1} font_size=${layer(tl.id).font_size}` : '没建出文字层',
+);
+
+// ⑩ 蒙版：加 → 反转 → 摘（三态都要能从报告面读出来）
+await globalThis.__sel('e1'); // 蒙版同样作用于选中的层
+await globalThis.__mask_ready('rect', '20,20,30,15');
+const mk = layer('e1').mask;
+await globalThis.__mask_invert('e1');
+const mk2 = layer('e1').mask;
+await globalThis.__mask_clear('e1');
+check(
+  '蒙版：加得上（报得出矩形与坐标）→ 反选认账（invert 翻面）→ 摘得掉（三者都可读）',
+  // ⚠️ 反选**不改 kind**：它在报告里是 `mask.invert: true`（实测；第一版我断言
+  // "kind 变了"，红了之后现象指向"反选没生效"，其实是我的判据念错了名字）。
+  !!mk && mk.kind === 'rect' && mk.w === 30 && !!mk2 && mk2.invert === true &&
+    mk.invert !== true && layer('e1').mask === undefined,
+  `加=${mk && mk.kind}:${mk && mk.w} 反转=${mk2 && mk2.kind} 摘=${layer('e1').mask === undefined}｜层=${layers().map((l) => l.id).join()}｜状态栏=${status()}`,
+);
+
+// ⑪ 调整层与滤镜：改算子/改数值（原地改，不重建）+ 一键滤镜真的建层
+exec('add-adjust id=adj1 op=brightness value=0.1');
+await globalThis.__adj_val('adj1', '0.3');
+const a1 = layer('adj1').adjust || {};
+await globalThis.__adj_op('adj1', 'blur');
+const a2 = layer('adj1').adjust || {};
+const nBefore = layers().length;
+// `__af` 从 MPST.strength 读强度（`js_set_tool` 的默认值是 0.5）——上面已给 0.35
+await globalThis.__af('brightness', '+');
+const nAfter = layers().length;
+check(
+  '调整层：value 改得动、op 改得动（原地改而不是删了重加）；一键滤镜真的建出层',
+  a1.value === 0.3 && a2.op === 'blur' && nAfter === nBefore + 1 &&
+    layers().some((l) => l.kind === 'adjust'),
+  `value=${a1.value} op=${a2.op} 层数 ${nBefore} → ${nAfter}`,
+);
+
+// ⑫ 画笔：`__stroke` 落笔（人画的那条链），画面与文档都要变
+const fpPaint0 = exec('fingerprint').fingerprint;
+await globalThis.__stroke('draw', '10,10 14,12 18,16');
+const fpPaint1 = exec('fingerprint').fingerprint;
+check(
+  '画笔落笔：文档指纹变了，且多出一个笔触层（人画画那条链）',
+  fpPaint1 !== fpPaint0 && layers().some((l) => l.kind === 'raster'),
+  '指纹 ' + String(fpPaint0).slice(0, 8) + ' → ' + String(fpPaint1).slice(0, 8),
+);
+
+// ⑬ 画布：新建（顶栏尺寸 → 画布 + 白底）、改尺寸、以及**越界必须报原话**
+el('cw').value = '44';
+el('ch').value = '33';
+await globalThis.__new('');
+const nc = exec('census').canvas; // 画布尺寸从 `census` 读（没有 canvas-size 这条命令）
+check(
+  '「新建」按顶栏尺寸开画布并铺白底',
+  JSON.stringify(nc).includes('44') && JSON.stringify(nc).includes('33') &&
+    layers().some((l) => l.kind === 'rect'),
+  JSON.stringify(nc).slice(0, 80),
+);
+el('cw').value = '99999';
+el('sbar-text').textContent = '';
+await globalThis.__set_canvas('');
+check(
+  '拒控：画布尺寸越界时状态栏报引擎原话（不是静默不改）',
+  /非法|1\.\.30000|30000/.test(status()),
+  status() || '(空)',
+);
+el('cw').value = '50';
+el('ch').value = '40';
+await globalThis.__set_canvas('');
+check(
+  '正控：合法尺寸改得动（50×40）',
+  JSON.stringify(exec('census').canvas).includes('50'),
+  JSON.stringify(exec('census').canvas).slice(0, 60),
+);
+
+// ⑭ 裁剪：准备 → 取消（不生效）→ 准备 → 应用（画布真的变小）
+globalThis.__crop_ready('5,5,20,12');
+await globalThis.__crop_cancel('');
+el('ailog').children.length = 0;
+globalThis.__crop_ready('5,5,20,12');
+await globalThis.__crop_apply();
+check(
+  '裁剪：取消不生效；应用之后画布真的变成选区尺寸并写明',
+  exec('census').canvas[0] === 20 && exec('census').canvas[1] === 12 && /裁剪/.test(logText('ailog')),
+  JSON.stringify(exec('census').canvas) + '｜日志 ' + logText('ailog').slice(0, 40),
+);
+
+// ⑮ 纯 UI：缩放 / 重刷 / 统计 / 不透明度气泡 / AI 面板折叠
+el('canvas-img').naturalWidth = 600;
+globalThis.MPST.zoom = 1;
+await globalThis.__zoom('2');
+const zw = el('canvas-img').style.width;
+await globalThis.__zoom('');
+el('llist').innerHTML = '';
+await globalThis.__refresh();
+const statsBefore = logText('ailog').length;
+await globalThis.__stats('');
+await globalThis.__optip('', '150');
+const aiClosed0 = el('ai-panel').classList.contains('closed');
+await globalThis.__toggle_ai('');
+const aiClosed1 = el('ai-panel').classList.contains('closed');
+check(
+  '缩放写出画布宽度；重刷重建图层列表；统计写日志；不透明度气泡 150→1.5；AI 面板折叠可切换',
+  /px$/.test(zw || '') && (el('llist').innerHTML || '').length > 0 &&
+    logText('ailog').length > statsBefore && el('opv').textContent === '1.5' &&
+    aiClosed0 !== aiClosed1,
+  `宽=${zw} 列表=${(el('llist').innerHTML || '').length} 字符 气泡=${el('opv').textContent} 折叠 ${aiClosed0}→${aiClosed1}`,
+);
+
 // ⚠️ 前面每条"点击"里的 `try/catch` 都**靠不住**：`js_reg0`/`js_reg1` 的包装层
 // 把处理器的异常 `catch` 掉了（页面不会被一个坏处理器打断，这是对的），异常不会
 // 冒到调用方。它们现在同时记进 `globalThis.__handler_errors` 并把原话写进状态栏与
@@ -462,6 +692,13 @@ check(
   hErr.length === 0,
   hErr.map((e) => e.name + ': ' + e.msg).join('；') || '0 条',
 );
+
+// ⑯ 覆盖清单（机器对账用，格式由 `build_demo.sh#html-wiring` 解析）：
+// driver 走不到的处理器必须在这儿**写明原因**，否则"没覆盖"会静默变成"覆盖了"。
+/* coverage:begin
+driven: __selfcheck __dbg_lint __dbg_edits __dbg_census __dbg_probe __dbg_help __dbg_tools __dbg_schema __dbg_preview __mvsl_set __mvsl_show __mvsl_impact __mvsl_assert __mvsl_clear __param_list __param_set __param_del __cmd __build_badge __save __export __run __sel __vis __front __back __setx __sety __setw __seth __move_delta __rotate __flip __op __del __undo __redo __rename __tag_add __tag_del __reparent __ungroup_sel __text_at __text_add __text_set __text_font __mask_ready __mask_invert __mask_clear __adj_op __adj_val __af __stroke __new __set_canvas __crop_ready __crop_apply __crop_cancel __zoom __refresh __stats __optip __toggle_ai __tool __poly_click __poly_finish __poly_cancel __shape_ready __group_sel __pick_at
+browser-only: __drop=需要 FileReader 读拖进来的文件内容（壳里没有 FileReader，真造一个等于把"读文件"这条链假装测了）; __file_sel=同上（读 <input type=file> 的文件）; __mpd_sel=同上（读选中的 .mpd 文件字节）; __img_swap=同上（换图要先有文件）；且它们的"选文件"这一步只有浏览器能触发
+coverage:end */
 
 const bad = results.filter((r) => !r.ok);
 console.log(

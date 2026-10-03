@@ -104,7 +104,7 @@ if not d.get('clickthrough'):
     for c in bad:
         print('  -', c['name'], '|', c['extra'][:200])
     sys.exit(1)
-print('点击穿透 OK（%d 条断言：逐点形状/拖拽形状/点数下界/改名改坐标改标签/坏输入/重渲染/面板 18 颗按钮＋4 条拒控/保存导出/图层选中隐藏/顶栏徽标两条）' % d['total'])
+print('点击穿透 OK（%d 条断言：逐点形状/拖拽形状/点数下界/改名改坐标改标签/坏输入/重渲染/面板 18 颗按钮＋4 条拒控/保存导出/图层选中隐藏/编辑动作（撤销重做删除置顶置底几何透明度）/文字与蒙版与调整与滤镜/画布与裁剪/纯 UI/顶栏徽标两条）' % d['total'])
 "
 cd ..
 
@@ -225,6 +225,60 @@ for name in sorted(regs):
 if orphan:
     print('FAIL: 注册了却没人引用的处理器（死代码 / 加了功能没接上）：', '、'.join(orphan))
     sys.exit(1)
+# **覆盖清单对账**：`build_demo.sh#clickthrough` 走不到的处理器必须在
+# `demo/clickthrough.mjs` 的 `coverage:` 块里**逐条写明原因**（同 README 的
+# "人类面够不着"名单那套）。没有这份对账，"这个处理器没人测过"会静默变成
+# "看起来都覆盖了"——而它恰恰是**只有人点得出来**的那一半。
+cov = open('demo/clickthrough.mjs', encoding='utf-8').read()
+cm = re.search(r'/\* coverage:begin(.*?)coverage:end \*/', cov, re.S)
+if not cm:
+    print('FAIL: demo/clickthrough.mjs 里没有 coverage:begin/end 覆盖清单块')
+    sys.exit(1)
+driven, browser = set(), {}
+for line in cm.group(1).splitlines():
+    line = line.strip()
+    if line.startswith('driven:'):
+        driven |= set(line[len('driven:'):].split())
+    elif line.startswith('browser-only:'):
+        for item in line[len('browser-only:'):].split(';'):
+            item = item.strip()
+            if not item:
+                continue
+            name, _, why = item.partition('=')
+            browser[name.strip()] = why.strip()
+declared = driven | set(browser)
+# 对账口径：**可点处理器**（`js_reg*` 注册的那些）。`regs` 比它大——里面还有
+# `__headless_exec`/`__mpErr` 这类内部全局（它们是从注入的 JS 里 `globalThis.__x =`
+# 挂上去的，不是页面按钮），把它们也要求"声明覆盖状态"就是判据自己搞错了对象。
+handlers = set()
+for path in glob.glob('demo/*.mbt'):
+    for line in open(path, encoding='utf-8'):
+        if line.lstrip().startswith('//'):
+            continue
+        for m in re.finditer(r'js_reg[0-9a-z]*\("(__[A-Za-z_][A-Za-z_0-9]*)"', line):
+            handlers.add(m.group(1))
+missing = sorted(handlers - declared)
+ghost = sorted(declared - handlers)
+# ⚠️ 查"有没有调用点"之前，先把**清单块自己**和 `//` 注释行剥掉：清单里就写着
+# 这些名字，不剥的话每个名字都能被自己的声明"证明"有人调用——**判据自己满足
+# 自己**（这条在第一版上真的发生了：把某个调用点注释掉，门禁照样绿）。
+cov_code = (cov[:cm.start()] + cov[cm.end():])
+cov_code = '\n'.join(l for l in cov_code.splitlines() if not l.lstrip().startswith('//'))
+weak = sorted(n for n in driven
+              if ('globalThis.' + n + '(') not in cov_code and ("'" + n + "'") not in cov_code
+              and ('"' + n + '"') not in cov_code)
+no_reason = sorted(n for n, why in browser.items() if not why)
+fail = False
+for label, items in (('没声明覆盖状态的处理器', missing), ('清单里有但引擎里没有的处理器', ghost),
+                     ('清单说 driver 走过、但文件里找不到调用点', weak),
+                     ('声明为"只能靠浏览器"却没写原因', no_reason)):
+    if items:
+        print('FAIL: %s：%s' % (label, '、'.join(items)))
+        fail = True
+if fail:
+    sys.exit(1)
+print('覆盖清单 OK（可点处理器 %d 个：driver 走过 %d 个，声明"只能靠浏览器" %d 个且每个都有原因）'
+      % (len(handlers), len(driven), len(browser)))
 print('页面接线 OK（%d 个处理器引用全部有注册，且 %d 个注册的都有引用）' % (len(refs), len(regs)))
 PYW
 
