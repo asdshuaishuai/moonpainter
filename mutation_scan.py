@@ -31,11 +31,48 @@
 
 import os
 import shutil
+import signal
 import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 BAK = "/tmp/moonpainter_mut_bak"
+
+# 当前注入着的变异：`(mid, path)`。信号处理器靠它把自己注入的东西**还原回去**——
+# 实测踩过：`job_kill` 掉扫描（AGENTS 里还写着"宁可用 job_kill 停掉重跑"），
+# `try/finally` 里的还原**根本不执行**，注入的变异就留在工作区里
+# （那次是 `pixel/program.mbt` 的 `if prog.ops.length() == 0` 变成 `if false`）。
+# 这是最坏的一类残留：`git status` 只显示"文件被改过"，下一步可能就是
+# **把它当自己的改动提交上去**。
+INFLIGHT = None
+
+
+def _restore_inflight():
+    """还原当前注入的变异；返回被还原的变异 id（没有则 None）。"""
+    global INFLIGHT
+    if INFLIGHT is None:
+        return None
+    mid, path = INFLIGHT
+    try:
+        shutil.copy(BAK, path)
+    except Exception as e:  # 还原失败必须喊出来：静默 = 树里留着注入
+        print(f"!!! 还原 {path} 失败：{e}（工作区可能带着注入的变异！）", file=sys.stderr)
+    INFLIGHT = None
+    return mid
+
+
+def _on_signal(signum, _frame):
+    mid = _restore_inflight()
+    print(
+        f"\n收到信号 {signum}：已还原注入的变异（{mid or '无'}）——"
+        "**本轮扫描不完整，结果不能当门禁**",
+        file=sys.stderr,
+    )
+    sys.exit(128 + signum)
+
+
+signal.signal(signal.SIGTERM, _on_signal)
+signal.signal(signal.SIGINT, _on_signal)
 
 # (编号, 说明, 相对路径, 原串, 替换串, 预期)
 # 预期只能是 "killed"（应当被测试抓住）或 "equivalent"（语义等价，允许存活）
@@ -2074,6 +2111,47 @@ def judge(out):
     return "SURVIVED", "全部通过（无人守护）"
 
 
+def stale_in(bodies, wanted):
+    """`[(mid, rel)]`：哪些变异看起来**正注入在树里**（锚点串不在、替换串在）。
+
+    纯函数（吃 `{rel: 文本}`），所以 `--selfcheck` 能喂合成样本给它，
+    不必真去改文件——**判据自己也要有能抓住注入的测试**。
+    """
+    out = []
+    for mid, _desc, rel, old, new, _expect in MUTS:
+        if rel not in wanted:
+            continue
+        body = bodies.get(rel)
+        if body is None:
+            continue
+        if old not in body and new in body:
+            out.append((mid, rel))
+    return out
+
+
+def selfcheck():
+    """这道"残余态"护栏的自检：喂合成正文，三种情形都要判对。"""
+    mid, _desc, rel, old, new, _expect = MUTS[0]
+    cases = [
+        ("干净（锚点在）", {rel: "prefix " + old + " suffix"}, []),
+        ("残留（锚点不在、替换串在）", {rel: old.replace(old, new)}, [(mid, rel)]),
+        ("既不在锚点也不在替换串（重构过）", {rel: "something else"}, []),
+        ("别的文件残留，不在本次目标里", {"other/file.mbt": new}, []),
+    ]
+    bad = []
+    for name, bodies, want in cases:
+        got = stale_in(bodies, {rel})
+        if got != want:
+            bad.append(f"{name}：期望 {want}，实际 {got}")
+    if bad:
+        print("FAIL: 残余态护栏自检不过：", file=sys.stderr)
+        for b in bad:
+            print("   " + b, file=sys.stderr)
+        return 1
+    print(f"残余态护栏自检通过（{len(cases)} 种情形；样本用 {mid}）")
+    return 0
+
+
 def check_anchors():
     """只校验每个变异的 old 锚点在当前源码里**唯一存在**，不跑测试（秒级）。
 
@@ -2109,6 +2187,8 @@ def check_anchors():
 def main():
     if "--check-anchors" in sys.argv:
         return check_anchors()
+    if "--selfcheck" in sys.argv:
+        return selfcheck()
     wanted = [a for a in sys.argv[1:] if not a.startswith("-")]
     todo = [m for m in MUTS if not wanted or m[0] in wanted]
     if not todo:
@@ -2120,6 +2200,37 @@ def main():
     if dirty:
         print("警告：工作区不干净，变异前后可能混淆：\n" + dirty, file=sys.stderr)
 
+    # **开工前体检：树里是不是留着上一次注入的变异？**
+    # 信号（SIGTERM/SIGINT）现在能还原，但 `kill -9`、断电、OOM 都抓不住——
+    # 而残留是**悄悄毁掉整轮结果**：扫描把"变异态"当基线，于是要么锚点找不到
+    # （判 INVALID、"这条没在测任何东西"），要么把已经坏掉的代码当参照。
+    # 判据：某个变异的**替换串在文件里、锚点串不在** ⇒ 这个文件正处在那一态。
+    rels = {t[2] for t in todo}
+    bodies = {}
+    for _rel in rels:
+        with open(os.path.join(ROOT, _rel), encoding="utf-8") as f:
+            bodies[_rel] = f.read()
+    stale = stale_in(bodies, rels)
+    if stale:
+        print("\n拒绝开工：树里像是**留着上一次注入的变异**（锚点串不在、替换串在）：",
+              file=sys.stderr)
+        for mid, rel in stale:
+            print(f"   {rel}  ←  {mid} 的替换串还在；`git diff {rel}` 看一眼，"
+                  f"确认不是自己的改动后 `git checkout -- {rel}`", file=sys.stderr)
+        print("（`kill -9` / 断电 / OOM 都会留下这种状态，信号处理器抓不住）",
+              file=sys.stderr)
+        return 3
+
+    # 扫描前逐字节快照：收尾核对"每个目标文件是不是回到了扫描前的样子"。
+    # 这一条不是形式主义——它同时兜住"信号中断没还原""还原写错路径"
+    # "两次注入叠在一起"，而这三件事都只表现为**树里留着变异**。
+    snapshot = {}
+    for _mid, _desc, rel, _old, _new, _expect in todo:
+        p = os.path.join(ROOT, rel)
+        if rel not in snapshot:
+            with open(p, "rb") as f:
+                snapshot[rel] = f.read()
+
     results = []
     for mid, desc, rel, old, new, expect in todo:
         path = os.path.join(ROOT, rel)
@@ -2130,11 +2241,14 @@ def main():
             print(f"{mid}: INVALID（锚点 {n} 次）", flush=True)
             continue
         shutil.copy(path, BAK)
+        global INFLIGHT
         try:
+            INFLIGHT = (mid, path)
             open(path, "w", encoding="utf-8").write(src.replace(old, new, 1))
             verdict, detail = judge(run_native_tests())
         finally:
             shutil.copy(BAK, path)  # 无论成败都还原
+            INFLIGHT = None
         results.append((mid, desc, expect, verdict, detail))
         mark = ""
         if verdict == "SURVIVED" and expect == "killed":
@@ -2162,6 +2276,21 @@ def main():
     for r in survived:
         if r[2] == "equivalent":
             print(f"  存活的 {r[0]} 是**已确认的等价变异**（不改变行为，允许存活）")
+    # **收尾核对**：目标文件必须逐个回到扫描前的字节。信号中断、还原写错路径、
+    # 两次注入叠在一起——这三件事都只表现为"树里留着注入的变异"，而 `git status`
+    # 只会说"文件被改过"，下一步就可能把它当自己的改动提交上去（实测踩过）。
+    leftover = []
+    for _rel, _bytes in snapshot.items():
+        with open(os.path.join(ROOT, _rel), "rb") as f:
+            if f.read() != _bytes:
+                leftover.append(_rel)
+    if leftover:
+        print("\nFAIL: 这些文件扫描结束后**没有回到扫描前的样子**（树里可能留着注入的变异）：")
+        for _rel in leftover:
+            print(f"   {_rel}  →  `git diff {_rel}` 看一眼，**别把它当自己的改动提交**")
+    else:
+        print(f"收尾核对：{len(snapshot)} 个目标文件都回到了扫描前的字节 ✓", flush=True)
+
     if misses:
         print(f"\nFAIL: 这些变异应当被抓住却存活了：{misses}")
         return 1
@@ -2178,6 +2307,8 @@ def main():
         print(f"\nFAIL: 这些变异**没有在测试任何东西**（锚点失效 / 编译不过）：")
         for r in invalid:
             print(f"   {r[0]:5s} {r[1]}  （{r[4]}）")
+        return 1
+    if leftover:
         return 1
     print("\nMUTATION SCAN PASS ✓（所有非等价变异都被测试抓住）")
     return 0
