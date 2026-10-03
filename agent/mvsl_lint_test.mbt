@@ -292,10 +292,11 @@ test "lint：变换/混合/蒙版的读点矩阵（表里每一格都要报，�
       kind: @core.ShapeKind::Text,
       text: "Hi",
       font_size: 24.0,
+      // `rotation_deg`/`flip_h`/`flip_v` 在 text 上从 PLAN 六十一起**合法**
+      // （渲染器把字形逐点过完整变换链）⇒ 这一格只剩 `blend`。留着这三行是
+      // **反向断言**的素材：它们一个都不许被报（下面那段循环查的）。
       rotation_deg: 45.0,
       flip_h: true,
-      // `flip_v` 的"不读"格现在只剩 text/raster/adjust（组已经读了它），
-      // 所以这一格挪到这里来——needle 列表跟着这一格走（PLAN 五十六）
       flip_v: true,
       blend: @core.BlendMode::Multiply,
     },
@@ -317,7 +318,11 @@ test "lint：变换/混合/蒙版的读点矩阵（表里每一格都要报，�
       id: "a1",
       kind: @core.ShapeKind::Adjust,
       adjust: Some(@core.Adjust::{ op: @core.AdjustOp::Invert, value: 1.0 }),
+      // `rot`/`flip_h`/`flip_v` 三格的**唯一**非读方：其它 kind 全都补上了
+      // （几何/位图一直读、组与笔触 PLAN 五十六/六十、文本 PLAN 六十一）
       rotation_deg: 45.0,
+      flip_h: true,
+      flip_v: true,
       blend: @core.BlendMode::Multiply,
     },
   )
@@ -358,9 +363,10 @@ test "lint：变换/混合/蒙版的读点矩阵（表里每一格都要报，�
   // 14**；raster 的 rot 一转正，凑出来的数就对不上了。散文里的算术没人管，
   // 所以这里改成一格一格数出来）：
   //   group 2（blend/mask——rotation/flip 从 PLAN 五十六起合法）
-  //   + text 4（rot/flip_h/flip_v/blend）+ raster 1（blend——rot/flip 从
-  //     PLAN 六十起合法）+ adjust 2（rot/blend）+ line 1（fill）
-  //   + polygon 1（stroke）+ image 2（fill+stroke）= **13**。
+  //   + text 1（blend——rot/flip_h/flip_v 从 PLAN 六十一起合法）+ raster 1
+  //     （blend——rot/flip 从 PLAN 六十起合法）+ adjust 4（rot/flip_h/flip_v/blend
+  //     ——它三格的唯一非读方）+ line 1（fill）+ polygon 1（stroke）
+  //   + image 2（fill+stroke）= **12**。
   // 只查"含某个词"会被"多报/少报但恰好含这些词"骗过。
   let mut hits = 0
   for it in items {
@@ -368,7 +374,7 @@ test "lint：变换/混合/蒙版的读点矩阵（表里每一格都要报，�
       hits = hits + 1
     }
   }
-  assert_eq(hits, 13, msg="读点矩阵应报 13 格，实报 \{hits}：\{j}")
+  assert_eq(hits, 12, msg="读点矩阵应报 12 格，实报 \{hits}：\{j}")
   // **反向**也要咬住：组的 rotation/flip 现在一格都不许报
   for gone in [
     "group 却带着 rotation_deg",
@@ -377,8 +383,11 @@ test "lint：变换/混合/蒙版的读点矩阵（表里每一格都要报，�
     "raster 却带着 rotation_deg",
     "raster 却带着 flip_h",
     "raster 却带着 flip_v",
+    "text 却带着 rotation_deg",
+    "text 却带着 flip_h",
+    "text 却带着 flip_v",
   ] {
-    assert_true(!j.contains(gone), msg="组/笔触层上的变换已经合法，不该再报「\{gone}」：\{j}")
+    assert_true(!j.contains(gone), msg="组/笔触层/文本层上的变换已经合法，不该再报「\{gone}」：\{j}")
   }
 
   // ② 正控：**读它的 kind** 上带着同样的字段，一格都不许报（漏报与误报都是 bug）
@@ -450,11 +459,12 @@ test "写不生效的字段在入口就拒；写默认值（清字段）必须�
   let _ = run(s, "brush layer=p0 pts=8,8;20,20 r=4 color=#FF0000FF")
   let _ = run(s, "add-rect x=0 y=0 w=20 h=20 fill=#0000FFFF name=B id=r1")
   let _ = run(s, "add-adjust op=invert name=A id=a0")
-  // 不生效的组合：一个都不能悄悄成功（text/adjust 各自三条 + raster 剩 blend）
-  // ⚠️ 笔触层的 `rotate`/`flip` 从本轮起**放行**（渲染器真的绕落笔范围中心转
-  // 每个 dab，PLAN 六十），所以它们挪到下面那条**正控**里
+  // 不生效的组合：一个都不能悄悄成功（adjust 三条 + text/raster 各剩 blend）
+  // ⚠️ 笔触层的 `rotate`/`flip` 从 PLAN 六十起**放行**（绕落笔范围中心转每个
+  // dab）、文本层的从 PLAN 六十一起放行（字形逐点过完整变换链）——它们都挪到
+  // 下面那条**正控**里
   for bad in [
-    "rotate t0 30", "flip t0 h", "set-style t0 blend=multiply",
+    "set-style t0 blend=multiply",
     "set-style p0 blend=screen",
     "rotate a0 30", "flip a0 h", "set-style a0 blend=multiply",
   ] {
@@ -535,6 +545,8 @@ test "写不生效的字段在入口就拒；写默认值（清字段）必须�
     "rotate g1 45", "flip g1 both",
     // 笔触层同理（PLAN 六十）：非默认变换也放行
     "rotate p0 30", "flip p0 v", "rotate p0 0", "flip p0 none",
+    // 文本层同理（PLAN 六十一）：字形逐点过完整变换链 ⇒ 非默认变换也放行
+    "rotate t0 30", "flip t0 h", "rotate t0 0", "flip t0 none",
   ] {
     let r = run(s, ok)
     assert_true(r.contains("\"ok\":true"), msg="`\{ok}` 是清字段，必须放行：\{r}")

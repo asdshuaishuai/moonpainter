@@ -1959,6 +1959,56 @@ MUTS = [
         "killed",
     ),
     (
+        "Q83",
+        "文本层不走**本层**变换（字形只按层位平移：`rotate t1 90` 回 ok 而画面不动）",
+        "render/scene.mbt",
+        """      let (lx, ly) = canvas_to_layer(l, frames, x.to_double(), y.to_double())
+      match text_cell(sc, adv, ox, oy, glyphs.length(), lx, ly) {""",
+        """      let (lx, ly) = to_local_in(frames, x.to_double(), y.to_double())
+      match text_cell(sc, adv, ox, oy, glyphs.length(), lx - l.x, ly - l.y) {""",
+        "killed",
+    ),
+    (
+        "Q84",
+        "文本层不走**祖先链**（`rotate <装着文本的组> 90` 回 ok 而画面不动，PLAN 五十八那颗 bug 的第三层）",
+        "render/scene.mbt",
+        """      let (lx, ly) = canvas_to_layer(l, frames, x.to_double(), y.to_double())""",
+        """      let (lx, ly) = to_local(l, x.to_double(), y.to_double())""",
+        "killed",
+    ),
+    (
+        "Q85",
+        "文本层的蒙版退回**画布**坐标采样（定过位的层上蒙版整块错位，与 pick 自相矛盾）",
+        "render/scene.mbt",
+        """            let mf = mask_cover_at(l, lx, ly)
+            let a = eff_opacity * mf * color_a
+            let a255 = (a * 255.0 + 0.5).to_int()
+            let src = (a255 << 24) + (color & 0x00FFFFFF)""",
+        """            let mf = mask_cover_at(l, x.to_double(), y.to_double())
+            let a = eff_opacity * mf * color_a
+            let a255 = (a * 255.0 + 0.5).to_int()
+            let src = (a255 << 24) + (color & 0x00FFFFFF)""",
+        "killed",
+    ),
+    (
+        "Q86",
+        "`inside_fill` 对文本只判盒子（`pick`/`sample` 报出一个当点没画像素的层）",
+        "render/scene.mbt",
+        """    @core.ShapeKind::Text => text_ink(l, lx, ly)""",
+        """    @core.ShapeKind::Text => lx >= 0.0 && lx < l.w && ly >= 0.0 && ly < l.h""",
+        "killed",
+    ),
+    (
+        "Q87",
+        "字形格判定去掉抗浮点偏置（轴对齐的 90°/镜像下墨迹数不再守恒：208→206/207）",
+        "render/scene.mbt",
+        """  let u = lx - ox + 1.0e-4
+  let v = ly - oy + 1.0e-4""",
+        """  let u = lx - ox + 1.0e-9
+  let v = ly - oy + 1.0e-9""",
+        "killed",
+    ),
+    (
         "Q78",
         "笔触层的盒子退回存下来的快照（= 画布尺寸）：轴心回到画布中心、报告面又撒谎",
         "core/document.mbt",

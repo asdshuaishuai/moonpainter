@@ -405,7 +405,11 @@ fn inside_fill(l : @core.Layer, lx : Double, ly : Double) -> Bool {
     @core.ShapeKind::Line => false // 线段无填充面
     @core.ShapeKind::Image => lx >= 0.0 && lx < l.w && ly >= 0.0 && ly < l.h
     @core.ShapeKind::Group => false
-    @core.ShapeKind::Text => lx >= 0.0 && lx < l.w && ly >= 0.0 && ly < l.h
+    // ⚠️ 文本层的墨是**字形位图**，不是盒子：盒子比墨大约一倍，且含字距空隙
+    // 与字形上下的空行（实测 "H" 的盒子 24×28 里只有 208/672 个像素有墨）。
+    // 只按盒子判 ⇒ `pick`/`sample` 会报出一个当点一个像素都没画的层
+    // （`sample` 自相矛盾那条）。判据与渲染器**共用** `text_ink` 一处实现。
+    @core.ShapeKind::Text => text_ink(l, lx, ly)
     @core.ShapeKind::Adjust => false
     @core.ShapeKind::Raster => false
   }
@@ -944,7 +948,7 @@ fn paint_layer(
       return
     }
     @core.ShapeKind::Text => {
-      paint_text(l, buf, env, eff_opacity)
+      paint_text(l, buf, env, eff_opacity, frames)
       return
     }
     @core.ShapeKind::Raster => {
@@ -2716,56 +2720,186 @@ fn glyph_columns(ch : Char) -> Array[Int]? {
 }
 
 ///|
+/// 文本层的三个量，**一处算**：`sc` = 每像素放大倍数（`font_size/7` 向下取整、
+/// 至少 1）、`adv` = 每字符推进（6 列）、`ox`/`oy` = 字形在**层局部**坐标系里的
+/// 起点（复现旧实现的 `l.x.to_int()`：字形落在整数格上、分数坐标被截掉，于是
+/// 不带变换的路径逐位不变）。
+fn text_metrics(l : @core.Layer) -> (Int, Int, Double, Double) {
+  let scale = (l.font_size / 7.0).to_int()
+  let sc = if scale < 1 { 1 } else { scale }
+  (sc, 6 * sc, l.x.to_int().to_double() - l.x, l.y.to_int().to_double() - l.y)
+}
+
+///|
+/// **字形格索引**：把层局部坐标折算成（第几个字符，列，行）；越界返回 `None`。
+///
+/// ⚠️ 一处实现：`paint_text`（逐像素绘制）与 `text_ink`（`pick`/`sample`/
+/// `inside_fill` 的读点）共用它——"这个点在不在墨上"只能有一个答案。
+///
+/// ⚠️ `+1e-4` 偏置（像素的万分之一）：字形是**硬边**位图，格边界上差一点点就
+/// 整格翻过去，而 `lx`/`ly` 是经完整变换链算出来的——`cos_rad`/`sin_rad` 是
+/// 级数近似，实测 90° 下单点误差 ~1.4e-6。偏置必须**大于**它：1e-9/1e-6 都太小
+/// （"H" 转 90° 时墨迹 208→206/207、点探针当场翻格），1e-4 之后轴对齐的四格
+/// 全部恰好 208（PLAN 六十一）。
+fn text_cell(
+  sc : Int,
+  adv : Int,
+  ox : Double,
+  oy : Double,
+  nchars : Int,
+  lx : Double,
+  ly : Double,
+) -> (Int, Int, Int)? {
+  let u = lx - ox + 1.0e-4
+  let v = ly - oy + 1.0e-4
+  if u < 0.0 || v < 0.0 {
+    return None
+  }
+  let scf = sc.to_double()
+  let ci = (u / adv.to_double()).to_int()
+  if ci >= nchars {
+    return None
+  }
+  let col = ((u - ci.to_double() * adv.to_double()) / scf).to_int()
+  let row = (v / scf).to_int()
+  // 第 5 列（6 列推进里的最后一列）是**字距空隙**，不算墨；行 0..6 之外同理
+  if col >= 5 || row >= 7 {
+    return None
+  }
+  Some((ci, col, row))
+}
+
+///|
+/// 字形位图（一次取出；非 ASCII 用盒形占位 = 诚实边界）。
+fn text_glyphs(text : String) -> Array[Array[Int]] {
+  let out : Array[Array[Int]] = []
+  for ch in text.iter() {
+    out.push(
+      match glyph_columns(ch) {
+        Some(g) => g
+        None => [31, 21, 21, 21, 31]
+      },
+    )
+  }
+  out
+}
+
+///|
+/// 文本层在**层局部**坐标 `(lx, ly)` 上有没有墨。判据一处：`paint_text` 与
+/// `inside_fill`（`pick`/`sample`）都经它 ⇒ 报告面与画面不可能分家。
+fn text_ink(l : @core.Layer, lx : Double, ly : Double) -> Bool {
+  let (sc, adv, ox, oy) = text_metrics(l)
+  match text_cell(sc, adv, ox, oy, l.text.length(), lx, ly) {
+    None => false
+    Some((ci, col, row)) => {
+      let bits = text_glyphs(l.text)[ci][col]
+      (lsr(bits, 6 - row) & 1) == 1
+    }
+  }
+}
+
+///|
 /// 文本层绘制：字形按 font_size/7 缩放，advance = 6 * scale。
+///
+/// **目标像素驱动**（与 `paint_raster` 同一条路）：扫"字形区域过完整变换链后的
+/// 外接盒"，逐格把画布像素**逆向**映射回层局部，再查字形位图。旧实现是正向的
+/// ——直接算 `l.x + 列*sc + 偏移` 就落像素，于是**本层与祖先链的变换一个都不走**
+/// （实测 `rotate <组> 90`：回包 ok、指纹变了、`render_sha256` 逐位不变，与
+/// PLAN 五十八那颗 dab 的 bug 是同一类，晚了一层）。逆向采样还顺带解决了
+/// 任意角度下的空洞（正向点抽样会漏像素）。
+///
+/// ⚠️ **字形起点复现旧的 `l.x.to_int()`**（字形落在整数格上、分数坐标被截掉）：
+/// 库里的 golden 全是不带变换的路径，这样它**逐位不变**。
+///
+/// ⚠️ 蒙版按**层局部**坐标采样（`add-mask` 的 x/y 默认 0；矩形实测：层在 (50,40)、
+/// 蒙版 x=0 w=10 时左半保留）。旧实现拿**画布**坐标采样 ⇒ 定过位的文本层上蒙版
+/// 整块错位：实测文本层在 (50,40)、蒙版 w=10 时 `sample 52 50` 回
+/// `color=#FFFFFFFF`（画不出东西）而 `layer=t1`（pick 说层就在那儿）——**两个
+/// 信号自相矛盾**，正是"同一个判断两处实现"的第三次现身。
 fn paint_text(
   l : @core.Layer,
   buf : @codec.RgbaBuf,
   env : RenderEnv,
   eff_opacity : Double,
+  frames : Transform,
 ) -> Unit {
-  let scale = (l.font_size / 7.0).to_int()
-  let sc = if scale < 1 { 1 } else { scale }
-  let advance = 6 * sc
+  if l.text.length() == 0 {
+    return
+  }
+  let (sc, adv, ox, oy) = text_metrics(l)
   let color = fill_color_at(l.fill, 0.0, 0.0, l.w, l.h)
   // 颜色自带的 alpha 并进覆盖度（与形状填充同理）。`NoFill` 的 alpha 是 0，
   // 语义就是"不画"；默认层是 `Solid(0xFF808080)`，所以默认路径不变。
   let color_a = ((color >> 24) & 0xFF).to_double() / 255.0
-  let px0 = l.x.to_int()
-  let py0 = l.y.to_int()
-  let mut cx = 0
-  for ch in l.text.iter() {
-    let glyph : Array[Int] = match glyph_columns(ch) {
-      Some(g) => g
-      None => [31, 21, 21, 21, 31] // 非 ASCII：盒形占位（诚实边界）
+  let glyphs = text_glyphs(l.text)
+  let gw = (adv * glyphs.length()).to_double()
+  let gh = (7 * sc).to_double()
+  // 渲染窗 = 字形矩形的四角过 `screen`（本层变换 + 祖先链）后的外接盒，各留 1px。
+  // 仿射映射把矩形映成平行四边形 ⇒ 四角外接盒一定装得下。
+  // ⚠️ 不用 `paint_window_in`：那是**保守**窗（对角线为边），一行长文本（w≫h）
+  // 会被扫成 ~w² 个像素，比字形盒子大一个量级——"保守上界"给 `pick`/`lint` 用
+  // 没问题，给逐像素循环用就是个性能坑。
+  let mut minx = 1.0e18
+  let mut miny = 1.0e18
+  let mut maxx = -1.0e18
+  let mut maxy = -1.0e18
+  for c in [(ox, oy), (ox + gw, oy), (ox, oy + gh), (ox + gw, oy + gh)] {
+    let (px, py) = screen(l, frames, c.0, c.1)
+    if px < minx {
+      minx = px
     }
-    // 每列 5 bit 自上而下
-    for col in 0..<5 {
-      let bits = glyph[col]
-      for row in 0..<7 {
-        if (lsr(bits, 6 - row) & 1) == 1 {
-          let mut sy = 0
-          while sy < sc {
-            let mut sx = 0
-            while sx < sc {
-              let px = px0 + cx + col * sc + sx
-              let py = py0 + row * sc + sy
-              let mf = mask_cover_at(l, px.to_double(), py.to_double())
-              let a = eff_opacity * mf * color_a
-              let a255 = (a * 255.0 + 0.5).to_int()
-              let src = (a255 << 24) + (color & 0x00FFFFFF)
-              let dst = @codec.rgba_get(buf, px, py)
-              @codec.rgba_set(buf, px, py, composite_pixel(dst, src, @core.BlendMode::Normal))
-              sx = sx + 1
-            }
-            sy = sy + 1
+    if py < miny {
+      miny = py
+    }
+    if px > maxx {
+      maxx = px
+    }
+    if py > maxy {
+      maxy = py
+    }
+  }
+  let mut x0 = minx.to_int() - 1
+  let mut y0 = miny.to_int() - 1
+  let mut x1 = maxx.to_int() + 2
+  let mut y1 = maxy.to_int() + 2
+  if x0 < 0 {
+    x0 = 0
+  }
+  if y0 < 0 {
+    y0 = 0
+  }
+  if x1 > buf.width {
+    x1 = buf.width
+  }
+  if y1 > buf.height {
+    y1 = buf.height
+  }
+  let mut y = y0
+  while y < y1 {
+    let mut x = x0
+    while x < x1 {
+      let (lx, ly) = canvas_to_layer(l, frames, x.to_double(), y.to_double())
+      match text_cell(sc, adv, ox, oy, glyphs.length(), lx, ly) {
+        None => ()
+        Some((ci, col, row)) => {
+          if (lsr(glyphs[ci][col], 6 - row) & 1) == 1 {
+            // 蒙版按**层局部**坐标采样（`add-mask` 的 x/y 默认 0；矩形实测：
+            // 层在 (50,40)、蒙版 x=0 w=10 时左半保留）。旧实现拿**画布**坐标
+            // 采样 ⇒ 定过位的文本层上蒙版整块错位。
+            let mf = mask_cover_at(l, lx, ly)
+            let a = eff_opacity * mf * color_a
+            let a255 = (a * 255.0 + 0.5).to_int()
+            let src = (a255 << 24) + (color & 0x00FFFFFF)
+            let dst = @codec.rgba_get(buf, x, y)
+            @codec.rgba_set(buf, x, y, composite_pixel(dst, src, @core.BlendMode::Normal))
           }
         }
       }
+      x = x + 1
     }
-    cx = cx + advance
+    y = y + 1
   }
   let _ = env
-  let _ = eff_opacity
 }
 
 ///|
