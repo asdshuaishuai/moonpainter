@@ -2049,7 +2049,10 @@ fn inject_html() -> Unit {
 async fn on_file_selected() -> Unit {
   bootstrap()
   // 大图（十几 MB PNG 要几秒）先说一句——不然人会以为点了没反应
-  js_log_line("📷 正在读取照片…（大图要几秒）", "#8af")
+  // 诚实报时长：引擎只解 PNG，所以照片要在浏览器里转 PNG——一张 10MP 照片
+  // 转出来是 10~35 MB（base64 再大 1/3），实测原生侧 45 MB 载荷要 14 秒，
+  // 浏览器里更久。不说这一句，人会以为点了没反应。
+  js_log_line("📷 正在读取照片…（大图可能要十几秒，别当它卡住了）", "#8af")
   let result = js_read_file_input("file-in").wait()
   let ok = match json_get(result, "ok") {
     Some(Json::True) => true
