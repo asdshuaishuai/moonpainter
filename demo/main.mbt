@@ -1762,6 +1762,28 @@ fn inject_css() -> Unit {
     #|.pact button:hover{background:#3a3a5e;color:#dde}
     #|.osl{display:flex;align-items:center;gap:6px;margin-top:6px;font-size:11px}
     #|.osl input{flex:1;accent-color:#3d63ff}
+    #|.topbar .badge{margin-left:auto;color:#7f9;font-size:11px;padding:2px 8px;border:1px solid #2c3a4e;border-radius:10px;white-space:nowrap;user-select:text;cursor:help}
+    #|.dbg{display:flex;flex-direction:column;gap:6px;padding:6px 8px 14px}
+    #|.dbg button{background:#23233a;color:#bbc;border:1px solid #3a3a5e;border-radius:4px;padding:4px 7px;font-size:11px;cursor:pointer}
+    #|.dbg button:hover{background:#2e2e4e;color:#dde}
+    #|.dbg .dbgrow{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+    #|.dbg .scbtn{background:#2b3f6b;color:#dce9ff;font-weight:600;padding:6px 8px}
+    #|.dbg .scbtn:hover{background:#3a5290}
+    #|.dbg .dbgta{width:100%;height:56px;background:#0d1020;color:#cdd;border:1px solid #3a3a5e;border-radius:4px;font-family:ui-monospace,Menlo,monospace;font-size:10px;padding:4px;user-select:text}
+    #|.dbg .cmdin{flex:1;min-width:110px;background:#0d1020;color:#cdd;border:1px solid #3a3a5e;border-radius:4px;font-size:11px;padding:4px;user-select:text}
+    #|.dbg .pk2{width:64px;background:#0d1020;color:#cdd;border:1px solid #3a3a5e;border-radius:4px;font-size:11px;padding:4px;user-select:text}
+    #|.dbg .dbgout{max-height:190px;overflow:auto;background:#0d1020;color:#9ab;border:1px solid #2a2a44;border-radius:4px;font-family:ui-monospace,Menlo,monospace;font-size:10px;padding:6px;white-space:pre-wrap;word-break:break-all;user-select:text}
+    #|.schdr{color:#7f9;font-size:10px;font-family:ui-monospace,Menlo,monospace;padding:2px 0 6px;border-bottom:1px solid #2a2a44;word-break:break-all}
+    #|.sc{font-size:11px}
+    #|.scok{color:#7fd18a;padding:2px 0;line-height:1.4}
+    #|.scbad{color:#ff9b8a;padding:2px 0;line-height:1.4}
+    #|.sct{width:100%;border-collapse:collapse;font-size:10px}
+    #|.sct th{text-align:left;color:#778;font-weight:500;border-bottom:1px solid #2a2a44;padding:2px 3px}
+    #|.sct td{vertical-align:top;padding:2px 3px;border-bottom:1px solid #1e1e30;line-height:1.35}
+    #|.scp{color:#7fd18a;font-weight:700}
+    #|.scf{color:#ff7a6a;font-weight:700}
+    #|.scw{color:#889}
+    #|.sce{color:#9ab;font-family:ui-monospace,Menlo,monospace;word-break:break-all}
     #|.sbar{grid-column:1/4;display:flex;align-items:center;background:#1b1b2e;border-top:1px solid #32324a;padding:0 12px;font-size:11px;color:#567;gap:14px}
     #|.aip{grid-column:1/4;background:#12142a;border-top:1px solid #333;display:flex;flex-direction:column;max-height:280px;transition:max-height .2s}
     #|.aip.closed{max-height:36px;overflow:hidden}
@@ -1794,6 +1816,7 @@ pub fn app_html() -> String {
   (
       #|<div class='topbar'>
       #|<span class='logo'>🎨 MoonPainter</span>
+      #|<span class='badge' id='build-badge' title='这一页是哪一版构建：引擎自报版本 · mpd 容器版本 · git commit · 构建时间 · wasm 内容 sha。人做功能测试时先看这里——徽标对不上就是打开/缓存了旧构建。'>版本…</span>
       #|<button onclick='globalThis.__new()'>新建</button>
       #|<input class='pnum' id='cw' type='number' min='1' max='4096' value='800' title='画布宽（新建 / 改画布用）'/>
       #|<span class='sep'>×</span>
@@ -1872,6 +1895,41 @@ pub fn app_html() -> String {
       #|<div id='llist'></div>
       #|<div class='ph2'>属性</div>
       #|<div id='pprops'><div class='ns'>点击图层查看属性</div></div>
+      #|<div class='ph2'>🩺 自检 · 调试（面向功能测试）</div>
+      #|<div class='dbg'>
+      #|<button class='scbtn' onclick='globalThis.__selfcheck()'>🧪 功能自检：跑一遍功能清单</button>
+      #|<div id='sc-report' class='sc'><div class='ns'>点上面的按钮。清单跑在**另一份**引擎上（不动你当前的文档），每条断言一个可观测事实：画面 sha 变没变 / 指纹等不等 / pick 拾到哪一层；失败项把引擎原话与实测值一起印出来。</div></div>
+      #|<div class='dbgrow'>
+      #|<button onclick='globalThis.__dbg_lint()'>lint 检查</button>
+      #|<button onclick='globalThis.__dbg_edits()'>编辑历史</button>
+      #|<button onclick='globalThis.__dbg_census()'>全图普查</button>
+      #|<button onclick='globalThis.__dbg_probe()'>探一点(10,10)</button>
+      #|<button onclick='globalThis.__dbg_help()'>命令字典</button>
+      #|<button onclick='globalThis.__dbg_tools()'>工具清单</button>
+      #|<button onclick='globalThis.__dbg_schema()'>选择子清单</button>
+      #|<button onclick='globalThis.__dbg_preview()'>选区预览</button>
+      #|</div>
+      #|<div class='dbgrow'><span class='hint'>MVSL 编辑表（贴 JSON；base64 由页面转，模型侧那份同理）</span></div>
+      #|<textarea id='mvsl-json' class='dbgta' placeholder='{"version":1,"ops":[],"guards":[]}'></textarea>
+      #|<div class='dbgrow'>
+      #|<button onclick='globalThis.__mvsl_set()'>装表</button>
+      #|<button onclick='globalThis.__mvsl_show()'>看表</button>
+      #|<button onclick='globalThis.__mvsl_impact()'>影响证书</button>
+      #|<button onclick='globalThis.__mvsl_assert()'>断言</button>
+      #|<button onclick='globalThis.__mvsl_clear()'>清表</button>
+      #|</div>
+      #|<div class='dbgrow'>
+      #|<input id='param-k' class='pk2' placeholder='key'/><input id='param-v' class='pk2' placeholder='value'/>
+      #|<button onclick='globalThis.__param_list()'>列元参数</button>
+      #|<button onclick='globalThis.__param_set()'>写元参数</button>
+      #|<button onclick='globalThis.__param_del()'>删元参数</button>
+      #|</div>
+      #|<div class='dbgrow'>
+      #|<input id='cmd-input' class='cmdin' placeholder='任意一行引擎命令（63 条全都能跑：render 400 overlay=1 / query-layer r1 …）'/>
+      #|<button onclick='globalThis.__cmd()'>执行</button>
+      #|</div>
+      #|<pre id='dbg-out' class='dbgout'>（这里显示回包 JSON。`render`/`select-preview` 这类带 PNG 的回包会在上面画布上直接铺出来。）</pre>
+      #|</div>
       #|</div>
       #|</div>
       #|<div class='sbar'><span id='sbar-text'>就绪</span></div>
@@ -2068,6 +2126,232 @@ pub fn register_globals() -> Unit {
     js_log_line("📊 \{s.stringify()}", "#8af")
   })
   js_reg2s("__drop", fn(b64 : String, name : String) { do_import(b64, name) })
+  // ── 自检 / 调试面板 ────────────────────────────────────────────────
+  // ⚠️ 每条命令名都写成**字面量**并且和引擎调用写在**同一行**里：`ui_audit.py`
+  // 判"人类前端真的发得出去"靠的是"字符串首词是命令名 + 同语句里有引擎入口"。
+  // 把命令名插值拼（`"\{cmd}"`）或只写在注入的 HTML 里，对账看不见 = 等于没有入口
+  // （README 的名单也会跟着撒谎）。
+  js_reg0("__selfcheck", fn() -> @js_async.Promise[Unit] {
+    @js_async.Promise::from_async(async fn() {
+       do_selfcheck()
+    })
+  })
+  js_reg0("__dbg_lint", fn() -> @js_async.Promise[Unit] {
+    @js_async.Promise::from_async(async fn() {
+       do_dbg_raw(engine_exec_line("lint"))
+    })
+  })
+  js_reg0("__dbg_edits", fn() -> @js_async.Promise[Unit] {
+    @js_async.Promise::from_async(async fn() {
+       do_dbg_raw(engine_exec_line("edits"))
+    })
+  })
+  js_reg0("__dbg_census", fn() -> @js_async.Promise[Unit] {
+    @js_async.Promise::from_async(async fn() {
+       do_dbg_raw(engine_exec_line("census"))
+    })
+  })
+  js_reg0("__dbg_probe", fn() -> @js_async.Promise[Unit] {
+    @js_async.Promise::from_async(async fn() {
+       do_dbg_raw(engine_exec_line("probe x=10 y=10 r=8"))
+    })
+  })
+  js_reg0("__dbg_help", fn() -> @js_async.Promise[Unit] {
+    @js_async.Promise::from_async(async fn() {
+       do_dbg_raw(engine_exec_line("help"))
+    })
+  })
+  js_reg0("__dbg_tools", fn() -> @js_async.Promise[Unit] {
+    @js_async.Promise::from_async(async fn() {
+       do_dbg_raw(engine_exec_line("list-tools"))
+    })
+  })
+  js_reg0("__dbg_schema", fn() -> @js_async.Promise[Unit] {
+    @js_async.Promise::from_async(async fn() {
+       do_dbg_raw(engine_exec_line("sel-schema"))
+    })
+  })
+  js_reg0("__dbg_preview", fn() -> @js_async.Promise[Unit] {
+    @js_async.Promise::from_async(async fn() {
+      
+    do_dbg_show(engine_exec_line("select-preview " + b64_text(sc_geo_sel())))
+    })
+  })
+  js_reg0("__mvsl_set", fn() -> @js_async.Promise[Unit] {
+    @js_async.Promise::from_async(async fn() {
+      
+    let json = js_val("mvsl-json")
+    if json == "" {
+      js_status_bar("⚠ 先在「MVSL 编辑表」文本框里贴 JSON（例：{\"version\":1,\"ops\":[],\"guards\":[]}）")
+      return
+    }
+    let _ = do_ui_cmd("mvsl-set " + b64_text(json))
+    do_dbg_raw(engine_exec_line("mvsl-show"))
+    })
+  })
+  js_reg0("__mvsl_show", fn() -> @js_async.Promise[Unit] {
+    @js_async.Promise::from_async(async fn() {
+       do_dbg_raw(engine_exec_line("mvsl-show"))
+    })
+  })
+  js_reg0("__mvsl_impact", fn() -> @js_async.Promise[Unit] {
+    @js_async.Promise::from_async(async fn() {
+       do_dbg_show(engine_exec_line("mvsl-impact"))
+    })
+  })
+  js_reg0("__mvsl_assert", fn() -> @js_async.Promise[Unit] {
+    @js_async.Promise::from_async(async fn() {
+       do_dbg_raw(engine_exec_line("mvsl-assert"))
+    })
+  })
+  js_reg0("__mvsl_clear", fn() -> @js_async.Promise[Unit] {
+    @js_async.Promise::from_async(async fn() {
+      
+    let _ = do_ui_cmd("mvsl-clear")
+    do_dbg_raw(engine_exec_line("mvsl-show"))
+    })
+  })
+  js_reg0("__param_list", fn() -> @js_async.Promise[Unit] {
+    @js_async.Promise::from_async(async fn() {
+       do_dbg_raw(engine_exec_line("list-params"))
+    })
+  })
+  js_reg0("__param_set", fn() -> @js_async.Promise[Unit] {
+    @js_async.Promise::from_async(async fn() {
+      
+    let k = js_val("param-k")
+    let v = js_val("param-v")
+    if k == "" {
+      js_status_bar("⚠ 先填元参数的 key")
+      return
+    }
+    let _ = do_ui_cmd("set-param " + k + " " + v)
+    do_dbg_raw(engine_exec_line("list-params"))
+    })
+  })
+  js_reg0("__param_del", fn() -> @js_async.Promise[Unit] {
+    @js_async.Promise::from_async(async fn() {
+      
+    let k = js_val("param-k")
+    if k == "" {
+      js_status_bar("⚠ 先填要删的元参数 key")
+      return
+    }
+    let _ = do_ui_cmd("remove-param " + k)
+    do_dbg_raw(engine_exec_line("list-params"))
+    })
+  })
+  js_reg0("__cmd", fn() -> @js_async.Promise[Unit] {
+    @js_async.Promise::from_async(async fn() {
+       do_console_cmd()
+    })
+  })
+}
+
+///|
+/// 右上角徽标文案（**纯函数**：同样的输入给同样的字符串，测试里直接断言）。
+///
+/// 人做功能测试时，最怕的是"点了半天其实是缓存里的旧引擎"——所以这里有四个量：
+/// 引擎**自报**的版本（来自已加载的 wasm，不是编译进页面的常量）、mpd 容器版本、
+/// git commit、构建时间、wasm 内容 sha。构建元数据缺失时**明说**"这页不是
+/// build_demo.sh 产出的"——静默显示一个假版本号比不显示更坏。
+pub fn build_badge_text(info : String, engine_ver : String) -> String {
+  let b = parse_json_safe(info)
+  let ev = parse_json_safe(engine_ver)
+  let ver = json_get_str(ev, "version")
+  let cont = json_get_str(ev, "container")
+  let commit = json_get_str(b, "commit")
+  let t = json_get_str(b, "time")
+  let wasm = json_get_str(b, "wasm_sha")
+  if commit == "" && wasm == "" {
+    return "版本未知 · 这页不是 ./build_demo.sh 产出的（引擎 v\{ver}）"
+  }
+  let ts = if t.length() >= 16 { t[5:16].to_owned() } else { t }
+  let ws = if wasm.length() > 8 { wasm[0:8].to_owned() } else { wasm }
+  "引擎 v\{ver} · \{cont} · 构建 \{commit} \{ts} · wasm \{ws}"
+}
+
+///|
+/// 徽标填进顶栏（浏览器启动时调一次；也是"这页是哪一版"的唯一可见凭据）。
+fn do_build_badge() -> Unit {
+  js_text("build-badge", build_badge_text(js_build_info(), engine_version_json()))
+}
+
+///|
+/// 诊断回包铺到 `#dbg-out`。**截断**：`help`/`census`/`edits` 的回包能到几十 KB，
+/// 铺满面板反而看不见重点（要全文的走「命令字典」那条自己看）。
+fn do_dbg_raw(raw : String) -> Unit {
+  js_text("dbg-out", shorten_str(raw, 6000))
+  let j = parse_json_safe(raw)
+  if eng_ok(j) {
+    js_status_bar("🩺 回包已铺到「自检 · 调试」面板")
+  } else {
+    js_status_bar("⚠ " + eng_s(j, "error"))
+  }
+}
+
+///|
+/// 带 PNG 的诊断命令（`select-preview`/`render`/`mvsl-impact`）：回包铺出来，
+/// PNG 直接画到画布上——"选区到底覆盖了哪里"看图最快，数值在回包里。
+fn do_dbg_show(raw : String) -> Unit {
+  let j = parse_json_safe(raw)
+  let b64 = eng_s(j, "png_b64")
+  let b64b = eng_s(j, "overlay_png_b64")
+  let b64c = eng_s(j, "result_png_b64")
+  let img = if b64 != "" { b64 } else if b64b != "" { b64b } else { b64c }
+  if img != "" {
+    js_canvas_img(img)
+    js_text(
+      "dbg-out",
+      shorten_str(raw, 400) + "\n…（回包里的 PNG 已铺到画布，base64 共 " + img.length().to_string() + " 字符，这里不铺）",
+    )
+    js_status_bar("🩺 回包里的 PNG 已铺到画布（下一次渲染/操作会恢复）")
+  } else {
+    do_dbg_raw(raw)
+  }
+}
+
+///|
+/// 命令控制台：任意一行引擎命令（63 条全都能跑）。走 `do_ui_cmd` 那条路
+/// （渲染 + 刷新界面），所以**改文档的命令也会立刻看到画面变化**；只读命令
+/// 的回包同样铺到面板上——它是"逐条手测"的兜底入口。
+fn do_console_cmd() -> Unit {
+  let line = js_val("cmd-input")
+  if line == "" {
+    js_status_bar("⚠ 先在输入框里写一条引擎命令")
+    return
+  }
+  // ⚠️ **只执行一次**：先 `eng(line)` 再 `engine_exec_line(line)` 会把命令跑两遍
+  // （`add-rect` 会加两层，而面板只显示"成功"）。拿原始回包自己解析。
+  let raw = engine_exec_line(line)
+  let j = parse_json_safe(raw)
+  js_text("dbg-out", shorten_str(raw, 6000))
+  if eng_ok(j) {
+    eng_render(800)
+    refresh_ui()
+    js_status_bar("🩺 \{line} → ok（回包见调试面板）")
+  } else {
+    js_status_bar("⚠ " + eng_s(j, "error"))
+  }
+}
+
+///|
+/// 功能自检：**另起一份引擎实例**（`js_clone_engine`）跑清单——自检会 `new`、
+/// 会装编辑表，绝不能在用户手上这份文档上做（自检的副作用比不做自检更坏）。
+fn do_selfcheck() -> Unit {
+  let rows = selfcheck_run_isolated()
+  // 报告头上带**这一版是哪一版**：这份报告是要拿去对质的（"我在 abc1234 上
+  // 看到第 7 条红"），缺了它，报告本身就没法指回一次可重复的构建。
+  let head = "<div class='schdr'>" +
+    html_attr(build_badge_text(js_build_info(), engine_version_json())) +
+    "</div>"
+  js_html("sc-report", head + selfcheck_html(rows))
+  let bad = rows.filter(fn(r) { !r.1 }).length()
+  if bad == 0 {
+    js_status_bar("🧪 功能自检：\{rows.length()} 条全过 ✓（跑在另一份引擎上，你的文档没被动过）")
+  } else {
+    js_status_bar("⚠ 功能自检：\{bad}/\{rows.length()} 条失败 —— 右侧报告里每条都印了实测值与引擎原话")
+  }
 }
 
 fn main {
@@ -2120,6 +2404,8 @@ fn main {
     inject_html()
     register_globals()
     setup_tool_state()
+    // 顶栏徽标：**这一页是哪一版**（人做功能测试的第一件事）
+    do_build_badge()
     js_click_global("ai-run", "__run")
     js_setup_drop("drop-zone", "__drop")
     bootstrap()

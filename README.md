@@ -109,12 +109,19 @@ EOF
 `mp_exec_in` 执行 + 字符串指针读出，与 deepDesign 胶水同款 ABI）。
 
 ```bash
-./build_demo.sh          # 构建 wasm + demo.js + index.html → dist/ + Node headless 自检
-                         # + **人类面点击穿透**（哑 DOM 壳加载真的 demo.js，直接调
-                         #   页面处理器，再从引擎读回状态逐条断言）+ npm SDK 冒烟
-                         # + 页面接线核对 + 两条边界对账 + demo 测试
-cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
+./build_demo.sh          # 构建 wasm + demo.js + index.html（含构建元数据）→ dist/
+                         # + Node headless 自检 + **人类面点击穿透**（哑 DOM 壳加载
+                         #   真的 demo.js，直接调页面处理器，再从引擎读回状态逐条断言）
+                         # + npm SDK 冒烟 + 页面接线核对 + 两条边界对账 + demo 测试
+./serve_demo.sh          # 固定端口 8137 + `Cache-Control: no-store`，并打印 dist 的
+                         # 构建元数据 → 浏览器打开 http://127.0.0.1:8137/
 ```
+
+> **人做功能级测试请看 [demo/TESTING.md](./demo/TESTING.md)**：一份「点哪里 → 期望
+> 什么」的清单（含只有人眼能判的拖拽/缩放/落点）。不用 `python3 -m http.server`
+> 是因为它带 `Last-Modified`/`ETag`——浏览器会拿缓存里的旧 `demo.js`/`moonpainter.wasm`
+> 而你不自知，报出来的现象指向别的地方（`serve_demo.sh` 发 `no-store`，wasm 的 XHR
+> 另外带 `?v=<时间戳>`，两头都堵）。
 
 - **Mock 端点**（默认）：离线脚本模型，逐轮真实吐工具调用，无需 API Key 即可完整演示；
 - **JS 宿主 SDK**：`npm/moonpainter-sdk/`（加载器 + index.d.ts，多会话句柄
@@ -129,6 +136,23 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
 - **视觉闭环**：`render` / `select_preview` / `mvsl_impact` 三个图像类工具把 PNG 以附件
   （`SuccessWithAttachments`）回传给多模态模型，AI 真的看图确认效果再继续
   （试选不看图 = 闭眼改色；影响证书不看图 = 发现不了选区跑偏）；
+- **构建徽标**：顶栏右上角常显 `引擎 vX · mpd/vN · 构建 <commit> <时间> · wasm <sha8>`
+  ——人做功能测试时最怕"点了半天其实是缓存里的旧引擎"，徽标是**唯一可见凭据**：
+  引擎版本号读的是**已加载 wasm 自报的** `mp_version`（不是编译进页面的常量），
+  commit/时间/wasm 内容 sha 由 `build_demo.sh` 写进 `window.__MP_BUILD__`（缺了就
+  明说"这页不是 build_demo.sh 产出的"）；`demo.js` 也带 `?v=<sha>` 版本串；
+- **功能自检面板**（右栏「🩺 自检 · 调试」）：点一下跑 **26 条**功能清单，每条
+  断言一个**可观测事实**——比两个 `render_sha256`（"画面真的变了"）、比
+  `fingerprint`（"存读往返是同一份文档"）、读 `sample` 的颜色（"隐藏层是白纸"）、
+  读 `query-layer` 的 kind/数值（"报告和建层参数一致"）。清单**跑在另一份引擎实例
+  上**（`js_clone_engine` 复制 wasm 字节再实例化），绝不动用户手上那份文档；
+  失败项把**引擎原话 + 期望 + 实测**一起印出来。同一份清单进 `demo_test.mbt`
+  断言 **0 失败**——只有浏览器点得出来的清单会烂在没人跑的那一侧；
+- **那 16 条够不着的命令，入口**就长在这个面板里（`lint`/`edits`/`census`/`probe`/
+  `help`/`list-tools`/`sel-schema`/`select-preview`/`mvsl-set`/`show`/`clear`/
+  `impact`/`assert`/`list-params`/`set-param`/`remove-param`），外加一条**命令控制台**
+  （任意一行引擎命令直接执行、回包铺在面板上、带 PNG 的回包直接上画布）。它们
+  刻意不放在日常动线上（详见下面「人类前端可达」那块），但**功能测试必须够得着**；
 - **55 个工具，MVSL 闭环可达**：`sel_schema`（先看语法：字段名/量纲/示例自证）/
   `census`（先普查再选色）/`probe`（这个点选中没有）/
   `select_preview`（试选 + 连通域事实）/`mvsl_set`（装编辑表）/`mvsl_impact`
@@ -143,15 +167,17 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   `help` `list-tools` `fingerprint` `add-image` `set-image` `inspect`
   <!-- unreachable:end -->
   <!-- human-face:begin -->
-  人类前端（`demo/main.mbt`）直接可达 **47** 条命令；剩下 16 条**刻意不从人类前端
-  给入口**（这条边界同样进机器对账：引擎 − 人类可达 == 这份名单，且**每条都必须有
-  理由**——实测"应用户输入改动"这一面走查完才发现，此前 63 条里人类只走得到 35 条，
-  而 README 的「绘制」一行读起来像"产品支持画多边形"）。
+  人类前端（`demo/main.mbt`）直接可达 **63** 条命令。其中 **47 条**在日常动线上
+  （工具条 / 图层面板 / 属性面板 / 顶栏 / 画布交互），**16 条只在右栏「🩺 自检 ·
+  调试」面板里**可达——那半是给**功能测试与排障**用的，不是日常动线（面板上写着
+  "面向功能测试"）。这条边界同样进机器对账：引擎 − 人类可达 == 这份名单，
+  且**每条都必须有理由**（名单为空时也要能对账：散文里的条数必须等于实际）。
   ⚠️ 判据判的是**"前端真的发得出这条命令"**，不是"这个名字在源码里出现过"：第一版
   按后者判，于是 `data-tool='move'`、`class='group'`、注入 JS 里的 `new`、以及
-  `bootstrap` 装的示例场景全被算成人类入口（`add-line` 当初就是这么被算成"人类能画折线"的：示例场景与 AI 侧都用得上它，
-而工具条上一个入口都没有）；
-
+  `bootstrap` 装的示例场景全被算成人类入口（`add-line` 当初就是这么被算成"人类能画折线"的：
+  示例场景与 AI 侧都用得上它，而工具条上一个入口都没有）；
+  <!-- human-face:end -->
+  那 16 条**为什么只在调试面板里**（不是没有入口，是刻意不放在日常动线上）：
   - `census` — 分析出口，产物是**给模型看的数值**（hue×sat 普查）；人类看图即可，取像素走 `sample`/统计面板
   - `probe` — 同上：单点邻域统计 + 编辑表 membership，是"这个点选中没有"的机器回答
   - `select-preview` — 试选回吐的是**覆盖图**，给模型确认选区用；人类用蒙版/选区工具的交互反馈
@@ -168,7 +194,8 @@ cd dist && python3 -m http.server 8080   # 浏览器打开 http://localhost:8080
   - `remove-param` — 同上
   - `help` — 字典是**模型**的说明书；人类的能力表是 README 的能力表与面板本身
   - `list-tools` — 同上
-  <!-- human-face:end -->
+  调试面板上还有一条**命令控制台**（任意一行引擎命令直接执行、回包铺在面板上）
+  ——`63` 条命令全都能从它走；上面这 16 条另有专门的按钮，是为了不用记参数拼法。
   各自原因——`session-open`/`open-mpd-b64`：会话与开门由前端管，不该让模型
   自己开门；`help`/`list-tools`：工具清单本来就在 system prompt 里；
   `fingerprint`：完整性自检，前端与门禁用；**`add-image` / `set-image`：要吃图片字节，

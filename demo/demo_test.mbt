@@ -388,3 +388,42 @@ test "分组工具：tool_line 拼得出 group-add / group-remove（成员逗号
     "group-remove g1 l2",
   )
 }
+
+///|
+/// 右上角徽标文案（纯函数）：**缺构建元数据时必须明说**——静默显示一个假版本
+/// 号，人就以为自己在测最新构建（这正是"缓存住旧引擎而不自知"的样子）。
+test "构建徽标：说得出这一页是哪一版；元数据缺失时必须明说" {
+  let eng = "{\"ok\":true,\"engine\":\"moonpainter\",\"version\":\"0.1.0\",\"container\":\"mpd/v1\"}"
+  let missing = @demo.build_badge_text("{}", eng)
+  assert_true(missing.contains("不是 ./build_demo.sh 产出的"), msg=missing)
+  assert_true(missing.contains("0.1.0"), msg=missing)
+  let ok = @demo.build_badge_text(
+    "{\"time\":\"2026-10-03T09:30:00Z\",\"commit\":\"abc1234+\",\"wasm_sha\":\"0123456789abcdef\",\"demo_sha\":\"fedcba9876543210\"}",
+    eng,
+  )
+  assert_true(ok.contains("abc1234+"), msg=ok)
+  assert_true(ok.contains("mpd/v1"), msg=ok)
+  assert_true(ok.contains("10-03T09:30"), msg=ok)
+  assert_true(ok.contains("wasm 01234567"), msg=ok)
+}
+
+///|
+/// 功能自检清单：**跑一遍必须 0 失败**。这条断言是这个面板的守门人——
+/// 只有浏览器点得出来的清单会烂在没人跑的那一侧（同 `layers_html`/`tool_line`
+/// 两次提取的理由）。清单自己开**另一份**引擎实例，所以这条测试跑在
+/// `demo_test` 的引擎会话上也不会搅乱前面的用例（isolation 由 clone 保证）。
+async test "功能自检清单：每一条都过（跑在克隆的第二份引擎上）" {
+  @demo.ensure_engine()
+  let rows = @demo.selfcheck_run_isolated()
+  assert_true(rows.length() >= 20, msg="自检条目过少：\{rows.length()}")
+  let mut bad = ""
+  for r in rows {
+    if !r.1 {
+      bad = bad + r.0 + " ⇒ " + r.3 + "\n"
+    }
+  }
+  assert_true(bad == "", msg="功能自检有条目失败：\n" + bad)
+  let html = @demo.selfcheck_html(rows)
+  assert_true(html.contains("全过"), msg=html)
+  assert_true(html.contains("sct"), msg="报告表格缺失")
+}

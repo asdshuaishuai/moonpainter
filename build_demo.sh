@@ -42,18 +42,32 @@ cp _build/wasm/release/build/wasm/wasm.wasm dist/moonpainter.wasm 2>/dev/null ||
 cp _build/js/release/build/demo/demo.js dist/demo.js 2>/dev/null ||
   cp _build/js/debug/build/demo/demo.js dist/demo.js
 cp demo/clickthrough.mjs dist/clickthrough.mjs
-cat > dist/index.html << 'HTML'
+# 构建元数据进页面：**人做功能测试时必须知道自己在测哪一版**。没有它，
+# 浏览器缓存住旧 `demo.js`/`moonpainter.wasm` 时人测的是旧引擎而不自知——
+# 这正是"静默降级"在人这一侧的样子。三个量都可机器核对：
+#   commit   = git HEAD 短 hash（工作区脏时带 `+`）
+#   wasm_sha = 产物内容 sha256 前 12 位（与引擎自报的 `mp_version` 一起显示）
+#   demo_sha = demo.js 内容 sha256 前 12 位，同时当 `<script src>` 的查询串
+#              （查询串变了浏览器必定重新拉取，不会再拿旧的 demo.js）
+MP_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+git diff --quiet -- . 2>/dev/null || MP_COMMIT="$MP_COMMIT+"
+MP_NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+MP_WASM_SHA=$(python3 -c "import hashlib;print(hashlib.sha256(open('dist/moonpainter.wasm','rb').read()).hexdigest()[:12])")
+MP_JS_SHA=$(python3 -c "import hashlib;print(hashlib.sha256(open('dist/demo.js','rb').read()).hexdigest()[:12])")
+cat > dist/index.html << HTML
 <!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>MoonPainter · AI 修图 Demo</title>
-<script src="demo.js" defer></script>
+<script>window.__MP_BUILD__ = { time: '$MP_NOW', commit: '$MP_COMMIT', wasm_sha: '$MP_WASM_SHA', demo_sha: '$MP_JS_SHA' };</script>
+<script src="demo.js?v=$MP_JS_SHA" defer></script>
 </head>
 <body><div id="app">加载中…（需从 HTTP 服务访问，见 README）</div></body>
 </html>
 HTML
+echo "构建元数据 commit=$MP_COMMIT wasm=$MP_WASM_SHA demo.js=$MP_JS_SHA time=$MP_NOW"
 ls -la dist | awk 'NR>1 {print $5, $9}'
 
 echo "== 4/9 Node headless 自检（mock 模型 × wasm 引擎） =="
@@ -155,7 +169,13 @@ for path in glob.glob('demo/*.mbt'):
         # ⚠️ 别写成 `(__\w*)(?!\s*=)`：负向前瞻会逼正则**回溯**，把名字截短一个
         # 字符好让断言成立——实测它把 `__headless_exec` 读成 `__headless_exe`
         # 并据此报"引用了没注册的处理器"。**判据自己念错名字**比不判更坏。
+        # ⚠️ `globalThis.__MP_BUILD__`（构建元数据）**不是**处理器：它由
+        # `build_demo.sh` 写进页面、被 `js_build_info` 读。不过滤的话门禁会把
+        # "页面引用了没注册的处理器 __MP_BUILD__" 报出来——**判据自己念错名字
+        # 比不判更坏**（同下面那条负向前瞻的注解）。过滤只认全大写常量这一种。
         for m in re.finditer(r'globalThis\.(__[A-Za-z_][A-Za-z_0-9]*)(\s*=)?', line):
+            if m.group(1).isupper() or m.group(1).strip('_').isupper():
+                continue                  # 数据常量，不是处理器
             if m.group(2):
                 regs.add(m.group(1))
             else:
@@ -241,6 +261,27 @@ PYD
 # ③ 每条必须写理由（空理由 = 没做过的决定）；④ 散文里的条数要对得上。
 run_quiet python3 ui_audit.py
 
+# ---- 功能自检清单的条数也要对账 ----
+# 自检面板是"人做功能级测试"的入口，README 里写着它有多少条。**数字进散文就
+# 没人管**（铁律 3）——所以条数从源码数出来（`SCase` 的字面量 `name:`），
+# 与 README 那句逐字对。清单加一条、README 忘了改，这一步红。
+python3 - <<'PYD'
+import re, sys
+src = open('demo/selfcheck.mbt', encoding='utf-8').read()
+n = len(re.findall(r'\n\s+name: "', src))
+m = re.search(r'点一下跑 \*\*(\d+) 条\*\*功能清单', open('README.md', encoding='utf-8').read())
+if not m:
+    print('FAIL: README 里找不到「点一下跑 **N 条**功能清单」那句（改写法要同步这里）')
+    sys.exit(1)
+if int(m.group(1)) != n:
+    print('FAIL: README 写自检 %s 条，实际 %d 条' % (m.group(1), n))
+    sys.exit(1)
+if n < 20:
+    print('FAIL: 自检清单只剩 %d 条（少于 20 条基本等于没有覆盖面）' % n)
+    sys.exit(1)
+print('功能自检条数 OK（README 与实际都是 %d 条）' % n)
+PYD
+
 echo "== 9/9 demo 测试（工具面 + MVSL 闭环可达；需 Node） =="
 # 这条守住"引擎有能力"与"产品里的 AI 用得上"之间的缝：mock 模型经真实
 # tool provider 驱动真实 wasm 引擎，跑完整 MVSL 闭环（普查→试选→装表→
@@ -248,4 +289,5 @@ echo "== 9/9 demo 测试（工具面 + MVSL 闭环可达；需 Node） =="
 run_quiet moon test --target js -p moonpainter/demo
 
 echo ""
-echo "DEMO BUILD PASS ✓   本地预览: cd dist && python3 -m http.server 8080 → http://localhost:8080"
+echo "DEMO BUILD PASS ✓   人做功能测试: ./serve_demo.sh → http://127.0.0.1:8137/"
+echo "                    （「点哪里 → 期望什么」的清单见 demo/TESTING.md）"

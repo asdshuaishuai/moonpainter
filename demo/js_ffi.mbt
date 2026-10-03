@@ -49,40 +49,6 @@ extern "js" fn js_is_node() -> Bool =
   #| () => typeof window === 'undefined'
 
 ///|
-extern "js" fn js_load_wasm(url : String) -> @js_async.Promise[WasmEngine] =
-  #| (url) => (async () => {
-  #|   const instantiate = (buf) =>
-  #|     new WebAssembly.Instance(new WebAssembly.Module(buf), {}).exports;
-  #|   if (typeof window === 'undefined') {
-  #|     const fs = await import('node:fs');
-  #|     const candidates = [
-  #|       url,
-  #|       '../_build/wasm/release/build/wasm/wasm.wasm',
-  #|       '../../_build/wasm/release/build/wasm/wasm.wasm',
-  #|       '_build/wasm/release/build/wasm/wasm.wasm',
-  #|       '_build/wasm/debug/build/wasm/wasm.wasm',
-  #|       '../../_build/wasm/debug/build/wasm/wasm.wasm',
-  #|     ];
-  #|     for (const p of candidates) {
-  #|       try {
-  #|         if (fs.existsSync(p)) return instantiate(fs.readFileSync(p));
-  #|       } catch (_) {}
-  #|     }
-  #|     throw new Error('moonpainter.wasm not found (run moon build --target wasm)');
-  #|   } else {
-  #|     const resp = await fetch(url);
-  #|     if (!resp.ok) throw new Error('wasm fetch failed: ' + resp.status);
-  #|     return instantiate(await resp.arrayBuffer());
-  #|   }
-  #| })()
-
-///|
-/// 加载 moonpainter 引擎 wasm 并返回其导出表。
-/// Node：fs.readFileSync + 实例化；浏览器：fetch + arrayBuffer。
-async fn load_engine_wasm(url : String) -> WasmEngine raise {
-  js_load_wasm(url).wait()
-}
-
 // ---------------------------------------------------------------------------
 // wasm 引擎导出包装（经典 wasm ABI：字符串指针 [len@ptr-4][UTF-16LE@ptr]）
 // ---------------------------------------------------------------------------
@@ -103,33 +69,93 @@ fn engine() -> WasmEngine {
 }
 
 ///|
+///|
+/// 加载引擎 wasm。**字节缓存在 `globalThis.__mpWasmBytes`**：功能自检要另开一份
+/// 引擎实例（在用户手上那份文档上折腾自检比不自检还坏），缓存之后第二次实例化
+/// 只是 `new WebAssembly.Instance`，不重新下载 1.1 MB。
 extern "js" fn js_load_wasm_node(url : String) -> WasmEngine =
   #| (url) => {
   #|   const fs = require('fs');
   #|   const path = require('path');
+  #|   // ⚠️ 顺序要紧：**先 release 再 debug**。`./build_demo.sh` 用
+  #|   // `moon build --target wasm`（release 目录），而这里此前只找 debug ——
+  #|   // Node 侧自检加载的可能是**上一次 debug 构建**的产物。浏览器侧没这个问题
+  #|   // （它拉的就是 dist/ 里刚拷的那份），所以坑只在 Node 路径上现形。
   #|   const candidates = [url,
+  #|     path.resolve('_build/wasm/release/build/wasm/wasm.wasm'),
+  #|     path.resolve('../../_build/wasm/release/build/wasm/wasm.wasm'),
+  #|     path.resolve('moonpainter.wasm'),
   #|     path.resolve('_build/wasm/debug/build/wasm/wasm.wasm'),
-  #|     path.resolve('../../_build/wasm/debug/build/wasm/wasm.wasm'),
-  #|     path.resolve('moonpainter.wasm')];
+  #|     path.resolve('../../_build/wasm/debug/build/wasm/wasm.wasm')];
   #|   for (const p of candidates) {
-  #|     try { if (fs.existsSync(p)) { return new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync(p)), {}).exports; } } catch (_) {}
+  #|     try {
+  #|       if (fs.existsSync(p)) {
+  #|         const bytes = fs.readFileSync(p);
+  #|         globalThis.__mpWasmBytes = bytes;
+  #|         return new WebAssembly.Instance(new WebAssembly.Module(bytes), {}).exports;
+  #|       }
+  #|     } catch (_) {}
   #|   }
   #|   throw new Error('moonpainter.wasm not found');
   #| }
 
 ///|
+/// 浏览器加载。⚠️ 查询串 `?v=<构建时间戳>` 是**必须**的：wasm 用同步 XHR 拉，
+/// 浏览器会拿缓存里的旧副本——人对着旧引擎点半天、报出来的现象指向别的地方
+/// （`./serve_demo.sh` 另外发 `Cache-Control: no-store`，两头都堵）。
 extern "js" fn js_load_wasm_browser(url : String) -> WasmEngine =
   #| (url) => {
   #|   const xhr = new XMLHttpRequest();
-  #|   xhr.open('GET', url, false);
+  #|   xhr.open('GET', url + '?v=' + Date.now(), false);
   #|   xhr.overrideMimeType('text/plain; charset=x-user-defined');
   #|   xhr.send();
   #|   const text = xhr.responseText;
   #|   const bytes = new Uint8Array(text.length);
   #|   for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i) & 0xff;
+  #|   globalThis.__mpWasmBytes = bytes;
   #|   const inst = new WebAssembly.Instance(new WebAssembly.Module(bytes), {});
   #|   return inst.exports;
   #| }
+
+///|
+/// **再实例化一份引擎**（同一份 wasm 字节、独立状态）。功能自检第一句就是
+/// `new`/`session-open`、还要装编辑表——那些都作用于会话状态，在用户正在编辑的
+/// 那份文档上做，自检的副作用比不做自检更坏。没加载过引擎时抛错（自检按钮只在
+/// 引擎就绪后才可能被点到）。
+extern "js" fn js_clone_engine() -> WasmEngine =
+  #| () => {
+  #|   const bytes = globalThis.__mpWasmBytes;
+  #|   if (!bytes) return globalThis.__mpEngine;   // 退路：至少给一份能用的引擎
+  #|   return new WebAssembly.Instance(new WebAssembly.Module(bytes), {}).exports;
+  #| }
+
+///|
+/// 克隆出来的还是不是原来那一份？**必须能问**：重放证明 `mvsl-set` 这类命令
+/// 在克隆实例上改不到它的会话（`g_session` 是**实例级**全局，`mp_reset` 才换），
+/// 所以"克隆"退化成"同一份引擎"时，自检会**在真实文档上跑**——那比不自检更坏。
+/// 判据放在这里一处：`js_clone_engine` 的退路 + 这条相等性检查，缺一不可。
+extern "js" fn js_same_engine(a : WasmEngine) -> Bool =
+  #| (a) => a === globalThis.__mpEngine
+
+///|
+/// 构建元数据（`build_demo.sh` 写进 index.html 的 `window.__MP_BUILD__`）。
+/// 缺了回 `"{}"`：页面徽标要能说"这页不是 build_demo.sh 产出的"，而不是静默
+/// 显示一个假的版本号。
+extern "js" fn js_remember_engine(e : WasmEngine) -> Unit =
+  #| (e) => { globalThis.__mpEngine = e }
+
+///|
+/// 引擎 wasm 的字节缓存拿到了没有（页面上的"自检"第一个前置条件；也是
+/// `js_clone_engine` 能不能给出**另一份**实例的前提）。诊断面读它。
+extern "js" fn js_wasm_bytes_len() -> Int =
+  #| () => (globalThis.__mpWasmBytes ? globalThis.__mpWasmBytes.length : -1)
+
+///|
+/// 构建元数据（`build_demo.sh` 写进 index.html 的 `window.__MP_BUILD__`）。
+/// 缺了回 `"{}"`：页面徽标要能说"这页不是 build_demo.sh 产出的"，而不是静默
+/// 显示一个假的版本号。
+extern "js" fn js_build_info() -> String =
+  #| () => JSON.stringify(globalThis.__MP_BUILD__ || {})
 
 ///|
 /// 确保 wasm 引擎已加载（同步——浏览器 XHR / Node fs，无 async 运行时依赖）。
@@ -137,11 +163,19 @@ pub fn ensure_engine() -> Unit {
   if g_engine.val is Some(_) {
     return
   }
-  if js_is_node() {
-    g_engine.val = Some(js_load_wasm_node("moonpainter.wasm"))
+  // `globalThis.__mpEngine` = "当前这份引擎"：自检的克隆退路与相等性判据都读它。
+  let e = if js_is_node() {
+    js_load_wasm_node("moonpainter.wasm")
   } else {
-    g_engine.val = Some(js_load_wasm_browser("moonpainter.wasm"))
+    js_load_wasm_browser("moonpainter.wasm")
   }
+  // ⚠️ 这里是**唯一**加载点，缓存的写入也在两条加载器里各一处（Node 走
+  // `js_load_wasm_node`、浏览器走 `js_load_wasm_browser`）。实测踩过：仓里还
+  // 躺着一份**没人调用**的 async 加载器（`js_load_wasm`），我把缓存写在它那里，
+  // 于是 `globalThis.__mpWasmBytes` 恒为 null、克隆静默退回同一份引擎，
+  // 自检就跑到用户文档上去了。**同一件事两个实现，烂的一定是没人读的那一处。**
+  js_remember_engine(e)
+  g_engine.val = Some(e)
 }
 
 ///|
