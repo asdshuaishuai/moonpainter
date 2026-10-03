@@ -165,3 +165,59 @@ test "组的变换与 pick 同一把尺子：转过之后 pick 报的是**新的
   assert_eq(@render.pick(d, 30.0, 40.0), None, msg="竖条范围外不该拾到")
   assert_eq(@render.pick(d, 24.0, 5.0), None, msg="竖条左边界外不该拾到")
 }
+
+///|
+/// 轴心是**内容中心**，不是组自己存下来的那个盒子——白盒正控。
+///
+/// 端到端那条在 `agent/group_box_test.mbt`（走命令面）；这里直接把组盒写成
+/// **画布尺寸**（正是 `group` 曾经干的事）而内容偏在角落：轴心必须仍然是内容的
+/// 中心。变异 Q72（`effective_box` 退回存下来的快照）就是被这条咬住的。
+test "组的轴心 = 内容中心（组自己存的盒子是画布尺寸也不许读）" {
+  let d = @core.new_document("u-gpivot", 200, 200)
+  let r = {
+    ..@core.default_layer("r", "r", 100.0, 20.0, 40.0, 10.0),
+    fill: @core.Fill::Solid(0xFFFF0000),
+  }
+  // ⚠️ 组盒故意设成**画布尺寸**：读它就等于绕 (100,100) 转
+  let grp = {
+    ..@core.default_layer("g1", "g1", 0.0, 0.0, 200.0, 200.0),
+    kind: @core.ShapeKind::Group,
+    children: [r],
+    rotation_deg: 90.0,
+  }
+  d.layers.push(grp)
+  let b = @render.render_doc(d, @render.RenderEnv::new())
+  // 内容中心 (120,25) ⇒ 竖条 x∈[115,125)、y∈[5,45)（实测几何）
+  assert_eq(@codec.rgba_get(b, 120, 10), 0xFFFF0000, msg="绕内容中心转：(120,10) 该是红")
+  assert_eq(@codec.rgba_get(b, 120, 40), 0xFFFF0000, msg="绕内容中心转：(120,40) 该是红")
+  assert_eq(@codec.rgba_get(b, 105, 25), 0xFFFFFFFF, msg="原横条的左端该空了")
+  // **判别力自证**：绕画布中心 (100,100) 转的话，内容会落在 (100,100) 附近
+  assert_eq(@codec.rgba_get(b, 100, 100), 0xFFFFFFFF, msg="画布中心处不该有内容")
+  // 红像素的包围盒 = 竖条（宽 10、高 40），不是别的什么
+  let mut x0 = 999
+  let mut x1 = -1
+  let mut y0 = 999
+  let mut y1 = -1
+  for y in 0..<200 {
+    for x in 0..<200 {
+      if @codec.rgba_get(b, x, y) == 0xFFFF0000 {
+        if x < x0 {
+          x0 = x
+        }
+        if x > x1 {
+          x1 = x
+        }
+        if y < y0 {
+          y0 = y
+        }
+        if y > y1 {
+          y1 = y
+        }
+      }
+    }
+  }
+  assert_eq(x0, 115, msg="竖条左边界")
+  assert_eq(x1, 124, msg="竖条右边界")
+  assert_eq(y0, 5, msg="竖条上边界")
+  assert_eq(y1, 44, msg="竖条下边界")
+}

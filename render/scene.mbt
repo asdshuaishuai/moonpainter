@@ -134,16 +134,21 @@ fn canvas_to_layer(l : @core.Layer, frames : Transform, x : Double, y : Double) 
 pub type Transform = Array[@core.Layer]
 
 ///|
-/// **组帧的逆变换**：绕组盒中心的 rot/flip，**不含平移**。
+/// **组帧的逆变换**：绕**内容中心**的 rot/flip，**不含平移**。
 ///
 /// ⚠️ 为什么不复用 `to_local`：组的 `x/y` 已经被 `move` **折叠进每个后代**了
 /// （`agent.shift_layer_tree` 把 delta 落到整棵子树、组盒自己也搬，PLAN 五十五）
 /// ——再让祖先链减一次 `x/y` 就是**双重偏移**：实测 `move grp 15 10` 之后
 /// 子层的窗被算到 2×15 之外，`probe (20,15)` 变白而 (30,15) 是红（PLAN 五十六）。
 /// 所以组帧只做"绕中心旋转 + 绕中心镜像"。
+///
+/// ⚠️ 轴心走 `@core.effective_box`（组的盒子 = 成员的并集，**实时派生**），
+/// 不读存下来的 `w/h`：那份只是建组时的快照，读它会让轴心固化成历史位置，
+/// 而且 `resize grp` 能把它挪走（PLAN 五十七）。
 fn to_local_frame(f : @core.Layer, px : Double, py : Double) -> (Double, Double) {
-  let cx = f.x + f.w / 2.0
-  let cy = f.y + f.h / 2.0
+  let (bx, by, bw, bh) = @core.effective_box(f)
+  let cx = bx + bw / 2.0
+  let cy = by + bh / 2.0
   let mut u = px - cx
   let mut v = py - cy
   if f.rotation_deg != 0.0 {
@@ -186,9 +191,12 @@ pub fn to_local_in(frames : Transform, px : Double, py : Double) -> (Double, Dou
 
 ///|
 /// 组局部坐标 → 画布点（`to_local_frame` 的**逆**，与它成对）。
+/// 轴心同样走 `@core.effective_box`——正逆两处必须**同一个**轴心，
+/// 各写一遍就会有一边先烂（`to_local`/`to_canvas` 那条教训）。
 fn to_canvas_frame_pt(f : @core.Layer, lx : Double, ly : Double) -> (Double, Double) {
-  let cx = f.x + f.w / 2.0
-  let cy = f.y + f.h / 2.0
+  let (bx, by, bw, bh) = @core.effective_box(f)
+  let cx = bx + bw / 2.0
+  let cy = by + bh / 2.0
   let mut u = lx - cx
   let mut v = ly - cy
   if f.flip_h {
@@ -207,7 +215,7 @@ fn to_canvas_frame_pt(f : @core.Layer, lx : Double, ly : Double) -> (Double, Dou
     v = v2
   }
   // 与 `to_local_frame` 对称：加回中心（无变换时恒等，见那边的注释）
-  (f.x + f.w / 2.0 + u, f.y + f.h / 2.0 + v)
+  (cx + u, cy + v)
 }
 
 ///|

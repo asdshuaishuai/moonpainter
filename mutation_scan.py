@@ -2028,6 +2028,44 @@ MUTS = [
         "killed",
     ),
     (
+        "Q72",
+        "组的盒子退回**存下来的快照**（轴心不跟内容走，resize 又能把轴心挪走）",
+        "core/document.mbt",
+        r"""pub fn effective_box(l : Layer) -> (Double, Double, Double, Double) {
+  if l.kind is ShapeKind::Group {""",
+        r"""pub fn effective_box(l : Layer) -> (Double, Double, Double, Double) {
+  if false {""",
+        "killed",
+    ),
+    (
+        "Q73",
+        "成员并集里直接读成员的 x/w 字段（嵌套组用的是内层那份**过期快照**）",
+        "core/document.mbt",
+        r"""    let (cx, cy, cw, ch) = effective_box(c)""",
+        r"""    let (cx, cy, cw, ch) = (c.x, c.y, c.w, c.h)""",
+        "killed",
+    ),
+    (
+        "Q74",
+        "有变换的组也放 ungroup / group-remove 过（变换静默丢掉、画面跳一下）",
+        "agent/ops.mbt",
+        r"""  let what : Array[String] = []
+  if l.rotation_deg != 0.0 {""",
+        r"""  let what : Array[String] = []
+  if false {""",
+        "killed",
+    ),
+    (
+        "Q75",
+        "组变换判据只认 rot、忘了 flip（只翻转过的组照样能 ungroup，静默丢镜像）",
+        "agent/ops.mbt",
+        r"""  if l.flip_h || l.flip_v {
+    let d = if l.flip_h && l.flip_v {""",
+        r"""  if false {
+    let d = if l.flip_h && l.flip_v {""",
+        "killed",
+    ),
+    (
         "Q67",
         "组帧忘了做逆旋转（组的 rotate 在渲染里变成恒等）",
         "render/scene.mbt",

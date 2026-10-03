@@ -83,8 +83,16 @@ pub fn list_tools() -> Array[AgentTool] {
   add("delete", "delete <id>", "meta")
   add("visible", "visible <id> <true|false>", "meta")
   add("reorder", "reorder <id> front|back|up|down", "meta")
-  add("group", "group <gid> <id> [id...]：把一个或多个**根级**层编成组（直通合成；嵌套编组请先 ungroup）", "meta")
-  add("ungroup", "ungroup <gid>", "meta")
+  add(
+    "group",
+    "group <gid> <id> [id...]：把一个或多个**根级**层编成组（直通合成；嵌套编组请先 ungroup）。组的盒子 = 成员的并集，也是它的旋转/翻转**轴心**（改成员的位置/尺寸，轴心跟着走）",
+    "meta",
+  )
+  add(
+    "ungroup",
+    "ungroup <gid>：解散整组。⚠️ 组上挂着 rot/flip 时会被**拒绝**——变换存在组自己身上，拆了就没有地方安放（画面会跳）；先 `rotate <gid> 0` / `flip <gid> none` 清掉",
+    "meta",
+  )
   add(
     "group-add",
     "group-add <gid> <id> [id...]：把**已有**的根级层加进**已有**的组（此前只能 ungroup + group 整体重组，组的 name/opacity/blend/tags/mask 全丢）。新成员追加到该组栈顶（children 自底向上 = 画在原有成员之上，要精确层序用 reorder）；成员必须是根级层**且不是组**（不支持嵌套编组）",
@@ -92,7 +100,7 @@ pub fn list_tools() -> Array[AgentTool] {
   )
   add(
     "group-remove",
-    "group-remove <gid> <id> [id...]：把组的**直接成员**移回根级，落在**该组的槽位上（组的下一层，即画在组的下面**——与 `ungroup` 的落点一致；成员的相对次序保留，要精确层序用 reorder）。解散整组仍用 ungroup",
+    "group-remove <gid> <id> [id...]：把组的**直接成员**移回根级，落在**该组的槽位上（组的下一层，即画在组的下面**——与 `ungroup` 的落点一致；成员的相对次序保留，要精确层序用 reorder）。解散整组仍用 ungroup。⚠️ 组上挂着 rot/flip 时会被拒绝（同 ungroup：摘出来的成员不再经过那个变换，画面会跳）",
     "meta",
   )
   // 文本 / 调整 / 蒙版

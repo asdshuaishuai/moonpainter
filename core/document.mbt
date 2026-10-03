@@ -540,6 +540,59 @@ pub fn layer_bbox(l : Layer) -> (Double, Double, Double, Double) {
 }
 
 ///|
+/// **一组成员盒的并集**（轴对齐，未计成员自身的旋转，同 `layer_bbox`）。
+/// 空成员返回 `None`——空组没有"内容范围"可言。
+pub fn group_bbox(children : Array[Layer]) -> (Double, Double, Double, Double)? {
+  if children.length() == 0 {
+    return None
+  }
+  let mut x0 = children[0].x
+  let mut y0 = children[0].y
+  let mut x1 = children[0].x + children[0].w
+  let mut y1 = children[0].y + children[0].h
+  for c in children {
+    let (cx, cy, cw, ch) = effective_box(c)
+    if cx < x0 {
+      x0 = cx
+    }
+    if cy < y0 {
+      y0 = cy
+    }
+    if cx + cw > x1 {
+      x1 = cx + cw
+    }
+    if cy + ch > y1 {
+      y1 = cy + ch
+    }
+  }
+  Some((x0, y0, x1 - x0, y1 - y0))
+}
+
+///|
+/// 层的**有效盒子**——"这个层的内容占哪儿"的**唯一定义**。
+///
+/// 组没有自己的画面，它的盒子**定义**为成员的并集（`group_bbox`）：
+/// 实时派生而不是读存下来的 `w/h`。存下来的那份只是建组那一刻的快照
+/// （canonical JSON 要有个值、旧引擎要读得懂），**渲染与报告面都不读它**
+/// ——实测过的错法：`group` 曾把组盒设成**画布尺寸**，于是组的旋转轴心是
+/// 画布中心（人类以为绕自己的内容转），而 `resize grp` 还会**悄悄把轴心挪走**
+/// （回 `ok`、指纹变、画面也变，而 `caps` 报组没有 `resize`——两个信号打架，
+/// 见 PLAN 五十七）。派生之后两件事一起没了：轴心永远跟着内容走，
+/// `resize` 对画面真的是恒等（`caps` 那句话才是真的）。
+///
+/// 空组没有并集可算，退回存下来的盒子（空组另由 `lint` 报 P2）。
+pub fn effective_box(l : Layer) -> (Double, Double, Double, Double) {
+  if l.kind is ShapeKind::Group {
+    match group_bbox(l.children) {
+      Some(b) => b
+      None => (l.x, l.y, l.w, l.h)
+    }
+  } else {
+    (l.x, l.y, l.w, l.h)
+  }
+}
+
+///|
 /// 收集全部层（含嵌套，按绘制序）。
 pub fn all_layers(layers : Array[Layer]) -> Array[Layer] {
   let out : Array[Layer] = []

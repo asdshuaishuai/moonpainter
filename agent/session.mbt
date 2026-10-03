@@ -432,7 +432,11 @@ fn layer_summary(l : @core.Layer) -> String {
   let sb = StringBuilder()
   sb.write_string("{\"id\":\"\{l.id}\",\"name\":\"\{@core.json_escape(l.name)}\"")
   sb.write_string(",\"kind\":\"\{kind_str(l.kind)}\"")
-  sb.write_string(",\"x\":\{@core.fmt_num(l.x)},\"y\":\{@core.fmt_num(l.y)},\"w\":\{@core.fmt_num(l.w)},\"h\":\{@core.fmt_num(l.h)}")
+  // 盒子走 `@core.effective_box`：**组的盒子 = 成员的并集**（实时派生）——
+  // 报告面与渲染的旋转轴心共用这一个定义，别在这里再读 `l.w/l.h`
+  // （那样组会报出建组时那个快照，实测报的是**画布尺寸**，见 PLAN 五十七）。
+  let (bx, by, bw, bh) = @core.effective_box(l)
+  sb.write_string(",\"x\":\{@core.fmt_num(bx)},\"y\":\{@core.fmt_num(by)},\"w\":\{@core.fmt_num(bw)},\"h\":\{@core.fmt_num(bh)}")
   sb.write_string(",\"visible\":\{l.visible}")
   sb.write_string(",\"opacity\":\{@core.fmt_num(l.opacity)}")
   sb.write_string(",\"blend\":\"\{blend_str(l.blend)}\"")
@@ -1897,6 +1901,20 @@ fn cmd_reorder(s : Session, tokens : Array[String]) -> String {
 }
 
 ///|
+/// 把组的**盒子快照**刷成成员的并集（`@core.group_bbox`）。
+///
+/// 渲染与报告面都走 `@core.effective_box`（实时派生），所以这个快照**不影响
+/// 任何画面或回包**——它只是让 canonical JSON 里的 `x/y/w/h` 不至于是一份
+/// 建组那一刻的旧账（旧引擎也读它）。三处改成员关系的地方（`group` /
+/// `group-add` / `group-remove`）共用这一处，别各写一遍。
+fn group_with_fresh_box(l : @core.Layer) -> @core.Layer {
+  match @core.group_bbox(l.children) {
+    Some(b) => { ..l, x: b.0, y: b.1, w: b.2, h: b.3 }
+    None => l
+  }
+}
+
+///|
 fn cmd_group(s : Session, tokens : Array[String]) -> String {
   // 下界是 **1 个成员**，不是 2 个。这里原先写 `< 4`（即至少两个成员），
   // 但"只有一个成员的组"本来就能到达（分两个再删一个），于是入口比可达状态
@@ -1962,15 +1980,18 @@ fn cmd_group(s : Session, tokens : Array[String]) -> String {
     }
     rm = rm - 1
   }
+  // 组盒 = **成员的并集**（`@core.group_bbox`），不是画布尺寸。
+  // 实测过的错法：这里原先是 `0,0,doc.width,doc.height`，于是组的旋转轴心
+  // 是**画布中心**（人类以为绕自己的内容转），`query-layer` 还报出 100×100
+  // 而内容只有 10,10,60,10 —— 一个谁都没读过的谎（PLAN 五十七）。
+  // 渲染与报告面都走 `@core.effective_box`（实时派生），这里是同一件事的
+  // **快照**（canonical JSON 要有个值、旧引擎要读得懂）。
+  let (gx, gy, gw, gh) = match @core.group_bbox(children) {
+    Some(b) => b
+    None => (0.0, 0.0, doc.width.to_double(), doc.height.to_double())
+  }
   let g = {
-    ..@core.default_layer(
-        gid,
-        gid,
-        0.0,
-        0.0,
-        doc.width.to_double(),
-        doc.height.to_double(),
-      ),
+    ..@core.default_layer(gid, gid, gx, gy, gw, gh),
     kind: @core.ShapeKind::Group,
     fill: @core.Fill::NoFill,
     children,
@@ -1995,6 +2016,12 @@ fn cmd_ungroup(s : Session, tokens : Array[String]) -> String {
   }
   if !(g.kind is @core.ShapeKind::Group) {
     return err("层 \{gid} 不是组")
+  }
+  // 组上的 rot/flip 存在**组自己**身上，拆了就没地方放 ⇒ 画面会变而回包说 ok
+  // （判据一处：`@agent.group_transform_error`，`group-remove` 共用）
+  let gt = group_transform_error(g, "ungroup")
+  if gt != "" {
+    return err(gt)
   }
   snapshot(s, doc, "ungroup \{gid}")
   let arr = match locate_container(doc.layers, gid) {
@@ -2143,7 +2170,7 @@ fn cmd_group_add(s : Session, tokens : Array[String]) -> String {
     for m in moving {
       kids.push(m)
     }
-    { ..l, children: kids }
+    group_with_fresh_box({ ..l, children: kids })
   })
   "{\"ok\":true,\"op\":\"group-add\",\"id\":\"\{gid}\",\"moved\":\{moving.length()},\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
 }
@@ -2187,6 +2214,12 @@ fn cmd_group_remove(s : Session, tokens : Array[String]) -> String {
       return err("层 \{mid} 不是组 \{gid} 的直接成员（解散整组用 ungroup）")
     }
   }
+  // 同 `ungroup`：从有变换的组里摘成员 = 它在组内是被变换过的、摘出来就
+  // 按自己的坐标画（画面跳一下），而回包说 ok
+  let gt = group_transform_error(g, "group-remove")
+  if gt != "" {
+    return err(gt)
+  }
   let taken = collect_in_order(g.children, ids)
   // 组的槽位（要在动 children 之前拿到）
   let mut idx = 0
@@ -2211,7 +2244,7 @@ fn cmd_group_remove(s : Session, tokens : Array[String]) -> String {
         kids.push(c)
       }
     }
-    { ..l, children: kids }
+    group_with_fresh_box({ ..l, children: kids })
   })
   let mut off = 0
   for t in taken {

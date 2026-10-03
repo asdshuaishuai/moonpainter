@@ -1316,6 +1316,38 @@ fn raster_box_error(l : @core.Layer, cw : Int, ch : Int) -> String? {
 /// 调整层则是"算子生效多少"）。此前调整层的 α 是个**开关**（α=0 整层不施加、
 /// (0,1] 全强度——中间那些位置静默无效），现在与蒙版覆盖度合成同一处软强度
 /// （PLAN 五十三）。
+///|
+/// 组上还挂着**非恒等变换**时，`ungroup` / `group-remove` 会**把变换丢掉**
+/// ——画面跟着变，而回包说 `ok`（实测：`rotate grp 90` 之后 `ungroup grp`，
+/// `render_sha256` 从 `c09a3d3b…` 变成 `e4ef0899…`，三个信号里没有一个说
+/// "画面变了"，见 PLAN 五十七）。
+///
+/// 返回**拒绝理由**，恒等变换/非组返回空串（调用方按空串放行）。
+/// 判据一处：两个命令共用这一句，别各写一份"组上有没有变换"。
+pub fn group_transform_error(l : @core.Layer, op : String) -> String {
+  if !(l.kind is @core.ShapeKind::Group) {
+    return ""
+  }
+  let what : Array[String] = []
+  if l.rotation_deg != 0.0 {
+    what.push("rot=\{@core.fmt_num(l.rotation_deg)}")
+  }
+  if l.flip_h || l.flip_v {
+    let d = if l.flip_h && l.flip_v {
+      "both"
+    } else if l.flip_h {
+      "h"
+    } else {
+      "v"
+    }
+    what.push("flip=\{d}")
+  }
+  if what.length() == 0 {
+    return ""
+  }
+  "组 \{l.id} 上还挂着变换（\{what.join("、")}）：\{op} 会把变换**丢掉**、画面跟着变。先 `rotate \{l.id} 0` / `flip \{l.id} none` 清掉它，或者保留这个组"
+}
+
 pub fn layer_caps(l : @core.Layer) -> Array[String] {
   let caps : Array[String] = []
   let reads = fn(field : String) -> Bool {
