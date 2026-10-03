@@ -513,9 +513,10 @@ fn mask_json(m : LayerMask?) -> String {
       let kind = match mask.kind {
         Rect => "rect"
         Ellipse => "ellipse"
+        Polygon => "polygon"
         _ => "rect"
       }
-      "{\"kind\":\"\{kind}\",\"x\":\{fmt_num(mask.x)},\"y\":\{fmt_num(mask.y)},\"w\":\{fmt_num(mask.w)},\"h\":\{fmt_num(mask.h)},\"radius\":\{fmt_num(mask.radius)},\"feather\":\{fmt_num(mask.feather)},\"roughen\":\{fmt_num(mask.roughen)},\"invert\":\{mask.invert}}"
+      "{\"kind\":\"\{kind}\",\"x\":\{fmt_num(mask.x)},\"y\":\{fmt_num(mask.y)},\"w\":\{fmt_num(mask.w)},\"h\":\{fmt_num(mask.h)},\"radius\":\{fmt_num(mask.radius)},\"feather\":\{fmt_num(mask.feather)},\"roughen\":\{fmt_num(mask.roughen)},\"invert\":\{mask.invert},\"points\":\{points_json(mask.points)}}"
     }
   }
 }
@@ -546,17 +547,8 @@ fn layer_json(l : Layer) -> String {
   sb.write_string(mask_json(l.mask))
   sb.write_string(",\"adjust\":")
   sb.write_string(adjust_json(l.adjust))
-  sb.write_string(",\"points\":[")
-  let mut first = true
-  for pt in l.points {
-    if first {
-      first = false
-    } else {
-      sb.write_string(",")
-    }
-    sb.write_string("[\{fmt_num(pt.0)},\{fmt_num(pt.1)}]")
-  }
-  sb.write_string("]")
+  sb.write_string(",\"points\":")
+  sb.write_string(points_json(l.points))
   sb.write_string(",\"fill\":\{fill_json(l.fill)}")
   sb.write_string(",\"stroke\":{\"c\":\"\{@codec.color_to_hex(l.stroke.color)}\",\"w\":\{fmt_num(l.stroke.width)}}")
   sb.write_string(",\"dabs\":[")
@@ -745,14 +737,17 @@ fn mask_of(v : JValue) -> Result[LayerMask?, String] {
   }
   let kind_s = match str_field(raw, "kind") {
     Some(k) => k
-    None => return Err("蒙版缺 kind（认得的是 rect、ellipse；要摘掉蒙版用 remove-mask）")
+    None => return Err("蒙版缺 kind（认得的是 rect、ellipse、polygon；要摘掉蒙版用 remove-mask）")
   }
   let kind = match kind_s {
     "rect" => Rect
     "ellipse" => Ellipse
+    // 任意形状选区（套索）：容器里写的是 polygon（写出端与 `kind_str` 一致）
+    "polygon" => Polygon
+    "poly" => Polygon
     other => {
       return Err(
-        "蒙版 kind 未知：\{other}（认得的是 rect、ellipse；要摘掉蒙版用 remove-mask）",
+        "蒙版 kind 未知：\{other}（认得的是 rect、ellipse、polygon；要摘掉蒙版用 remove-mask）",
       )
     }
   }
@@ -768,9 +763,73 @@ fn mask_of(v : JValue) -> Result[LayerMask?, String] {
         feather: num_f(raw, "feather"),
         roughen: num_f(raw, "roughen"),
         invert: bool_field(raw, "invert"),
+        points: match points_of_or_empty(raw) {
+          Ok(ps) => ps
+          Err(e) => return Err(e)
+        },
       },
     ),
   )
+}
+
+///|
+/// 层/蒙版顶点的**写出**（一处实现）：`[[x,y],…]`。报告面（`query-layer` 的
+/// 蒙版字段）也复用它——两处各写一遍，先烂的一定是没人读的那处。
+pub fn points_json(pts : Array[(Double, Double)]) -> String {
+  let sb = StringBuilder()
+  sb.write_string("[")
+  let mut first = true
+  for pt in pts {
+    if first {
+      first = false
+    } else {
+      sb.write_string(",")
+    }
+    sb.write_string("[\{fmt_num(pt.0)},\{fmt_num(pt.1)}]")
+  }
+  sb.write_string("]")
+  sb.to_string()
+}
+
+///|
+/// 层顶点的**解析**（一处实现，图层与蒙版共用；两边各写一份必然分叉）。
+/// 缺 `points` 是错误（老容器都有它）；允许空数组（形状层之外的 kind 就是空的）。
+fn points_of(v : JValue) -> Result[Array[(Double, Double)], String] {
+  match v.get("points") {
+    Some(JArr(arr)) => points_parse(arr)
+    _ => Err("缺 points")
+  }
+}
+
+///|
+/// 蒙版用：`points` 可以缺席（老容器里的蒙版没有这个字段），缺席 = 空。
+fn points_of_or_empty(v : JValue) -> Result[Array[(Double, Double)], String] {
+  match v.get("points") {
+    Some(JArr(arr)) => points_parse(arr)
+    _ => Ok([])
+  }
+}
+
+///|
+fn points_parse(arr : Array[JValue]) -> Result[Array[(Double, Double)], String] {
+  let points : Array[(Double, Double)] = []
+  for pt in arr {
+    match pt {
+      JArr(pair) =>
+        if pair.length() == 2 {
+          let a = pair[0]
+          let b = pair[1]
+          match (a, b) {
+            (JNum(x), JNum(y)) => points.push((x, y))
+            _ => return Err("points 顶点不是数字")
+          }
+        } else {
+          return Err("points 顶点不是二元组")
+        }
+      _ => return Err("points 顶点不是数组")
+    }
+  }
+  Ok(points)
 }
 
 ///|
@@ -886,26 +945,9 @@ fn layer_of(v : JValue) -> Result[Layer, String] {
     None => Err("缺 stroke")
   }
   let asset = str_of(v, "asset")
-  let points : Array[(Double, Double)] = []
-  match v.get("points") {
-    Some(JArr(arr)) => for pt in arr {
-        match pt {
-          JArr(pair) => {
-            if pair.length() == 2 {
-              let a = pair[0]
-              let b = pair[1]
-              match (a, b) {
-                (JNum(x), JNum(y)) => points.push((x, y))
-                _ => return Err("points 顶点不是数字")
-              }
-            } else {
-              return Err("points 顶点不是二元组")
-            }
-          }
-          _ => return Err("points 顶点不是数组")
-        }
-      }
-    _ => return Err("缺 points")
+  let points = match points_of(v) {
+    Ok(ps) => ps
+    Err(e) => return Err(e)
   }
   let tags : Array[String] = []
   match v.get("tags") {

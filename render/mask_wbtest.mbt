@@ -90,6 +90,7 @@ test "mask_inner_dist：内距是到边界的真实像素距离（SDF 的第二�
     feather: 0.0,
     roughen: 0.0,
     invert: false,
+    points: [],
   }
   assert_true(near_d(mask_inner_dist(m, 1.0, 1.0), 1.0))
   assert_true(near_d(mask_inner_dist(m, 2.0, 5.0), 2.0))
@@ -115,6 +116,7 @@ test "mask_inner_dist：圆角矩形在圆角处按圆弧算内距" {
     feather: 0.0,
     roughen: 0.0,
     invert: false,
+    points: [],
   }
   // 中心 → 内距 10
   assert_true(near_d(mask_inner_dist(m, 10.0, 10.0), 10.0))
@@ -138,6 +140,7 @@ test "mask_inner_dist：椭圆用短半轴做尺度（圆形时精确）" {
     feather: 0.0,
     roughen: 0.0,
     invert: false,
+    points: [],
   }
   assert_true(near_d(mask_inner_dist(c, 5.0, 5.0), 5.0))
   assert_true(near_d(mask_inner_dist(c, 0.0, 5.0), 0.0))
@@ -184,7 +187,7 @@ test "rounded_rect_sdf：radius 超过半边长也按半边长夹住（羽化路
 ///|
 /// 造一个蒙版值（只测覆盖度，与层无关）。
 fn mm(kind : @core.ShapeKind, w : Double, h : Double, feather : Double, roughen : Double) -> @core.LayerMask {
-  { kind, x: 0.0, y: 0.0, w, h, radius: 0.0, feather, roughen, invert: false }
+  { kind, x: 0.0, y: 0.0, w, h, radius: 0.0, feather, roughen, invert: false, points: [] }
 }
 
 ///|
@@ -321,10 +324,129 @@ test "毛边：椭圆路径同样吃 roughen，且 invert 与之正交" {
   }
   assert_true(flipped > 10, msg="椭圆边界也该被毛化，实际 \{flipped} 个")
   // invert 与毛边正交：反选后的覆盖 = 1 − 未反选覆盖（逐点）
-  let inv = { ..mm(@core.ShapeKind::Rect, 40.0, 40.0, 4.0, 3.0), invert: true }
+  let inv = { ..mm(@core.ShapeKind::Rect, 40.0, 40.0, 4.0, 3.0), invert: true, points: [] }
   let plain = mm(@core.ShapeKind::Rect, 40.0, 40.0, 4.0, 3.0)
   assert_true(
     near_d(mask_cover_at(ml(inv), 7.0, 9.0), 1.0 - mask_cover_at(ml(plain), 7.0, 9.0)),
     msg="invert 必须是 1−覆盖（含毛边）",
   )
+}
+///|
+/// 造一个多边形蒙版：顶点是 **20×20 盒子内的局部坐标**（`add-mask kind=polygon`
+/// 收的就是这个坐标系）。
+fn mp(points : Array[(Double, Double)]) -> @core.LayerMask {
+  { ..mm(@core.ShapeKind::Polygon, 20.0, 20.0, 0.0, 0.0), points }
+}
+
+///|
+test "多边形蒙版：**盒子内、多边形外**必须是 0 —— 这是「任意形状选区」的命根子" {
+  // 直角三角形 (0,0)-(20,0)-(0,20)：斜边是 x+y=20。
+  // (15,15) 在盒子里、也在矩形蒙版的覆盖里，但在三角形**外**。
+  // 若哪天多边形分支掉回矩形（老引擎的行为），这条立刻红 ——
+  // 而"套索画出来的选区变成一个方框"正是要拦的那个静默错渲。
+  let l = ml(mp([(0.0, 0.0), (20.0, 0.0), (0.0, 20.0)]))
+  assert_eq(mask_cover_at(l, 15.0, 15.0), 0.0, msg="盒内三角形外必须不覆盖")
+  assert_eq(mask_cover_at(l, 2.0, 2.0), 1.0, msg="三角形内必须覆盖")
+  assert_eq(mask_cover_at(l, 19.0, 19.0), 0.0, msg="斜边外侧不覆盖")
+  assert_eq(mask_cover_at(l, 12.0, 4.0), 1.0, msg="斜边内侧覆盖")
+  assert_eq(mask_cover_at(l, 9.0, 9.0), 1.0, msg="斜边内侧更靠近原点处覆盖")
+  // ⚠️ **边界本身算外**：`in_polygon` 是半开约定，正好落在斜边 x+y=20 上的点
+  // 判"不在内"（实测；第一版我把这条写成了"算内"，测试当场红）。
+  assert_eq(mask_cover_at(l, 10.0, 10.0), 0.0, msg="斜边上按半开约定算外")
+}
+
+///|
+test "多边形蒙版：内距带符号（内部为正、外部为负），且与矩形在同一形状上一致" {
+  // 顶点正好围成 20×20 正方形 ⇒ 内距必须与矩形蒙版**逐点相同**：
+  // 同一条几何在两种 kind 下给出不同内距，就是"方向/含义分叉"的开始。
+  let square = mp([(0.0, 0.0), (20.0, 0.0), (20.0, 20.0), (0.0, 20.0)])
+  let rect = mm(@core.ShapeKind::Rect, 20.0, 20.0, 0.0, 0.0)
+  for pt in [(1.0, 1.0), (5.0, 12.0), (10.0, 10.0), (0.5, 19.5)] {
+    assert_eq(
+      mask_inner_dist(square, pt.0, pt.1),
+      mask_inner_dist(rect, pt.0, pt.1),
+      msg="顶点围成正方形的多边形，内距应与矩形相同：(\{pt.0}, \{pt.1})",
+    )
+  }
+  // **符号**：外部为负（丢了这个符号，羽化会朝反方向长，而覆盖度看着"有过渡"）
+  assert_true(near_d(mask_inner_dist(square, 25.0, 5.0), 0.0 - 5.0), msg="外部应为负内距")
+  assert_true(near_d(mask_inner_dist(square, 0.0 - 3.0, 0.0 - 4.0), 0.0 - 5.0), msg="角外应为负内距")
+}
+
+///|
+test "多边形蒙版：羽化与 invert 走同一套（软边只有一个来源）" {
+  let hard = mp([(0.0, 0.0), (20.0, 0.0), (0.0, 20.0)])
+  let soft : @core.LayerMask = { ..hard, feather: 4.0 }
+  let lh = ml(hard)
+  let ls = ml(soft)
+  // 硬边：内部 1 / 外部 0
+  assert_eq(mask_cover_at(lh, 2.0, 2.0), 1.0)
+  assert_eq(mask_cover_at(lh, 15.0, 15.0), 0.0)
+  // 软边：越往里越实（方向只有一个），且**外部仍是 0**
+  // (2,2) 到最近边（两条直角边）的内距是 2、feather=4 ⇒ 落在过渡带上：
+  // 既不是 0 也不是 1 —— **这正是"羽化真的生效"的证据**（写死 0/1 的实现会红）。
+  let ramp = mask_cover_at(ls, 2.0, 2.0)
+  assert_true(ramp > 0.0 && ramp < 1.0, msg="过渡带内应取中间值，实际 \{ramp}")
+  // (5,5) 到最近直角边 5 > feather ⇒ 满覆盖
+  assert_eq(mask_cover_at(ls, 5.0, 5.0), 1.0, msg="离边界远于 feather 处应为满覆盖")
+  assert_eq(mask_cover_at(ls, 25.0, 25.0), 0.0, msg="外部必须仍是 0")
+  // 反选翻面
+  let inv : @core.LayerMask = { ..hard, invert: true }
+  assert_eq(mask_cover_at(ml(inv), 2.0, 2.0), 0.0)
+  assert_eq(mask_cover_at(ml(inv), 15.0, 15.0), 1.0)
+}
+
+///|
+test "多边形蒙版：顶点不足 3 个不 panic（覆盖恒 0，错误由入口/lint 报）" {
+  let l = ml(mp([(0.0, 0.0), (10.0, 0.0)]))
+  assert_eq(mask_cover_at(l, 2.0, 2.0), 0.0)
+  assert_eq(mask_cover_at(l, 0.0, 0.0), 0.0)
+}
+
+///|
+test "多边形蒙版：毛毛边也吃同一套（内距 - 确定性噪声），且与 roughen=0 不同" {
+  let base = mp([(0.0, 0.0), (20.0, 0.0), (20.0, 20.0), (0.0, 20.0)])
+  let rough : @core.LayerMask = { ..base, roughen: 3.0 }
+  let l0 = ml(base)
+  let lr = ml(rough)
+  let mut differing = 0
+  for i in 0..<40 {
+    let t = i.to_double() * 0.5
+    if mask_cover_at(l0, t, 0.2) != mask_cover_at(lr, t, 0.2) {
+      differing = differing + 1
+    }
+  }
+  assert_true(differing > 0, msg="毛化必须真的改变边界附近的覆盖（否则参数白装）")
+  // 确定性：同一点两次取值一致
+  assert_eq(mask_cover_at(lr, 5.5, 0.2), mask_cover_at(lr, 5.5, 0.2))
+}
+
+///|
+test "多边形蒙版：**层级**渲染也要裁（快速路径的『覆盖恒为 1 盒』不许按矩形算）" {
+  // 这条守的是一个真踩到的 bug：`mask_full_box`（覆盖恒为 1 的像素盒，是矩形层的
+  // **快速填充**路径）对非椭圆一律按矩形内域算。三角形蒙版于是把矩形内域整块
+  // 按 cover=1 合成 —— 形状外那一圈**静默不裁**。`mask_cover_at` 级别的测试
+  // 照不到它（快速路径根本不调 mask_cover_at），所以判据必须打在**渲染产物**上。
+  let doc = @core.new_document("poly-fast", 20, 20)
+  let l = @core.default_layer("r", "r", 0.0, 0.0, 20.0, 20.0)
+  let red = { ..l, fill: @core.Fill::Solid(0xFFFF0000) }
+  let tri : @core.LayerMask = {
+    kind: @core.ShapeKind::Polygon,
+    x: 0.0,
+    y: 0.0,
+    w: 20.0,
+    h: 20.0,
+    radius: 0.0,
+    feather: 0.0,
+    roughen: 0.0,
+    invert: false,
+    points: [(0.0, 0.0), (20.0, 0.0), (0.0, 20.0)],
+  }
+  doc.layers.push({ ..red, mask: Some(tri) })
+  let img = render_doc(doc, RenderEnv::new())
+  assert_eq(@codec.rgba_get(img, 2, 2), 0xFFFF0000, msg="三角形内保留")
+  // 被裁掉处露出的是**画布白底**（`render_layers` 起手 `0xFFFFFFFF`，
+  // 见 render_test 的"未覆盖区应是白底"），不是透明。
+  assert_eq(@codec.rgba_get(img, 15, 15), 0xFFFFFFFF, msg="盒内三角形外必须被裁（快速路径不许当矩形）")
+  assert_eq(@codec.rgba_get(img, 18, 18), 0xFFFFFFFF, msg="更外侧同样被裁")
 }

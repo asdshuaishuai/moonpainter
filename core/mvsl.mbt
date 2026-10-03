@@ -32,13 +32,23 @@ pub const MVSL_IR_VERSION : Int = 1
 /// render contract version：渲染契约（色彩+数值+算子语义）总版本。
 /// 旧引擎遇更高版本直接拒绝打开。
 ///
-/// 为什么是 2：契约 2 加入了**蒙版毛边**（`LayerMask.roughen`）。它是"老引擎
-/// 会画错"的语义（老引擎读不到这个字段 → 把带毛边的蒙版画成**光滑边**，
-/// 静默错渲），所以用到它的文档必须在 manifest 里声明 2（写入口是
-/// `@core.required_render_contract`，**按文档实际用到的能力**声明，不是一律
-/// 写上限——一律写上限等于让版本闸失去分辨力，老引擎将打不开任何新容器）。
-/// 读入端照旧：`render_contract > RENDER_CONTRACT_VERSION` 一律拒绝。
-pub const RENDER_CONTRACT_VERSION : Int = 2
+/// 契约的**档位**（`required_render_contract` 报"这份文档实际用到的最低档"，
+/// 读入端拿这里的**上限**拒）。加一档前先问一句："老引擎拿到这份文档会**画成
+/// 什么**"——只要答案不是"拒绝"而是"画错"，就必须升档，否则就是静默错渲。
+///   * 1 = 基础；
+///   * 2 = **蒙版毛边**（`LayerMask.roughen`）：老引擎读不到这个字段，会把毛边
+///         蒙版画成**光滑边**；
+///   * 3 = **多边形蒙版**（`LayerMask.kind = Polygon`）：老引擎的 `mask_cover_at`
+///         只认 Ellipse、其余一律当**矩形**画 ⇒ 套索选区会被画成一个方框。
+pub const RENDER_CONTRACT_ROUGHEN : Int = 2
+
+///|
+pub const RENDER_CONTRACT_POLY_MASK : Int = 3
+
+///|
+/// 引擎支持的**最高**档（读入端：`render_contract > 它` 一律拒绝打开，
+/// 见 `mpd/mpd.mbt`）。
+pub const RENDER_CONTRACT_VERSION : Int = 3
 
 ///|
 /// 选择子算法版本（kernel/window/环距约定都属于算法的一部分）。

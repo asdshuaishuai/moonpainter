@@ -776,6 +776,7 @@ const INTERIOR_EPS : Double = 1.0e-6
 /// 而蒙版内距的算式是三支之一（见 `mask_inner_dist`）：
 ///   * 矩形（含圆角）：`inner_dist = 内距`；
 ///   * 椭圆：`inner_dist = (1 - ρ) × min(w,h)/2`；
+///   * **多边形：没有这样的盒子**（见下面那一支，直接退回通用路径）；
 /// 毛边噪声 `mask_edge_offset` 被 `roughen` 界住（`amp × (v*2-1)`，`v ∈ [0,1]`
 /// ⇒ `offset ∈ [-roughen, +roughen]`）。所以取
 /// `t = feather + roughen + ε`，凡 `inner_dist ≥ t` 的像素**必然** cover == 1.0：
@@ -803,6 +804,12 @@ fn mask_full_box(m : @core.LayerMask) -> (Int, Int, Int, Int)? {
       let hy = rho * m.h / 2.0 * INV_SQRT2
       (m.w / 2.0 - hx, m.w / 2.0 + hx, m.h / 2.0 - hy, m.h / 2.0 + hy)
     }
+    // 多边形（任意形状选区）：**没有这块**。多边形的"覆盖恒为 1"区域一般
+    // 不是盒子（三角形的只有一个点，细长斜条一个点都没有），按矩形内域算就是
+    // **比实际大** ⇒ 形状外的那一圈被按 cover=1 合成（实测：三角形蒙版盖在
+    // 矩形层上，(15,15) 在三角形外却仍是原色 —— 静默不裁，正是本函数注释里
+    // 说的"静默加亮"）。返回 None 只是这一层退回通用路径（慢一点，画面一样）。
+    @core.ShapeKind::Polygon => return None
     // 其它 kind 走 `mask_inner_dist` 的圆角矩形支（与它同一套语义）。
     _ => {
       let r = if m.radius > 0.0 { m.radius } else { 0.0 }
@@ -3123,7 +3130,60 @@ fn mask_inner_dist(mask : @core.LayerMask, dx : Double, dy : Double) -> Double {
         let half = short / 2.0
         (1.0 - rho) * half
       }
+    @core.ShapeKind::Polygon => polygon_inner_dist(mask.points, dx, dy)
     _ => -rounded_rect_sdf(dx, dy, mask.w, mask.h, mask.radius)
+  }
+}
+
+///|
+/// 多边形到边界的**内距**：内部为正、外部为负（到最近一条边的距离，带符号）。
+///
+/// 为什么复用同一个"内距"而不是给多边形单独写一套羽化：蒙版的软边只有一个
+/// 来源（`soft_cover(d / feather, Linear)`），内距的**符号与方向**就是它的
+/// 全部语义。多边形自己算一套阈值，就会和矩形/椭圆的羽化方向悄悄相反
+/// ——那正是"给参数但效果不对"的温床。
+fn polygon_inner_dist(
+  pts : Array[(Double, Double)],
+  dx : Double,
+  dy : Double,
+) -> Double {
+  let n = pts.length()
+  if n < 3 {
+    return -1.0
+  }
+  let mut best = -1.0
+  for i in 0..<n {
+    let ax = pts[i].0
+    let ay = pts[i].1
+    let j = if i + 1 == n { 0 } else { i + 1 }
+    let bx = pts[j].0
+    let by = pts[j].1
+    let vx = bx - ax
+    let vy = by - ay
+    let len2 = vx * vx + vy * vy
+    let t = if len2 <= 0.0 {
+      0.0
+    } else {
+      let u = ((dx - ax) * vx + (dy - ay) * vy) / len2
+      if u < 0.0 {
+        0.0
+      } else if u > 1.0 {
+        1.0
+      } else {
+        u
+      }
+    }
+    let px = ax + vx * t
+    let py = ay + vy * t
+    let d = Double::sqrt((dx - px) * (dx - px) + (dy - py) * (dy - py))
+    if best < 0.0 || d < best {
+      best = d
+    }
+  }
+  if in_polygon(pts, dx, dy) {
+    best
+  } else {
+    -best
   }
 }
 
@@ -3230,6 +3290,9 @@ fn mask_cover_at(l : @core.Layer, px : Double, py : Double) -> Double {
     @pixel.soft_cover(d / mask.feather, @pixel.Linear)
   } else {
     let inside = match mask.kind {
+      // 任意形状选区（套索）：顶点是蒙版盒子内的局部坐标，判点复用多边形图层的
+      // `in_polygon`——两处各写一份必然分叉（"窗内盒外有墨"那类 bug 就是这么来的）。
+      @core.ShapeKind::Polygon => in_polygon(mask.points, dx, dy)
       @core.ShapeKind::Ellipse => {
         if mask.w <= 0.0 || mask.h <= 0.0 {
           false

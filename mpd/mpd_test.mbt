@@ -159,6 +159,7 @@ test "manifest 的 render_contract 按文档**实际用到的能力**声明（�
     feather: 0.0,
     roughen: 3.0,
     invert: false,
+    points: [],
   }
   doc.layers[0] = { ..l0, mask: Some(mk) }
   let packed2 = match @mpd.pack(m) {
@@ -167,8 +168,10 @@ test "manifest 的 render_contract 按文档**实际用到的能力**声明（�
   }
   let z2 = @codec.Zip::open(packed2)
   let man2 = z2.read_text("manifest.json")
-  let want = "\"render_contract\":" + @core.RENDER_CONTRACT_VERSION.to_string()
-  assert_true(man2.contains(want), msg="用到毛边必须声明当前档（\{want}）：\{man2}")
+  // ⚠️ 毛边声明的必须是**毛边那一档**（2），不是引擎上限（3）：一律写上限
+  // 等于让版本闸失去分辨力（老引擎将打不开任何新容器）。
+  let want = "\"render_contract\":" + @core.RENDER_CONTRACT_ROUGHEN.to_string()
+  assert_true(man2.contains(want), msg="用到毛边必须声明毛边档（\{want}）：\{man2}")
   match @mpd.unpack(packed2) {
     Ok(back) =>
       match back.doc.layers[0].mask {

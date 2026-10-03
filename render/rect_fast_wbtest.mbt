@@ -183,6 +183,7 @@ fn rect_mask(
     feather,
     roughen,
     invert,
+    points: [],
   }
 }
 

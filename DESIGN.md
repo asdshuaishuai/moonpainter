@@ -292,8 +292,18 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
 ## 7. 远期路线（本轮明确不做，排期见 PLAN.md §8）
 
 - **已落地的部分**（原列在本节，现已实现，留档说明**做到哪**）：
-  **P4 蒙版**只做了**几何**的（矩形/椭圆 + 圆角 + `invert`，命令面 + 人类前端拖拽 + AI 工具面），
-  栅格蒙版 / live mask / 更复杂的羽化（高斯、按描边自适应）仍未做；**P5 调整层**做了**叠加式像素算子**（`add-adjust` 的
+  **P4 蒙版**只做了**几何**的（矩形/椭圆/**多边形**（任意形状选区，即"套索"）
+  + 圆角 + 羽化 + 毛边 + `invert`，命令面 + 人类前端拖拽/套索 + AI 工具面），
+  栅格蒙版 / live mask / 更复杂的羽化（高斯、按描边自适应）仍未做；
+  ⚠️ 三条口径（都在 `render/scene.mbt` 一处实现，别在别处再算一遍）：
+  ①**多边形顶点是蒙版盒子内的局部坐标**（0..w / 0..h），盒子就是支持窗，
+  顶点跑出盒子那部分画不出来 ⇒ 入口与 `lint` 都拒（`core.mask_param_error` 一处判据），
+  至少 3 个顶点（少于 3 个围不出面积，`in_polygon` 第一句就返回 false）；
+  ②**边界本身算"外"**（`in_polygon` 的半开约定，与矩形"左闭右开"同源）；
+  ③用到多边形蒙版的容器声明 `render_contract:3`：老引擎的 `mask_cover_at` 只认
+  Ellipse、其余一律当**矩形**画 ⇒ 套索选区会被画成方框，属静默错渲。
+  `required_render_contract` 取**所有层里的最高档**（毛边=2、多边形=3），
+  不是"遇到第一档就 return"；**P5 调整层**做了**叠加式像素算子**（`add-adjust` 的
   11 个算子；每个算子的可调数值**有取值范围**——brightness/contrast/saturation/
   warm 是 -1..1，blur/sharpen/smooth/whiten/vignette 是 0..1，invert/grayscale
   **没有数值**（渲染器不读 value，给了入口直接拒绝）；范围与清单是
@@ -395,7 +405,8 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
   `图层级结果 == composite(背景, shift(纯前景) 带原 α)`。
   另注：`out=lerp(in,op(in),w)` 是**软权重过渡**，与"去污染"不是一回事
   （早先文档混用过这两个词）；
-- 几何蒙版用**画布坐标**：`render/scene.mbt` 的 `mask_cover_at(l, px, py)` 直接拿画布点
+- 几何蒙版用**画布坐标**（多边形那串顶点则是**蒙版盒内的局部坐标**，盒子本身仍是画布坐标）：
+  `render/scene.mbt` 的 `mask_cover_at(l, px, py)` 直接拿画布点
   与 `mask.x/y` 比，所以 `move` / `rotate` 图层时蒙版**不跟着走**（实测：层右移 20 后，
   原蒙版范围内的点渲染为白、但 `pick` 仍命中该层）。这跟本文开头引的 Photoshop 遗产
   「栅格蒙版与图层同变换」**不是一回事**——那条是对 `.comp` 能力的描述，本仓库的几何

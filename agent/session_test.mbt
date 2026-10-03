@@ -1389,3 +1389,45 @@ test "group-add：嵌套编组被拒（成员是组），且不产生\"同时在
   let q2 = run(s, "query-layer g2")
   assert_true(q2.contains("\"id\":\"b\""), msg=q2)
 }
+
+///|
+test "多边形蒙版（套索）：只改形状内、改得动、缺顶点/顶点出盒被拒、报告面回得出来" {
+  // 「任意形状选区」的命令面闭环。判据的命根子是**盒内但形状外必须是白的**——
+  // 若多边形分支掉回矩形（老引擎的行为），这里立刻红。
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 20 20")
+  let _ = run(s, "add-rect x=0 y=0 w=20 h=20 fill=#FF0000FF id=r")
+  let env = @render.RenderEnv::new()
+  let ok = run(s, "add-mask r kind=polygon x=0 y=0 w=20 h=20 points=0,0;20,0;0,20")
+  assert_true(ok.contains("\"op\":\"add-mask\""), msg=ok)
+  let tri = @render.render_doc(unwrap_doc(s), env)
+  assert_eq(@codec.rgba_get(tri, 2, 2), 0xFFFF0000, msg="三角形内保留")
+  assert_eq(@codec.rgba_get(tri, 15, 15), 0xFFFFFFFF, msg="**盒内三角形外必须被裁**")
+  // 报告面：顶点回得出来（人/AI 要能读回自己装进去的选区）
+  let q = run(s, "query-layer r")
+  assert_true(q.contains("\"kind\":\"polygon\""), msg=q)
+  assert_true(q.contains("\"points\":[[0,0],[20,0],[0,20]]"), msg=q)
+  // 改得动：换顶点 → 形状跟着变（"选区画错了要能改"）
+  let _ = run(s, "set-mask r points=0,0;20,0;20,20")
+  let moved = @render.render_doc(unwrap_doc(s), env)
+  // ⚠️ 判点别选在新斜边上：`(15,15)` 正好落在 y=x 上，按半开约定算**外**
+  // （第一版就选在这儿，测试当场红——它没说错话）。
+  assert_eq(@codec.rgba_get(moved, 18, 2), 0xFFFF0000, msg="换顶点后原本在外的点进了选区")
+  assert_eq(@codec.rgba_get(moved, 2, 18), 0xFFFFFFFF, msg="换顶点后原本在内的点出了选区")
+  // 部分更新：只给 points 时其余字段原样保留（kind 不被重置）
+  assert_true(run(s, "query-layer r").contains("\"kind\":\"polygon\""))
+  // 入口拒绝①：顶点不足 3 个（围不出面积）
+  let few = run(s, "add-mask r kind=polygon x=0 y=0 w=20 h=20 points=0,0;5,0")
+  assert_true(few.contains("至少要有 3 个顶点"), msg=few)
+  // 入口拒绝②：顶点跑出盒子（盒子 = 支持窗，跑出去的画不出来）
+  let out = run(s, "add-mask r kind=polygon x=0 y=0 w=20 h=20 points=0,0;99,0;5,5")
+  assert_true(out.contains("99"), msg=out)
+  assert_true(out.contains("盒子"), msg=out)
+  // 入口拒绝③：非多边形蒙版不许带顶点（渲染器不读它，改了画面逐位不变）
+  let stray = run(s, "add-mask r kind=rect x=0 y=0 w=20 h=20 points=1,1;2,2;3,3")
+  assert_true(stray.contains("只有多边形蒙版"), msg=stray)
+  // 入口拒绝④：kind 拼错要说清合法取值（含新增的 polygon）
+  let bad = run(s, "add-mask r kind=triangle x=0 y=0 w=20 h=20")
+  assert_true(bad.contains("polygon"), msg=bad)
+}

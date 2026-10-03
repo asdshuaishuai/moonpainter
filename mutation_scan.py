@@ -1503,7 +1503,7 @@ MUTS = [
         "core/json.mbt",
         r"""    other => {
       return Err(
-        "蒙版 kind 未知：\{other}（认得的是 rect、ellipse；要摘掉蒙版用 remove-mask）",
+        "蒙版 kind 未知：\{other}（认得的是 rect、ellipse、polygon；要摘掉蒙版用 remove-mask）",
       )
     }""",
         """    _ => Rect""",
@@ -2539,6 +2539,61 @@ MUTS = [
         "agent/session.mbt",
         '''  let _ = update_layer(doc.layers, id, fn(l) { { ..l, asset_hash: hash, w: bw, h: bh } })''',
         '''  let _ = update_layer(doc.layers, id, fn(l) { { ..l, asset_hash: hash, w: bw, h: bh, mask: None, tags: [] } })''',
+        "killed",
+    ),
+    (
+        "R67",
+        "多边形蒙版硬边支按矩形判（套索选区被画成方框 = 静默错渲）",
+        "render/scene.mbt",
+        "      @core.ShapeKind::Polygon => in_polygon(mask.points, dx, dy)",
+        "      @core.ShapeKind::Polygon => dx >= 0.0 && dx < mask.w && dy >= 0.0 && dy < mask.h",
+        "killed",
+    ),
+    (
+        "R68",
+        "多边形内距丢掉符号（羽化朝反方向长，覆盖度看着仍有过渡）",
+        "render/scene.mbt",
+        "    -best",
+        "    best",
+        "killed",
+    ),
+    (
+        "R69",
+        "契约档早退（只看先遇到的那层：毛边(2)+套索(3) 并存时报 2，老引擎照样打开）",
+        "core/document.mbt",
+        """  let mut rc = 1
+  for l in doc.layers {
+    match l.mask {
+      Some(m) => {
+        match m.kind {
+          ShapeKind::Polygon => if rc < RENDER_CONTRACT_POLY_MASK {
+            rc = RENDER_CONTRACT_POLY_MASK
+          }
+          _ => ()
+        }
+        if m.roughen > 0.0 && rc < RENDER_CONTRACT_ROUGHEN {
+          rc = RENDER_CONTRACT_ROUGHEN
+        }
+      }
+      None => ()
+    }
+  }
+  rc""",
+        """  for l in doc.layers {
+    match l.mask {
+      Some(m) => {
+        match m.kind {
+          ShapeKind::Polygon => return RENDER_CONTRACT_POLY_MASK
+          _ => ()
+        }
+        if m.roughen > 0.0 {
+          return RENDER_CONTRACT_ROUGHEN
+        }
+      }
+      None => ()
+    }
+  }
+  1""",
         "killed",
     ),
     ]

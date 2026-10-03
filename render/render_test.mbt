@@ -316,7 +316,7 @@ test "pick：只报「真的在那里画了东西」的层（与 paint_layer 同
   d4.layers.push(
     {
       ..@core.default_layer("m", "m", 0.0, 0.0, 60.0, 60.0),
-      mask: Some(@core.LayerMask::{ kind: @core.ShapeKind::Rect, x: 0.0, y: 0.0, w: 10.0, h: 10.0, radius: 0.0, feather: 0.0, roughen: 0.0, invert: false }),
+      mask: Some(@core.LayerMask::{ kind: @core.ShapeKind::Rect, x: 0.0, y: 0.0, w: 10.0, h: 10.0, radius: 0.0, feather: 0.0, roughen: 0.0, invert: false, points: [] }),
     },
   )
   assert_true(@render.pick(d4, 40.0, 40.0) is None, msg="蒙版外的点不算「在那里」")
@@ -437,6 +437,7 @@ test "毛边蒙版进真渲染管线：边界被啃动、深处不动、pick 与
       feather: 0.0,
       roughen: rough,
       invert: false,
+      points: [],
     }
     d.layers.push(
       {

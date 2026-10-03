@@ -306,6 +306,7 @@ test "lint 兜住手改容器里的退化蒙版（入口拒绝什么，lint 必�
     feather: 1.0,
     roughen: 1.0,
     invert: false,
+    points: [],
   }
   doc.layers.push({ ..dl, mask: Some(ok) })
   // 正控：正常蒙版一个字都不报（判据两头都要咬得住）

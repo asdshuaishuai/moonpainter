@@ -271,6 +271,7 @@ test "lint：变换/混合/蒙版的读点矩阵（表里每一格都要报，�
     feather: 0.0,
     roughen: 0.0,
     invert: false,
+    points: [],
   }
   // ① 不读它的 kind：每格都必须报
   let bad = @core.new_document("lint-matrix-bad", 64, 64)

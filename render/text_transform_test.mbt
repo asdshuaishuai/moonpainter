@@ -23,6 +23,7 @@ fn ttx(mask_w : Double) -> @core.Layer {
           feather: 0.0,
           roughen: 0.0,
           invert: false,
+          points: [],
         },
       ),
     }
@@ -260,6 +261,7 @@ test "文本层的蒙版按**层局部**坐标采样（旧实现拿画布坐标 
         feather: 0.0,
         roughen: 0.0,
         invert: false,
+        points: [],
       },
     ),
   })

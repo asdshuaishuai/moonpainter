@@ -57,6 +57,7 @@ fn adj_mask(
     feather,
     roughen,
     invert,
+    points: [],
   }
 }
 

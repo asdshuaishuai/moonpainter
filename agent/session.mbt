@@ -509,7 +509,7 @@ fn layer_summary(l : @core.Layer) -> String {
   match l.mask {
     Some(m) =>
       sb.write_string(
-        ",\"mask\":{\"kind\":\"\{kind_str(m.kind)}\",\"x\":\{@core.fmt_num(m.x)},\"y\":\{@core.fmt_num(m.y)},\"w\":\{@core.fmt_num(m.w)},\"h\":\{@core.fmt_num(m.h)},\"radius\":\{@core.fmt_num(m.radius)},\"feather\":\{@core.fmt_num(m.feather)},\"roughen\":\{@core.fmt_num(m.roughen)},\"invert\":\{m.invert}}",
+        ",\"mask\":{\"kind\":\"\{kind_str(m.kind)}\",\"x\":\{@core.fmt_num(m.x)},\"y\":\{@core.fmt_num(m.y)},\"w\":\{@core.fmt_num(m.w)},\"h\":\{@core.fmt_num(m.h)},\"radius\":\{@core.fmt_num(m.radius)},\"feather\":\{@core.fmt_num(m.feather)},\"roughen\":\{@core.fmt_num(m.roughen)},\"invert\":\{m.invert},\"points\":\{@core.points_json(m.points)}}",
       )
     None => ()
   }
@@ -1408,13 +1408,13 @@ fn cmd_set_adjust(s : Session, tokens : Array[String]) -> String {
 /// 以及字典里的用法串）。两处各写一份就会漂移——而漂移的那一半正是 LLM
 /// 唯一的说明书（它照字典发参数，字典没写 / 写错 → 一直发错）。
 fn mask_keys() -> Array[String] {
-  ["kind", "x", "y", "w", "h", "radius", "feather", "roughen", "invert"]
+  ["kind", "x", "y", "w", "h", "radius", "feather", "roughen", "invert", "points"]
 }
 
 ///|
 /// 字典里的蒙版参数用法串（从键清单生成，顺序即清单顺序）。
 pub fn mask_key_doc() -> String {
-  let mut s = "kind=rect|ellipse"
+  let mut s = "kind=rect|ellipse|polygon"
   for k in mask_keys() {
     let part = match k {
       "kind" => ""
@@ -1422,6 +1422,9 @@ pub fn mask_key_doc() -> String {
       "feather" => " [feather=<边缘羽化 px，默认 0=硬边；过渡带在蒙版内侧>]"
       "roughen" => " [roughen=<边缘毛化 px，默认 0=光滑边>]"
       "invert" => " [invert=true]"
+      // 任意形状选区：顶点是**盒子内的局部坐标** `x,y;x,y;…`。盒子就是支持窗，
+      // 顶点跑出盒子那部分画不出来 —— 入口与 lint 用同一条判据（@core.mask_param_error）。
+      "points" => " [points=<多边形顶点 x,y;x,y;…，仅 kind=polygon；局部坐标 0..w/0..h，至少 3 个>]"
       _ => " " + k + "=<像素>"
     }
     s = s + part
@@ -1455,7 +1458,34 @@ fn mask_arg_kind(
     None => Ok(cur)
     Some("rect") => Ok(@core.ShapeKind::Rect)
     Some("ellipse") => Ok(@core.ShapeKind::Ellipse)
-    Some(other) => Err("蒙版 kind 应为 rect|ellipse，got \{other}")
+    // 两种写法都收：报告面（kind_str）写的是 polygon，人能照着抄回来
+    Some("polygon") => Ok(@core.ShapeKind::Polygon)
+    Some("poly") => Ok(@core.ShapeKind::Polygon)
+    Some(other) => Err("蒙版 kind 应为 rect|ellipse|polygon，got \{other}")
+  }
+}
+
+///|
+/// 蒙版顶点的读取器（`add-mask`）：没给 = 空；给了就交给 `parse_points`
+/// ——与多边形图层**同一个**解析器、同一条错误话术（各写一份必然分叉）。
+fn mask_arg_points(
+  m : Map[String, String],
+) -> Result[Array[(Double, Double)], String] {
+  match m.get("points") {
+    None => Ok([])
+    Some(s) => parse_points(s)
+  }
+}
+
+///|
+/// 蒙版顶点的读取器（`set-mask`，部分更新）：没给 = 保留原样。
+fn mask_arg_points_keep(
+  m : Map[String, String],
+  cur : Array[(Double, Double)],
+) -> Result[Array[(Double, Double)], String] {
+  match m.get("points") {
+    None => Ok(cur)
+    Some(s) => parse_points(s)
   }
 }
 
@@ -1520,6 +1550,10 @@ fn cmd_add_mask(s : Session, tokens : Array[String]) -> String {
     feather: 0.0,
     roughen: 0.0,
     invert: false,
+    points: match mask_arg_points(m) {
+      Ok(ps) => ps
+      Err(e) => return err(e)
+    },
   }
   // radius/feather/roughen 都曾"非法值静默变 0"：`radius=abc` 不报错、`radius=-5`
   // 也收。它们现在真的参与渲染（圆角/羽化/毛边），静默降级会让"看起来加了效果"
@@ -1650,7 +1684,22 @@ fn cmd_set_mask(s : Session, tokens : Array[String]) -> String {
     Ok(b) => b
     Err(e) => return err(e)
   }
-  let neu : @core.LayerMask = { kind, x, y, w, h, radius, feather, roughen, invert }
+  let points = match mask_arg_points_keep(m, old.points) {
+    Ok(ps) => ps
+    Err(e) => return err(e)
+  }
+  let neu : @core.LayerMask = {
+    kind,
+    x,
+    y,
+    w,
+    h,
+    radius,
+    feather,
+    roughen,
+    invert,
+    points,
+  }
   let why = @core.mask_param_error(neu)
   if why != "" {
     return err(why)

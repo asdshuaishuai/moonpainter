@@ -150,6 +150,13 @@ pub(all) struct LayerMask {
   /// 边缘毛化幅度（像素）；0 = 光滑边（历史行为）
   roughen : Double
   invert : Bool
+  /// 多边形蒙版（`kind = Polygon`）的顶点：**蒙版盒子内的局部坐标**
+  /// （0..w / 0..h，与 `Layer.points` 同规）；kind 不是 Polygon 时恒为空。
+  ///
+  /// 为什么是"一个盒子 + 一串顶点"：盒子就是**支持窗**（它决定这层的渲染窗口），
+  /// 顶点跑出盒子那部分就画不出来，所以入口与 lint 都要求顶点落在盒子里
+  /// （与多边形图层同一条纪律）。**任意形状选区**（套索）就是靠这个 kind 表达的。
+  points : Array[(Double, Double)]
 }
 
 ///|
@@ -176,6 +183,26 @@ pub fn mask_param_error(m : LayerMask) -> String {
   if m.roughen < 0.0 {
     return "蒙版 roughen 不能为负：\{fmt_num(m.roughen)}（0 = 光滑边）"
   }
+  match m.kind {
+    ShapeKind::Polygon => ()
+    _ =>
+      if m.points.length() > 0 {
+        return "只有多边形蒙版才带顶点：这份蒙版带着 \{m.points.length()} 个点（渲染器不读它 ⇒ 改了画面逐位不变，只会平白改变指纹）"
+      }
+  }
+  match m.kind {
+    ShapeKind::Polygon => {
+      if m.points.length() < 3 {
+        return "多边形蒙版至少要有 3 个顶点：现在 \{m.points.length()} 个（围不出面积 ⇒ invert=false 时这层被整层藏掉、invert=true 时整层露出）"
+      }
+      for p in m.points {
+        if p.0 < 0.0 || p.1 < 0.0 || p.0 > m.w || p.1 > m.h {
+          return "多边形蒙版的顶点必须落在蒙版盒子里（盒子 = 支持窗，跑出去的顶点画不出来）：顶点 (\{fmt_num(p.0)}, \{fmt_num(p.1)}) 不在 0..\{fmt_num(m.w)} × 0..\{fmt_num(m.h)} 之内"
+        }
+      }
+    }
+    _ => ()
+  }
   ""
 }
 
@@ -188,17 +215,32 @@ pub fn mask_param_error(m : LayerMask) -> String {
 /// 一律拒绝打开），所以只要**写的时候按实际用到的能力声明**，旧引擎就会在
 /// 打开时失败得响。
 ///
-/// 目前只有一档需要升级：
+/// 目前有两档需要升级：
 ///   * 2 = 用到蒙版毛边（`roughen > 0`）
-/// 别在这里写"总是 2"——那等于把所有容器都标成新契约，闸就失去了分辨力。
+///   * 3 = 用到**多边形蒙版**（`kind = Polygon`）
+/// 别在这里写"总是 3"——那等于把所有容器都标成新契约，闸就失去了分辨力。
+/// ⚠️ 取**所有层里的最高档**（不是遇到第一档就 return）：一份文档完全可能既有
+/// 毛边蒙版（2）又有套索蒙版（3），只看先遇到的那一层就会把 3 报成 2，
+/// 于是老引擎打开它、把套索画成方框。
 pub fn required_render_contract(doc : Document) -> Int {
+  let mut rc = 1
   for l in doc.layers {
     match l.mask {
-      Some(m) => if m.roughen > 0.0 { return RENDER_CONTRACT_VERSION }
+      Some(m) => {
+        match m.kind {
+          ShapeKind::Polygon => if rc < RENDER_CONTRACT_POLY_MASK {
+            rc = RENDER_CONTRACT_POLY_MASK
+          }
+          _ => ()
+        }
+        if m.roughen > 0.0 && rc < RENDER_CONTRACT_ROUGHEN {
+          rc = RENDER_CONTRACT_ROUGHEN
+        }
+      }
       None => ()
     }
   }
-  1
+  rc
 }
 
 ///|

@@ -968,6 +968,7 @@ fn mask_write_probe() -> @core.LayerMask {
     feather: 0.0,
     roughen: 0.0,
     invert: false,
+    points: [],
   }
 }
 

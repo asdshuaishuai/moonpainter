@@ -12,8 +12,10 @@ fn make_sample() -> @core.Document {
     // invert 逐个换成常量，197 个测试全过（行为是对的，只是没人守着）。
     // 这类字段最危险——round 17/18 修的正是"蒙版参数存下来却没人读"，
     // 同样的回归再来一次，测试会一声不响。
+    // 这个蒙版取**多边形**且带非默认顶点：canonical 往返只有对"样本里取了非默认值"
+    // 的字段才成立（铁律 1）——`points` 若留空，把解析写成常量也没人抓得住。
     mask: Some({
-      kind: @core.ShapeKind::Rect,
+      kind: @core.ShapeKind::Polygon,
       x: 12.5,
       y: 13.25,
       w: 100.0,
@@ -22,6 +24,7 @@ fn make_sample() -> @core.Document {
       feather: 3.5,
       roughen: 2.25,
       invert: true,
+      points: [(0.0, 0.0), (100.0, 0.0), (50.0, 90.5)],
     }),
   }
   let circle = @core.default_layer("l2", "hero orb", 300.0, 140.0, 200.0, 200.0)
@@ -120,7 +123,10 @@ test "往返后结构与语义字段保真" {
   // 蒙版字段必须逐个保真（此前它们连一条断言都没有）
   match back.layers[0].mask {
     Some(m) => {
-      assert_true(m.kind is @core.ShapeKind::Rect)
+      assert_true(m.kind is @core.ShapeKind::Polygon)
+      // 顶点也要逐个保真：新字段最容易"写得出、读不回"
+      assert_eq(m.points.length(), 3)
+      assert_eq(m.points[2], (50.0, 90.5))
       assert_eq(m.x, 12.5)
       assert_eq(m.y, 13.25)
       assert_eq(m.w, 100.0)
@@ -180,7 +186,7 @@ test "蒙版 kind 认不出来必须报错，不许静默当成「没有蒙版�
   // 输入由 canonical 写出器产出后再做**定点替换**（而不是手写整份层的 JSON）
   // ——手写漏一个必填字段，测的就成了"层字段不完整"，与蒙版毫无关系。
   let good = @core.doc_to_json(make_sample())
-  let marker = ",\"mask\":{\"kind\":\"rect\","
+  let marker = ",\"mask\":{\"kind\":\"polygon\","
   assert_true(good.contains(marker), msg="样本里应能定位到蒙版片段：\{good}")
   // ① 不认识的 kind → 报错，且错误里要说清收到的值、合法取值、以及怎么摘掉
   let bad = good.replace(old=marker, new=",\"mask\":{\"kind\":\"triangle\",")
@@ -188,6 +194,7 @@ test "蒙版 kind 认不出来必须报错，不许静默当成「没有蒙版�
     Err(msg) => {
       assert_true(msg.contains("triangle"), msg="错误要回显收到的 kind：\{msg}")
       assert_true(msg.contains("rect"), msg="错误要给出合法取值：\{msg}")
+      assert_true(msg.contains("polygon"), msg="合法取值里要含新增的 polygon：\{msg}")
       assert_true(msg.contains("remove-mask"), msg="错误要指路怎么摘掉：\{msg}")
     }
     Ok(_) => abort("不认识的蒙版 kind 不该通过")
@@ -204,7 +211,8 @@ test "蒙版 kind 认不出来必须报错，不许静默当成「没有蒙版�
       match d.layers[0].mask {
         Some(m) => {
           assert_eq(m.roughen, 2.25)
-          assert_true(m.kind is @core.ShapeKind::Rect)
+          assert_true(m.kind is @core.ShapeKind::Polygon)
+          assert_eq(m.points.length(), 3, msg="顶点也要随容器读回来")
         }
         None => abort("正常蒙版不该丢")
       }
@@ -243,14 +251,42 @@ test "required_render_contract：按文档实际用到的能力声明，别一�
     feather: 3.0,
     roughen: 0.0,
     invert: false,
+    points: [],
   }
   d.layers[0] = { ..d.layers[0], mask: Some(plain) }
   assert_eq(@core.required_render_contract(d), 1, msg="只有老语义（圆角/羽化）→ 仍是老契约")
   d.layers[0] = { ..d.layers[0], mask: Some({ ..plain, roughen: 2.0 }) }
   assert_eq(
     @core.required_render_contract(d),
-    @core.RENDER_CONTRACT_VERSION,
-    msg="用到毛边 → 声明到当前契约档",
+    @core.RENDER_CONTRACT_ROUGHEN,
+    msg="用到毛边 → 声明到**毛边那一档**（不是当前最高档）",
+  )
+  // 多边形蒙版（任意形状选区）是**第三档**：老引擎的 `mask_cover_at` 只认椭圆、
+  // 其余一律当矩形画 ⇒ 套索选区会被画成方框，所以必须让老引擎拒绝打开。
+  let poly : @core.LayerMask = {
+    ..plain,
+    kind: @core.ShapeKind::Polygon,
+    points: [(0.0, 0.0), (8.0, 0.0), (4.0, 8.0)],
+  }
+  let d2 = @core.new_document("u-rc2", 16, 16)
+  d2.layers.push({ ..@core.default_layer("l2", "b", 0.0, 0.0, 8.0, 8.0), mask: Some(poly) })
+  assert_eq(
+    @core.required_render_contract(d2),
+    @core.RENDER_CONTRACT_POLY_MASK,
+    msg="套索蒙版 → 第三档",
+  )
+  // ⚠️ 取**最高**档：两份蒙版各需要一档时，不能只看先遇到的那一层
+  // （早退实现会把 3 报成 2，老引擎就会打开并把套索画成方框）。
+  let d3 = @core.new_document("u-rc3", 16, 16)
+  d3.layers.push({
+    ..@core.default_layer("l3", "c", 0.0, 0.0, 8.0, 8.0),
+    mask: Some({ ..plain, roughen: 2.0 }),
+  })
+  d3.layers.push({ ..@core.default_layer("l4", "d", 0.0, 0.0, 8.0, 8.0), mask: Some(poly) })
+  assert_eq(
+    @core.required_render_contract(d3),
+    @core.RENDER_CONTRACT_POLY_MASK,
+    msg="毛边(2) + 套索(3) 并存 → 报最高档 3",
   )
 }
 
@@ -266,6 +302,7 @@ test "mask_param_error：一句话说清「装不上/不生效」的四种情形
     feather: 0.0,
     roughen: 0.0,
     invert: false,
+    points: [],
   }
   assert_eq(@core.mask_param_error(ok), "", msg="合法蒙版不许报错（判据两头都要咬）")
   // 尺寸非正：覆盖区为空 → invert=false 时整层被藏掉
@@ -275,6 +312,26 @@ test "mask_param_error：一句话说清「装不上/不生效」的四种情形
   assert_true(@core.mask_param_error({ ..ok, radius: -1.0 }).contains("radius"))
   assert_true(@core.mask_param_error({ ..ok, feather: -1.0 }).contains("feather"))
   assert_true(@core.mask_param_error({ ..ok, roughen: -1.0 }).contains("roughen"))
+  // 多边形蒙版（套索）：**点数下界**与**顶点必须在盒内**——两条都在
+  // `mask_param_error` 一处实现（入口与 lint 共用），错误话术要点名是哪个顶点。
+  let poly : @core.LayerMask = {
+    ..ok,
+    kind: @core.ShapeKind::Polygon,
+    w: 50.0,
+    h: 50.0,
+    points: [(0.0, 0.0), (50.0, 0.0), (25.0, 50.0)],
+  }
+  assert_eq(@core.mask_param_error(poly), "", msg="合法三角形不该报")
+  assert_true(
+    @core.mask_param_error({ ..poly, points: [(0.0, 0.0), (5.0, 0.0)] }).contains("至少要有 3 个顶点"),
+  )
+  let out = @core.mask_param_error({ ..poly, points: [(0.0, 0.0), (50.0, 0.0), (99.0, 9.0)] })
+  assert_true(out.contains("99"), msg="要点名越界的那个顶点：\{out}")
+  assert_true(out.contains("盒子"), msg="要说清判据是「盒子=支持窗」：\{out}")
+  // 非多边形带顶点 = 渲染器不读它（改了画面逐位不变，只会平白改变指纹）
+  assert_true(
+    @core.mask_param_error({ ..ok, points: [(1.0, 1.0), (2.0, 2.0), (3.0, 3.0)] }).contains("只有多边形蒙版"),
+  )
   // 错误信息要带上实际收到的值（值也进指纹，"报了字段不报值"没法自查）
   assert_true(@core.mask_param_error({ ..ok, roughen: -2.5 }).contains("-2.5"))
 }
