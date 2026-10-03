@@ -1943,6 +1943,14 @@ MUTS = [
         "killed",
     ),
     (
+        "Q52",
+        "笔触窗口改用层盒子（w/h 不是读点：会把层外的墨整块裁掉）",
+        "render/scene.mbt",
+        "dabs_window(l, buf.width, buf.height)",
+        "dabs_window(l, l.w.to_int(), l.h.to_int())",
+        "killed",
+    ),
+    (
         "Q42",
         "fill 那一行漏掉 polygon（多边形的填充被当成死数据，正常路径被误伤）",
         "agent/ops.mbt",
