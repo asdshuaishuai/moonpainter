@@ -11,7 +11,9 @@
    保护断言）必须有**能抓住注入 bug** 的测试。`python3 mutation_scan.py` 是这件事的
    度量——往实现注入语义 bug，看测试能否抓住。实测把它换成常量（核心语义
    硬边化）时全部测试照过（断言全是契约，而 golden 走空编辑表）。
-   新增核心语义时同步往 `MUTS` 加一条变异。
+   新增核心语义时同步往 `MUTS` 加一条变异。**变异也会"退休"**：它守的行为
+   变成正确行为时，删掉并记进 PLAN（别留成 INVALID）；重构吃掉锚点时，
+   等价变异可能变成真判据——**重指**而不是顺手删。
    **性质测试的覆盖面由样本决定**：`to_json → from_json → to_json` 字节一致
    只有对**样本里取了非默认值**的字段才成立。canonical 往返的样本
    （`core/json_test.mbt` 的 `make_sample`）必须让每个字段都非默认——实测
@@ -192,8 +194,7 @@
    参数，不等于测试断言了它有效果**。
    **纪律要推满**：挂校验时 `grep` 一遍**所有** kv 命令，别只修眼前那个——
    `add-mask` 的兄弟 `set-mask` 正是这个 bug 的发源地，当年却只修了一个。
-   实测第二批又抓到四个静默降级（`radus=5` 给硬边直角蒙版 / `vlaue=` 按 0
-   建没效果的调整层 / `rr=` 用默认半径 / `uui=` 用默认 uuid）。
+   实测第二批又抓到四个静默降级（拼错的键按默认值收下）。
    但**也别无脑推平**：`session-open` 认**位置参数** `full_image`，挂 kv 校验
    会误伤它——它本来就不静默（闸拒绝一切非法输入），缺的是**报错回显收到的
    参数**（否则拼错的参数名会被误读成"模型不合格"）。
@@ -481,16 +482,15 @@ moon run --target native cli    # stdin 行协议；help 查看全部 63 个命�
 - demo 包允许 mooncakes 依赖（当前 colmugx/posoco + moonbitlang/async）；
   **引擎包（base/codec/core/pixel/render/mpd/agent/wasm/cli）仍零第三方依赖**；
 - 引擎交互必须经 wasm SDK 实例（wasm 包 ABI），不得在 demo 里旁路直调引擎包。
-  **这三条现在有门禁**（`dep_audit.py`，`verify.sh#deps`）。实测它一上来就
-  抓到 `demo/moon.pkg` 里的 `moonpainter/core`——那是**只为 `@core.ENGINE_VERSION`
-  一个常量**而存在的旁路：同一个事实有两条路（demo 编译进去的常量 vs 已加载
-  wasm 的 `mp_version`），wasm 产物过期时页面就会报错的版本。改成从引擎读之后
-  demo 一个引擎包都不 import 了；
+  **这三条现在有门禁**（`dep_audit.py`，`verify.sh#deps`）。它一上来就抓到
+  `demo/moon.pkg` 里的 `moonpainter/core`——只为 `@core.ENGINE_VERSION` 一个
+  常量的旁路（同一个事实两条路：编译进去的常量 vs 已加载 wasm 的 `mp_version`，
+  产物过期时页面报错的版本）⇒ 改成从引擎读；
 - mooncakes 依赖进模块前必须查 `supported_targets`（例：moonllm 锁 +native，
   浏览器 demo 不可用）；
 - ⚠️ `moon check` 不覆盖 demo 包（js-only）：编译口径是 `./build_demo.sh`。
 - 工具回包给 LLM 一律截断（shorten），render 的 PNG 走 attachments 不走文本
-  （`render` / `select_preview` / `mvsl_impact` 三个图像类工具同规）；
+  （三个图像类工具同规）；
 - **自由文本参数必须用双引号包裹**：`text="Hello World"`、`name="My Layer"`。
   命令行协议按空白分词，`tokenize_line` 支持双引号（引号内的空格不参与切分，
   `\"` 表示字面引号）。原先协议里只有"下划线代替空格"一说——它写在

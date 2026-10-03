@@ -358,3 +358,41 @@ test "调整层蒙版：非反选的毛边也能把覆盖度甩出形状 bbox �
     msg="这组毛边参数一个像素都没甩出 bbox —— 这条断言是空的（要换参数，不是删断言）",
   )
 }
+
+///|
+test "调整层：蒙版覆盖度与层 α 是**同一个**软强度（两条路径逐位相同）" {
+  // 这条钉的是"软强度只有一处混合公式"。此前 α 是个**开关**（α=0 整层不施加、
+  // (0,1] 全强度），蒙版却按覆盖度软混合——同一个"这一像素上算子生效多少"
+  // 有两套行为（PLAN 五十三）。现在 strength = cover × α，所以
+  // "蒙版半覆盖"与"α 取同一个数"必须给出**逐位相同**的画面。
+  let via_mask_doc = adj_doc(0x646464FF)
+  let masked = {
+    ..adjust_layer(@core.AdjustOp::Invert, 1.0),
+    mask: Some(adj_mask(0.0, 0.0, 8.0, 16.0, 6.0, 0.0, false)),
+  }
+  via_mask_doc.layers.push(masked)
+  // 取样点的覆盖度：直接问渲染器用的那个函数（判据一处，别在测试里另算一遍）
+  let cover = mask_cover_at(masked, 6.5, 8.5)
+  assert_true(cover > 0.0 && cover < 1.0, msg="取样点要落在羽化带里：cover=\{cover}")
+  let via_mask = px(render_px(via_mask_doc), 6, 8)
+  // 同一个强度，改从 α 走（没有蒙版）
+  let via_alpha_doc = adj_doc(0x646464FF)
+  via_alpha_doc.layers.push({
+    ..adjust_layer(@core.AdjustOp::Invert, 1.0),
+    opacity: cover,
+  })
+  let via_alpha = px(render_px(via_alpha_doc), 6, 8)
+  assert_eq(via_mask, via_alpha)
+  // 判别力自证：这个强度必须真的**在两端之间**，否则上面那条会退化成
+  // "两边都是全强度"（那就什么都没验）
+  let off = px(render_px(adj_doc(0x646464FF)), 6, 8)
+  let full_doc = adj_doc(0x646464FF)
+  full_doc.layers.push(adjust_layer(@core.AdjustOp::Invert, 1.0))
+  let full = px(render_px(full_doc), 6, 8)
+  assert_true(via_mask != off, msg="半强度不该等于没有调整层")
+  assert_true(via_mask != full, msg="半强度不该等于全强度")
+  // α=0 与"没有这一层"逐位相同（滑杆拉到头的那个端点）
+  let zero_doc = adj_doc(0x646464FF)
+  zero_doc.layers.push({ ..adjust_layer(@core.AdjustOp::Invert, 1.0), opacity: 0.0 })
+  assert_eq(px(render_px(zero_doc), 6, 8), off)
+}

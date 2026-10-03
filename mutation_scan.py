@@ -1870,7 +1870,7 @@ MUTS = [
         "Q29",
         "调整层的蒙版不参与混合（覆盖度被丢掉：羽化带变硬边）",
         "render/scene.mbt",
-        "        buf.pixels[at] = if cover >= 1.0 { op } else { @pixel.lerp_argb(p, op, cover) }",
+        "        buf.pixels[at] = if strength >= 1.0 { op } else { @pixel.lerp_argb(p, op, strength) }",
         "        buf.pixels[at] = op",
         "killed",
     ),
@@ -1900,15 +1900,15 @@ MUTS = [
     ),
     (
         "Q33",
-        "调整层回到老行为：挂蒙版也整幅施加（蒙版装了却什么都不干）",
+        "调整层 α=1 时把蒙版当没有：整幅施加（蒙版装了却什么都不干）",
         "render/scene.mbt",
-        "  if l.adjust is None || l.mask is None {",
-        "  if l.adjust is None {",
-        # 等价：adjust 为 None 时两条路都立刻返回；adjust 为 Some 时，蒙版为 None
-        # 的那一支走"整幅窗口 + `mask_cover_at` 恒 1.0"，覆盖度恰好 1 ⇒ 直通 `op`，
-        # 与原地整幅施加逐位相同（只是白拷一次整幅）。实测：跑变异门判 SURVIVED，
-        # 逐条推演后确认是等价变异，不是测试缺口。
-        "equivalent",
+        "  if eff_opacity >= 1.0 && l.mask is None {",
+        "  if eff_opacity >= 1.0 {",
+        # 这条曾是**等价**变异（旧结构下"无蒙版走软混合"与"直通"逐位相同，只是
+        # 白拷一次整幅）；五十三把软强度收成一处（覆盖度 × α）之后，同一行上的
+        # `l.mask is None` 变成真判据——去掉它，α=1 的带蒙版调整层会整幅施加，
+        # 蒙版静默失效。等价 → killed（锚点腐烂时自检当场报"出现 0 次"）。
+        "killed",
     ),
     (
         "Q48",
@@ -1974,12 +1974,23 @@ MUTS = [
         "  let cx1 = l.x + x1",
         "killed",
     ),
+    # Q59（"能力表说调整层也有 opacity"）已**退休**：那条行为现在是正确的
+    # ——调整层的 α 真的参与渲染（软强度 = 蒙版覆盖度 × α，PLAN 五十三），
+    # 于是 caps 就该报它。退休记录在 PLAN 五十三（锚点自检当场报"出现 0 次"）。
     (
-        "Q59",
-        "能力表说调整层也有 opacity（面板于是给调整层画一个拖了没反应的 α 滑杆）",
-        "agent/ops.mbt",
-        '  if !(k is @core.ShapeKind::Adjust) {\n    caps.push("opacity")\n  }',
-        '  if true {\n    caps.push("opacity")\n  }',
+        "Q60",
+        "调整层的软强度丢掉层不透明度（α 又变回那个开关：0 之外全是全强度）",
+        "render/scene.mbt",
+        "      let strength = cover * eff_opacity",
+        "      let strength = cover",
+        "killed",
+    ),
+    (
+        "Q61",
+        "调整层无蒙版时忽略 α（快路径把\"全强度\"当\"没有软混合\"）",
+        "render/scene.mbt",
+        "  if eff_opacity >= 1.0 && l.mask is None {",
+        "  if l.mask is None {",
         "killed",
     ),
     (

@@ -163,7 +163,7 @@ test "属性面板：文字层给内容+字号，调整层给算子+数值（各
   assert_true(lacks_sub(ht, "__flip"), msg="文本层不该有翻转按钮：\{ht}")
   assert_true(has_sub(ht, "globalThis.__op("), msg="文本层的 α 是真的（半透明字）：\{ht}")
   let a = parse_json_safe(
-    "{\"id\":\"a1\",\"name\":\"调亮\",\"kind\":\"adjust\",\"adjust\":{\"op\":\"brightness\",\"value\":0.25},\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"mask\",\"adjust\"]}",
+    "{\"id\":\"a1\",\"name\":\"调亮\",\"kind\":\"adjust\",\"adjust\":{\"op\":\"brightness\",\"value\":0.25},\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"opacity\",\"mask\",\"adjust\"]}",
   )
   let ha = props_html(a, roots)
   assert_true(has_sub(ha, "globalThis.__adj_op(\"a1\",this.value)"), msg=ha)
@@ -176,10 +176,8 @@ test "属性面板：文字层给内容+字号，调整层给算子+数值（各
   assert_true(lacks_sub(ha, "__setx"), msg="调整层不该有 X 输入框：\{ha}")
   assert_true(lacks_sub(ha, "__setw"), msg="调整层不该有 W 输入框：\{ha}")
   assert_true(has_sub(ha, "不参与渲染"), msg="少画控件必须说明理由：\{ha}")
-  // α 也是能力：调整层的 opacity 不参与渲染（强度走「数值」）⇒ 不画滑杆、给理由；
-  // 正控在同一条测试的文本层/矩形那两处（`__op` 必须在）
-  assert_true(lacks_sub(ha, "__op("), msg="调整层不该有 α 滑杆：\{ha}")
-  assert_true(has_sub(ha, "强度用「数值」"), msg="少画滑杆也要说清替代：\{ha}")
+  // α 对所有 kind 都是能力（调整层：软强度 = 蒙版覆盖度 × α，PLAN 五十三）
+  assert_true(has_sub(ha, "globalThis.__op(\"a1\""), msg="调整层的 α 是真的（算子生效多少）：\{ha}")
 }
 
 ///|
@@ -312,11 +310,30 @@ test "拖动判据：caps 说没有 move 就不发命令，并说清为什么（
   let gr = move_gesture_refusal(g)
   assert_true(gr.contains("不参与渲染"), msg=gr)
   assert_true(gr.contains("group"), msg="理由要点出是哪种层：\{gr}")
-  let a = parse_json_safe("{\"id\":\"a1\",\"kind\":\"adjust\",\"caps\":[\"mask\",\"adjust\"]}")
+  let a = parse_json_safe("{\"id\":\"a1\",\"kind\":\"adjust\",\"caps\":[\"opacity\",\"mask\",\"adjust\"]}")
   assert_true(move_gesture_refusal(a).contains("adjust"), msg=move_gesture_refusal(a))
   // 没有 caps（版本不匹配）：停用并且**明说**是版本问题，别把锅甩给这个层
   let n = parse_json_safe("{\"id\":\"n1\",\"kind\":\"rect\"}")
   let nr = move_gesture_refusal(n)
   assert_true(nr.contains("没报 caps"), msg=nr)
   assert_true(!nr.contains("不参与渲染"), msg="缺 caps（版本不匹配）与「这个层没有能力」是两件事：\{nr}")
+}
+
+///|
+test "属性面板：旧引擎的 caps 里没有 opacity ⇒ 不画 α 滑杆、并说清替代（版本偏斜）" {
+  // `caps` 的意义就是"界面别抄第二份 kind 名单"——所以连"某一格缺失"也要
+  // 按缺失处理（旧引擎/新前端），而不是回退去猜 kind。这条正好是那个 else 分支的
+  // 活用例：引擎说这个层没有 opacity 能力时，界面给只读回显 + 替代说明。
+  let l = parse_json_safe(
+    "{\"id\":\"a1\",\"name\":\"调亮\",\"kind\":\"adjust\",\"adjust\":{\"op\":\"brightness\",\"value\":0.25},\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"mask\",\"adjust\"]}",
+  )
+  let h = props_html(l, panel_layers())
+  assert_true(lacks_sub(h, "__op("), msg="caps 说没有 opacity 就不该画 α 滑杆：\{h}")
+  assert_true(has_sub(h, "强度用「数值」"), msg="少画滑杆也要说清替代：\{h}")
+  // 正控：同一份 JSON 只要 caps 里有 opacity，滑杆就在（判据两头都咬得住）
+  let l2 = parse_json_safe(
+    "{\"id\":\"a1\",\"name\":\"调亮\",\"kind\":\"adjust\",\"adjust\":{\"op\":\"brightness\",\"value\":0.25},\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"opacity\",\"mask\",\"adjust\"]}",
+  )
+  let h2 = props_html(l2, panel_layers())
+  assert_true(has_sub(h2, "globalThis.__op(\"a1\""), msg="有 opacity 就必须画：\{h2}")
 }

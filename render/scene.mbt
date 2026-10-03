@@ -596,8 +596,9 @@ fn paint_layer(
     }
     @core.ShapeKind::Adjust => {
       // 调整层：对当前缓冲（其下全部可见层的合成结果）施加算子；
-      // **蒙版在这里生效**（按覆盖度软混合，见 `apply_adjust_layer`）
-      apply_adjust_layer(l, buf)
+      // **蒙版与层不透明度都在这里生效**，两者合成同一个"这一像素上算子生效
+      // 多少"（见 `apply_adjust_layer`：软强度只有一处混合公式）
+      apply_adjust_layer(l, buf, eff_opacity)
       return
     }
     @core.ShapeKind::Text => {
@@ -956,8 +957,12 @@ fn mask_support_box(l : @core.Layer, buf : @codec.RgbaBuf) -> (Int, Int, Int, In
 /// 维护第二张"哪些算子是邻域"的清单。所以带蒙版时一律先在 scratch 上整幅算完、
 /// 再按覆盖度混合：代价是一次整幅拷贝（12MP ≈ 48MB），**只在"带蒙版的调整层"
 /// 这条路上付**，而混合本身只扫蒙版支撑窗。
-fn apply_adjust_layer(l : @core.Layer, buf : @codec.RgbaBuf) -> Unit {
-  if l.adjust is None || l.mask is None {
+fn apply_adjust_layer(l : @core.Layer, buf : @codec.RgbaBuf, eff_opacity : Double) -> Unit {
+  if l.adjust is None || eff_opacity <= 0.0 {
+    return
+  }
+  // 快路径：全强度且没有蒙版 ⇒ 就地施加（与"没有软混合"逐位相同的代码路径）
+  if eff_opacity >= 1.0 && l.mask is None {
     apply_adjust(l.adjust, buf)
     return
   }
@@ -977,12 +982,19 @@ fn apply_adjust_layer(l : @core.Layer, buf : @codec.RgbaBuf) -> Unit {
   while y < wy1 {
     let mut x = wx0
     while x < wx1 {
-      let cover = mask_cover_at(l, x.to_double() + 0.5, y.to_double() + 0.5)
-      if cover > 0.0 {
+      // 软强度 = 蒙版覆盖度 × 有效不透明度。**两件事乘在同一个数上**：
+      // "蒙版半覆盖"与"α 一半"必须给出逐位相同的画面（测试钉住这条恒等式）。
+      // 没有蒙版时覆盖度恒为 1（不是"跳过混合"）。
+      let cover = match l.mask {
+        Some(_) => mask_cover_at(l, x.to_double() + 0.5, y.to_double() + 0.5)
+        None => 1.0
+      }
+      let strength = cover * eff_opacity
+      if strength > 0.0 {
         let at = y * buf.width + x
         let p = buf.pixels[at]
         let op = scratch.pixels[at]
-        buf.pixels[at] = if cover >= 1.0 { op } else { @pixel.lerp_argb(p, op, cover) }
+        buf.pixels[at] = if strength >= 1.0 { op } else { @pixel.lerp_argb(p, op, strength) }
       }
       x = x + 1
     }

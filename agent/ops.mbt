@@ -1273,10 +1273,10 @@ fn raster_box_error(l : @core.Layer, cw : Int, ch : Int) -> String? {
 ///         与缺省盒 render sha 逐位相同）；
 ///   笔触：`x/y` 平移笔触、**盒子不参与渲染**（窗口是画布尺寸）；
 ///   组/调整层：`x/y` 与盒子**都不读**（组画的是子层、调整层作用于其下的合成）。
-/// 另一格是 `opacity`（不透明度）：实测**除调整层外都读**（组也算合成的一层），
-/// 调整层的强度走算子的 `value`——`opacity=0.3` 与 `1.0` 的 render sha 逐位相同
-/// （PLAN 五十二）。而面板上那个 α 滑杆对任何 kind 都画着 ⇒ 又一个"改了没反应"
-/// 的静默入口，所以这一格也必须进能力表。
+/// 另一格是 `opacity`（不透明度）：**所有 kind 都读**（组也算合成的一层，
+/// 调整层则是"算子生效多少"）。此前调整层的 α 是个**开关**（α=0 整层不施加、
+/// (0,1] 全强度——中间那些位置静默无效），现在与蒙版覆盖度合成同一处软强度
+/// （PLAN 五十三）。
 pub fn layer_caps(l : @core.Layer) -> Array[String] {
   let caps : Array[String] = []
   let reads = fn(field : String) -> Bool {
@@ -1300,9 +1300,9 @@ pub fn layer_caps(l : @core.Layer) -> Array[String] {
   if face {
     caps.push("resize")
   }
-  if !(k is @core.ShapeKind::Adjust) {
-    caps.push("opacity")
-  }
+  // `opacity`：所有 kind 都读（调整层也不例外——软强度 = 蒙版覆盖度 × α，
+  // 见 `render.apply_adjust_layer`；此前 α 在 (0,1) 上**静默无效**，见 PLAN 五十三）
+  caps.push("opacity")
   for p in [
     ("rotate", "rotation_deg"),
     ("flip", "flip_h"),
