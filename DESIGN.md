@@ -95,7 +95,7 @@ macOS 原生类 Photoshop 编辑器。对本工程最有价值的三块遗产：
   <!-- blend-kinds:begin -->
   `Normal` `Multiply` `Screen` `Overlay` `Darken` `Lighten` `Difference`
   <!-- blend-kinds:end -->
-- 层序 = 数组序自底向上；Group 以 children 嵌套，直通合成（组只传递可见性/透明度，组级混合不生效——诚实边界）；
+- 层序 = 数组序自底向上；Group 以 children 嵌套，子层直通合成；组级混合不生效（诚实边界），但组的透明度是**整体打折**——先把子层合成成"组自己的画面"再按 α 叠到底图上（SVG `<g opacity>` 语义）。逐子层各自打折会让**重叠区被混合两次**（实测两个不透明子层重叠、组 α=0.5 时重叠区 `#7F3FBFFF`，整体打折是 `#7F7FFFFF`，与不重叠的蓝区一致 ⇒ 重叠处一条谁都解释不清的接缝，见 PLAN 五十四）；
 - Image 层引用 `assets/sha256/<hash>` 内容寻址资产，置入矩形拉伸绘制（最近邻，诚实边界）；
 - 文档：uuid/画布(可变，set-canvas 用)/dpi/profile("srgb")/layers/assets/params/next_layer_no。
 
@@ -510,14 +510,16 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
   （字典是模型唯一的说明书，承诺一件做不到的事就是在骗它）。命令键 →
   表字段的映射只有一处（`key_field`），参数报错里的"为什么不生效"也从表算
   （`kind_only_dead_note`）。⚠️ `opacity`/`visible`
-  不在矩阵里：组直通时它们真的生效（实测 `set-style g1 opacity=0.5` 与
-  `set-style r1 opacity=0.5` 同一个 sha256）；`x/y/w/h` 也不在——它们有消费者
+  不在矩阵里：它们真的生效（单子层时 `set-style g1 opacity=0.5` 与
+  `set-style r1 opacity=0.5` 同一个 sha256；多子层重叠时组的 α 是**整体打折**，
+  与"每个子层各打一次折"不同，见上）；`x/y/w/h` 也不在——它们有消费者
   （`query-layer` 报告、取景线框 `render overlay=1` 按它画），但渲染器不读：
   `move g1 20 0` 只动线框不动像素（两个 sha 都实测过），那是**另一条**规则
   （盒子与像素不一致），见 PLAN 四十四；
   要让文本/笔触真的能旋转、组真的能变换与带蒙版，得把父变换串进
-  `to_local`/`paint_window`、把笔触 dab 过一遍层变换、把组合成到自己的缓冲
-  （隔离），属**渲染架构**改动，留作后续；
+  `to_local`/`paint_window`、把笔触 dab 过一遍层变换、把组的**变换**也隔离
+  （α 已经走"合成到自己的缓冲"了，见上；变换仍是直通），属**渲染架构**改动，
+  留作后续；
 - 栅格蒙版（画笔涂抹）与 live mask（引用下层 alpha，DESIGN §1 引的 Photoshop 做法）
   均未实现，蒙版只有几何形态。几何蒙版支持 `feather` 边缘羽化，但它是**线性**
   过渡且过渡带在**内侧**（边界处覆盖 0，向内 feather 像素到满覆盖），不是
@@ -665,7 +667,7 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
   | 10 层 + 软蒙版 | 6.17 s | **1.24 s** | −80% |
 
   每层边际 **0.55 s → 0.08 s**、**软蒙版边际 0.53 s → 0.11 s**，像素逐位未变
-  （310 条测试含 golden sha256 全绿）。
+  （314 条测试含 golden sha256 全绿）。
 
   **圆角矩形随后也进来了**（同一个内接盒，各边再内缩半径）：半径的**夹取**
   提成了一处实现（`clamped_radius`，渲染器 `in_rounded_rect` 与快速路径共用

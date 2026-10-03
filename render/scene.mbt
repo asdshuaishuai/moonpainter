@@ -588,8 +588,34 @@ fn paint_layer(
   }
   match l.kind {
     @core.ShapeKind::Group => {
+      // 组 α=1：逐子层直接叠到底图（与"没有这一层组"逐位相同的快路径）
+      if eff_opacity >= 1.0 {
+        for c in l.children {
+          paint_layer(c, buf, env, 1.0)
+        }
+        return
+      }
+      // 组 α<1：**先把子层叠成"这个组自己的画面"，再整体打折**——SVG
+      // `<g opacity>` 的语义。逐子层各自打折会让**重叠区被混合两次**：实测两个
+      // 不透明子层重叠、组 α=0.5 时重叠区是 `#7F3FBFFF`（蓝透过"红 α=0.5 的
+      // 粉"），而整体打折是 `#7F7FFFFF`（与不重叠的蓝区一致）——重叠处多出一条
+      // 谁都解释不清的接缝（PLAN 五十四）。
+      let scratch = @codec.rgba_new(buf.width, buf.height)
+      @codec.fill_rect_rgba(scratch, 0, 0, buf.width, buf.height, 0x00000000)
       for c in l.children {
-        paint_layer(c, buf, env, eff_opacity)
+        paint_layer(c, scratch, env, 1.0)
+      }
+      let total = buf.width * buf.height
+      let mut i = 0
+      while i < total {
+        let p = scratch.pixels[i]
+        if (p & 0xFF000000) != 0 {
+          // 源 alpha = 组画面的 alpha × 组 α：`compose_src` 是"层不透明度并入
+          // 源 alpha"的**唯一**一处实现，别在这里再抄一遍舍入
+          let src = compose_src(255, p, 1.0, eff_opacity)
+          buf.pixels[i] = composite_pixel(buf.pixels[i], src, l.blend)
+        }
+        i = i + 1
       }
       // 组自身无面
       return

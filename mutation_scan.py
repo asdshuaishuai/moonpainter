@@ -1994,6 +1994,22 @@ MUTS = [
         "killed",
     ),
     (
+        "Q62",
+        "组的 α 退回逐子层各自打折（重叠区被混合两次：接缝回来了）",
+        "render/scene.mbt",
+        "        paint_layer(c, scratch, env, 1.0)",
+        "        paint_layer(c, buf, env, eff_opacity)",
+        "killed",
+    ),
+    (
+        "Q63",
+        "组的整体打折忘了乘组 α（组画面的 alpha 不折，等于组 α 只有 0/1 两档）",
+        "render/scene.mbt",
+        "          let src = compose_src(255, p, 1.0, eff_opacity)",
+        "          let src = compose_src(255, p, 1.0, 1.0)",
+        "killed",
+    ),
+    (
         "Q56",
         "能力表把字段名写错（读点矩阵查不到 ⇒ 这个能力永远不报，画面参数静默不可达）",
         "agent/ops.mbt",
