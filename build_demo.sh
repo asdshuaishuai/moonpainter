@@ -147,7 +147,7 @@ console.log('NPM SDK SMOKE OK: multi-session + render + save/open round-trip all
 "
 cd ../..
 
-echo "== 7/9 页面接线：HTML 引用的每个处理器的名字都出现过在注册表里（含经参数传进拼 HTML helper 的） =="
+echo "== 7/9 页面接线：引用的都注册了（含经参数传进拼 HTML helper 的），且注册的都被引用了（反方向：死处理器） =="
 # 运行时那条测试（demo_test「页面接线」）比这条强——它拿的是**真的拼出来的
 # HTML**。但它只覆盖静态骨架 `app_html()`；图层列表与属性面板是
 # `sb.write_string(...)` **动态拼**出来的，那段 HTML 只有在浏览器里点开某个
@@ -191,7 +191,41 @@ missing = sorted(refs - regs)
 if missing:
     print('FAIL: 页面引用了没注册的处理器（点了就是 JS 报错）：', '、'.join(missing))
     sys.exit(1)
-print('页面接线 OK（%d 个处理器引用全部有注册）' % len(refs))
+
+# **反方向也要问**：注册了却没人引用的处理器 = 死代码，或者"加了功能却没接上"
+# （新加一批处理器时最常见：注册写了、页面/驱动器忘了引用，点了没反应的那一半
+# 反过来就是"永远点不到的功能"）。⚠️ 判据必须**先剥掉注册声明本身**再找引用——
+# 第一版没剥，于是每个处理器都被自己的注册行"引用"了一次，74 个全部合格，
+# 判据等于没写。**判据自己满足自己**是最难发现的那种空判据。
+# 驱动器（`demo/*.mjs`，clickthrough）里的引用**也算引用**：它是真的在调。
+drivers = ''
+for path in glob.glob('demo/*.mjs'):
+    for line in open(path, encoding='utf-8'):
+        if line.lstrip().startswith('//'):
+            continue
+        drivers += line
+orphan = []
+for name in sorted(regs):
+    used = False
+    pat = re.compile(r'(globalThis\.)?' + re.escape(name) + r'\b')
+    for path in glob.glob('demo/*.mbt'):
+        for line in open(path, encoding='utf-8'):
+            if line.lstrip().startswith('//'):
+                continue
+            cleaned = re.sub(r'js_reg[0-9a-z]*\("__[A-Za-z_][A-Za-z_0-9]*"', '', line)
+            if pat.search(cleaned):
+                used = True
+                break
+        if used:
+            break
+    if not used and pat.search(drivers):
+        used = True
+    if not used:
+        orphan.append(name)
+if orphan:
+    print('FAIL: 注册了却没人引用的处理器（死代码 / 加了功能没接上）：', '、'.join(orphan))
+    sys.exit(1)
+print('页面接线 OK（%d 个处理器引用全部有注册，且 %d 个注册的都有引用）' % (len(refs), len(regs)))
 PYW
 
 echo "== 8/9 文档里的工具数、AI/人类两条边界与实际一致（数字漂了就红） =="
