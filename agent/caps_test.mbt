@@ -84,9 +84,11 @@ test "caps：逐 kind 的完整能力表（人类面板据此画控件）" {
     caps_str(s, "t1") == "move,opacity,mask,text,font_size",
     msg="文本层的能力表：\{caps_str(s, "t1")}",
   )
-  // 笔触：位置真的挪笔触、盒子不参与渲染
+  // 笔触：位置挪笔触、`rotate`/`flip` 从本轮起也读（绕**落笔范围中心**转，
+  // 见 PLAN 六十）；盒子（resize）不参与渲染——它是**派生**的，`resize` 只改
+  // 那份没人读的快照
   assert_true(
-    caps_str(s, "p1") == "move,opacity,mask",
+    caps_str(s, "p1") == "move,opacity,rotate,flip,mask",
     msg="笔触层：\{caps_str(s, "p1")}",
   )
   // 组：`move` 是"搬后代"（组自己没画面，后代里有读位置的层才算有能力——

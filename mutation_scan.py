@@ -1032,16 +1032,16 @@ MUTS = [
         "to_canvas 的 flip_h 换算写错（局部→画布坐标错：往返不一致、lint 误报顶点）",
         "render/scene.mbt",
         """  if l.flip_h {
-    x = l.w - x
+    x = 2.0 * pvx - x
   }
   if l.flip_v {
-    y = l.h - y
+    y = 2.0 * pvy - y
   }""",
         """  if l.flip_h {
-    x = l.w + x
+    x = 2.0 * pvx + x
   }
   if l.flip_v {
-    y = l.h - y
+    y = 2.0 * pvy - y
   }""",
         "killed",
     ),
@@ -1951,29 +1951,68 @@ MUTS = [
         "killed",
     ),
     (
-        "Q53",
-        "笔触盒子判据的等号被算成「装不下」（判据边界抖动）",
-        "agent/ops.mbt",
-        "  if cx0 + eps >= bx0 && cy0 + eps >= by0 && cx1 <= bx1 + eps && cy1 <= by1 + eps {",
-        "  if cx0 + eps >= bx0 && cy0 + eps >= by0 && cx1 <= bx1 - eps && cy1 <= by1 + eps {",
+        "Q82",
+        "overlay 线框读**存下来的**盒子（与 query-layer 的派生盒分家：报落笔范围、画整幅画布）",
+        "render/scene.mbt",
+        """    let (ex, ey, ew, eh) = @core.effective_box(l)""",
+        """    let (ex, ey, ew, eh) = (l.x, l.y, l.w, l.h)""",
         "killed",
     ),
     (
-        "Q54",
-        "笔触盒子判据不算 dab 半径（圆心在盒内就算装得下）",
-        "agent/ops.mbt",
-        "    let dx1 = d.x + d.r",
-        "    let dx1 = d.x",
+        "Q78",
+        "笔触层的盒子退回存下来的快照（= 画布尺寸）：轴心回到画布中心、报告面又撒谎",
+        "core/document.mbt",
+        """  if any {
+    Some((x0, y0, x1 - x0, y1 - y0))
+  } else {
+    None
+  }""",
+        """  if false {
+    Some((x0, y0, x1 - x0, y1 - y0))
+  } else {
+    None
+  }""",
         "killed",
     ),
     (
-        "Q55",
-        "笔触盒子判据不按画布裁剪（画布外的墨也算可见错位）",
-        "agent/ops.mbt",
-        "  let cx1 = lo_hi(l.x + x1, 0.0, cwd)",
-        "  let cx1 = l.x + x1",
+        "Q79",
+        "本层轴心不认派生盒（笔触层绕画布中心转，而不是落笔范围中心）",
+        "render/scene.mbt",
+        """  if bx == l.x && by == l.y && bw == l.w && bh == l.h {
+    (l.w / 2.0, l.h / 2.0)
+  } else {
+    (bx + bw / 2.0 - l.x, by + bh / 2.0 - l.y)
+  }""",
+        """  if true {
+    (l.w / 2.0, l.h / 2.0)
+  } else {
+    (bx + bw / 2.0 - l.x, by + bh / 2.0 - l.y)
+  }""",
         "killed",
     ),
+    (
+        "Q80",
+        "组的并集用**第一个成员存下来的**盒子当初值（成员是笔触层时整组被撑成画布）",
+        "core/document.mbt",
+        """  let (fx, fy, fw, fh) = effective_box(children[0])""",
+        """  let (fx, fy, fw, fh) = (children[0].x, children[0].y, children[0].w, children[0].h)""",
+        "killed",
+    ),
+    (
+        "Q81",
+        "dab 只走祖先链、漏掉**本层**的 rot/flip（笔触层自己转了而墨迹不动）",
+        "render/scene.mbt",
+        """  let (ox, oy) = to_canvas_p(l, d.x, d.y, pvx, pvy)
+  to_canvas_in(frames, ox, oy)""",
+        """  let _ = (pvx, pvy)
+  to_canvas_in(frames, l.x + d.x, l.y + d.y)""",
+        "killed",
+    ),
+    # Q53/Q54/Q55（笔触盒子判据的等号 / 半径 / 画布裁剪）已**退休**：
+    # `effective_box` 从 PLAN 六十起认 Raster（盒子 = 落笔范围**派生**），
+    # "盒子装不下自己的笔触"这个状态**不可能出现**了，`raster_box_error`
+    # 连同它的脚手架 `lo_hi` 一起删掉（`--check-anchors` 当场报出三条
+    # "锚点出现 0 次"）。守的行为变成正确行为 ⇒ 删掉并记进 PLAN，别留成 INVALID。
     # Q59（"能力表说调整层也有 opacity"）已**退休**：那条行为现在是正确的
     # ——调整层的 α 真的参与渲染（软强度 = 蒙版覆盖度 × α，PLAN 五十三），
     # 于是 caps 就该报它。退休记录在 PLAN 五十三（锚点自检当场报"出现 0 次"）。
@@ -2069,13 +2108,10 @@ MUTS = [
         "Q76",
         "dab 的画布位置漏掉**祖先链**（组转了而笔触层逐位不动 = 本轮修的那个 bug）",
         "render/scene.mbt",
-        r"""fn dab_center(l : @core.Layer, frames : Transform, d : @core.Dab) -> (Double, Double) {
-  to_canvas_in(frames, l.x + d.x, l.y + d.y)
-}""",
-        r"""fn dab_center(l : @core.Layer, frames : Transform, d : @core.Dab) -> (Double, Double) {
-  let _ = frames
-  (l.x + d.x, l.y + d.y)
-}""",
+        r"""  let (ox, oy) = to_canvas_p(l, d.x, d.y, pvx, pvy)
+  to_canvas_in(frames, ox, oy)""",
+        r"""  let _ = (pvx, pvy)
+  (l.x + d.x, l.y + d.y)""",
         "killed",
     ),
     (

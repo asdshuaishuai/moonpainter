@@ -306,7 +306,8 @@ test "lint：变换/混合/蒙版的读点矩阵（表里每一格都要报，�
       id: "r1",
       kind: @core.ShapeKind::Raster,
       dabs: [@core.Dab::{ x: 1.0, y: 1.0, r: 2.0, color: 0xFF0000FF, erase: false }],
-      rotation_deg: 45.0,
+      // `rotation_deg` 从本轮起在 raster 上**合法**（绕落笔范围中心转，PLAN 六十）
+      // ——它从这一格挪走，所以这里只剩 blend 一格
       blend: @core.BlendMode::Multiply,
     },
   )
@@ -352,10 +353,14 @@ test "lint：变换/混合/蒙版的读点矩阵（表里每一格都要报，�
   ] {
     assert_true(j.contains(needle), msg="表里的 \{needle} 必须被报：\{j}")
   }
-  // 格数也要对：group **3**（blend/mask/… —— 它的 rotation/flip_h/flip_v 从
-  // 本轮起**合法**，渲染器真的会变换整棵子树，见 PLAN 五十六）
-  // + text 3 + raster 2 + adjust 2 + line 1（fill）
-  // + polygon 1（stroke）+ image 2（fill+stroke）= **14**。
+  // 格数也要对。**按实测列清单**（不是手算——这一行原先写的是
+  // "group 3 + text 3 + raster 2 + adjust 2 + …"，三处都不对，只是**碰巧凑成
+  // 14**；raster 的 rot 一转正，凑出来的数就对不上了。散文里的算术没人管，
+  // 所以这里改成一格一格数出来）：
+  //   group 2（blend/mask——rotation/flip 从 PLAN 五十六起合法）
+  //   + text 4（rot/flip_h/flip_v/blend）+ raster 1（blend——rot/flip 从
+  //     PLAN 六十起合法）+ adjust 2（rot/blend）+ line 1（fill）
+  //   + polygon 1（stroke）+ image 2（fill+stroke）= **13**。
   // 只查"含某个词"会被"多报/少报但恰好含这些词"骗过。
   let mut hits = 0
   for it in items {
@@ -363,10 +368,17 @@ test "lint：变换/混合/蒙版的读点矩阵（表里每一格都要报，�
       hits = hits + 1
     }
   }
-  assert_eq(hits, 14, msg="读点矩阵应报 14 格，实报 \{hits}：\{j}")
+  assert_eq(hits, 13, msg="读点矩阵应报 13 格，实报 \{hits}：\{j}")
   // **反向**也要咬住：组的 rotation/flip 现在一格都不许报
-  for gone in ["group 却带着 rotation_deg", "group 却带着 flip_h", "group 却带着 flip_v"] {
-    assert_true(!j.contains(gone), msg="组上的变换已经合法，不该再报「\{gone}」：\{j}")
+  for gone in [
+    "group 却带着 rotation_deg",
+    "group 却带着 flip_h",
+    "group 却带着 flip_v",
+    "raster 却带着 rotation_deg",
+    "raster 却带着 flip_h",
+    "raster 却带着 flip_v",
+  ] {
+    assert_true(!j.contains(gone), msg="组/笔触层上的变换已经合法，不该再报「\{gone}」：\{j}")
   }
 
   // ② 正控：**读它的 kind** 上带着同样的字段，一格都不许报（漏报与误报都是 bug）
@@ -438,10 +450,12 @@ test "写不生效的字段在入口就拒；写默认值（清字段）必须�
   let _ = run(s, "brush layer=p0 pts=8,8;20,20 r=4 color=#FF0000FF")
   let _ = run(s, "add-rect x=0 y=0 w=20 h=20 fill=#0000FFFF name=B id=r1")
   let _ = run(s, "add-adjust op=invert name=A id=a0")
-  // 不生效的组合：一个都不能悄悄成功（text/raster/adjust 各自三条）
+  // 不生效的组合：一个都不能悄悄成功（text/adjust 各自三条 + raster 剩 blend）
+  // ⚠️ 笔触层的 `rotate`/`flip` 从本轮起**放行**（渲染器真的绕落笔范围中心转
+  // 每个 dab，PLAN 六十），所以它们挪到下面那条**正控**里
   for bad in [
     "rotate t0 30", "flip t0 h", "set-style t0 blend=multiply",
-    "rotate p0 30", "flip p0 v", "set-style p0 blend=screen",
+    "set-style p0 blend=screen",
     "rotate a0 30", "flip a0 h", "set-style a0 blend=multiply",
   ] {
     let r = run(s, bad)
@@ -519,6 +533,8 @@ test "写不生效的字段在入口就拒；写默认值（清字段）必须�
     "rotate t0 0", "flip t0 none", "set-style t0 blend=normal", "rotate g1 0", "flip g1 none",
     // 组上的**非默认**变换也要放行（渲染器读了它 ⇒ 不是"写不生效的字段"）
     "rotate g1 45", "flip g1 both",
+    // 笔触层同理（PLAN 六十）：非默认变换也放行
+    "rotate p0 30", "flip p0 v", "rotate p0 0", "flip p0 none",
   ] {
     let r = run(s, ok)
     assert_true(r.contains("\"ok\":true"), msg="`\{ok}` 是清字段，必须放行：\{r}")

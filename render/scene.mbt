@@ -128,6 +128,21 @@ fn layer_to_canvas(l : @core.Layer, frames : Transform, lx : Double, ly : Double
 
 ///|
 /// 该层父坐标系里的点 → 层矩形上的点（`screen` 的逆，`pick`/渲染共用）。
+///|
+/// `canvas_to_layer` 的**显式轴心**版本（逐像素路径用，轴心在循环外算好）。
+fn canvas_to_layer_p(
+  l : @core.Layer,
+  frames : Transform,
+  x : Double,
+  y : Double,
+  pvx : Double,
+  pvy : Double,
+) -> (Double, Double) {
+  let (fx, fy) = to_local_in(frames, x, y)
+  to_local_p(l, fx, fy, pvx, pvy)
+}
+
+///|
 fn canvas_to_layer(l : @core.Layer, frames : Transform, x : Double, y : Double) -> (Double, Double) {
   let (fx, fy) = to_local_in(frames, x, y)
   to_local(l, fx, fy)
@@ -269,15 +284,34 @@ pub fn to_canvas_in(frames : Transform, lx : Double, ly : Double) -> (Double, Do
 
 ///|
 /// 设备坐标 → 层局部坐标（含绕层中心的逆旋转）。
-pub fn to_local(
+///|
+/// **本层局部坐标系里的轴心**（rot/flip 绕它转）。
+///
+/// 非组/非笔触层：`effective_box` 就是自己的盒子 ⇒ `(w/2, h/2)`——**返回原式**，
+/// 别化简成 `bx + bw/2 - l.x`：那是消去，`l.x` 非整数时结果会差一个 ulp，
+/// 而"差一个 ulp"就是画面差一列像素。
+///
+/// 笔触层：轴心 = **落笔范围的中心**（`raster_bbox`，与渲染/报告同一个
+/// `effective_box`）。⚠️ 它要遍历全部 dab，所以**不许在逐像素循环里调**——
+/// `paint_raster` 在循环外算一次（`to_local_p`），同 `Frame` 那条（PLAN 五十九）。
+fn local_pivot(l : @core.Layer) -> (Double, Double) {
+  let (bx, by, bw, bh) = @core.effective_box(l)
+  if bx == l.x && by == l.y && bw == l.w && bh == l.h {
+    (l.w / 2.0, l.h / 2.0)
+  } else {
+    (bx + bw / 2.0 - l.x, by + bh / 2.0 - l.y)
+  }
+}
+
+///|
+/// `to_local` 的**显式轴心**版本：轴心已经在外面算好了（逐像素路径用）。
+fn to_local_p(
   l : @core.Layer,
   px : Double,
   py : Double,
+  pvx : Double,
+  pvy : Double,
 ) -> (Double, Double) {
-  let cx = l.x + l.w / 2.0
-  let cy = l.y + l.h / 2.0
-  // 正向管线：局部坐标 →（flip 镜像）→ 绕中心旋转 → 平移到层位。
-  // 逆映射：设备点 → 逆旋转 → 逆翻转 → 局部坐标。
   let mut lx = 0.0
   let mut ly = 0.0
   if l.rotation_deg == 0.0 {
@@ -285,21 +319,30 @@ pub fn to_local(
     ly = py - l.y
   } else {
     let rad = l.rotation_deg * 3.141592653589793 / 180.0
-    // 逆旋转（顺时针 θ 的逆 = 逆时针 θ）
     let cos_t = cos_rad(rad)
     let sin_t = sin_rad(rad)
-    let dx = px - cx
-    let dy = py - cy
-    lx = dx * cos_t + dy * sin_t + l.w / 2.0
-    ly = -dx * sin_t + dy * cos_t + l.h / 2.0
+    let dx = px - (l.x + pvx)
+    let dy = py - (l.y + pvy)
+    lx = dx * cos_t + dy * sin_t + pvx
+    ly = -dx * sin_t + dy * cos_t + pvy
   }
   if l.flip_h {
-    lx = l.w - lx
+    lx = 2.0 * pvx - lx
   }
   if l.flip_v {
-    ly = l.h - ly
+    ly = 2.0 * pvy - ly
   }
   (lx, ly)
+}
+
+///|
+pub fn to_local(
+  l : @core.Layer,
+  px : Double,
+  py : Double,
+) -> (Double, Double) {
+  let (pvx, pvy) = local_pivot(l)
+  to_local_p(l, px, py, pvx, pvy)
 }
 
 ///|
@@ -309,14 +352,28 @@ pub fn to_local(
 /// `render` 的往返测试锁住（`to_local(to_canvas(p)) == p`，含旋转 + 双向翻转）。
 /// lint 要用它把"局部顶点"换算到画布坐标，才能和渲染窗（画布坐标）比。
 pub fn to_canvas(l : @core.Layer, lx : Double, ly : Double) -> (Double, Double) {
+  let (pvx, pvy) = local_pivot(l)
+  to_canvas_p(l, lx, ly, pvx, pvy)
+}
+
+///|
+/// `to_canvas` 的**显式轴心**版本（逐像素路径用，见 `local_pivot`）。
+/// ⚠️ 轴心只有一个来源：正逆两处都读 `local_pivot`（同一处），别在这里再算一遍。
+fn to_canvas_p(
+  l : @core.Layer,
+  lx : Double,
+  ly : Double,
+  pvx : Double,
+  pvy : Double,
+) -> (Double, Double) {
   let mut x = lx
   let mut y = ly
-  // 正向管线：局部 →（flip 镜像）→ 绕中心旋转 → 平移到层位（to_local 的注释）
+  // 正向管线：局部 →（绕轴心 flip 镜像）→ 绕轴心旋转 → 平移到层位
   if l.flip_h {
-    x = l.w - x
+    x = 2.0 * pvx - x
   }
   if l.flip_v {
-    y = l.h - y
+    y = 2.0 * pvy - y
   }
   if l.rotation_deg == 0.0 {
     return (l.x + x, l.y + y)
@@ -324,10 +381,10 @@ pub fn to_canvas(l : @core.Layer, lx : Double, ly : Double) -> (Double, Double) 
   let rad = l.rotation_deg * 3.141592653589793 / 180.0
   let cos_t = cos_rad(rad)
   let sin_t = sin_rad(rad)
-  let cx = l.x + l.w / 2.0
-  let cy = l.y + l.h / 2.0
-  let dx = x - l.w / 2.0
-  let dy = y - l.h / 2.0
+  let cx = l.x + pvx
+  let cy = l.y + pvy
+  let dx = x - pvx
+  let dy = y - pvy
   (cx + dx * cos_t - dy * sin_t, cy + dx * sin_t + dy * cos_t)
 }
 
@@ -1124,8 +1181,19 @@ fn dab_box(
 ///    每次渲染只算一遍有效盒），这一行才换成 `screen`（见 PLAN 五十八）。
 /// ② 父坐标系 → 画布：整条**祖先链**（组）。⚠️ 漏掉这一步就是本轮修的 bug：
 ///    `rotate <组> 90` 而组里装着笔触层时，回包 `ok`、指纹变了，画面**逐位不变**。
-fn dab_center(l : @core.Layer, frames : Transform, d : @core.Dab) -> (Double, Double) {
-  to_canvas_in(frames, l.x + d.x, l.y + d.y)
+fn dab_center(
+  l : @core.Layer,
+  frames : Transform,
+  d : @core.Dab,
+  pvx : Double,
+  pvy : Double,
+) -> (Double, Double) {
+  // 局部偏移 →（本层 rot/flip，绕 `local_pivot`）→ 祖先链 → 画布。
+  // ⚠️ 两段都必须有：本层这一段漏掉就是"给笔触层加 rotate 回 ok、指纹变、
+  // 画面逐位不动"（PLAN 五十八那条的同族），祖先那一段漏掉是"组转了而墨迹
+  // 不动"（上一轮修的那条）。`to_canvas_p` + `to_canvas_in` 正是一对。
+  let (ox, oy) = to_canvas_p(l, d.x, d.y, pvx, pvy)
+  to_canvas_in(frames, ox, oy)
 }
 
 ///|
@@ -1143,8 +1211,10 @@ fn dabs_window(
   let mut wy0 = 0
   let mut wx1 = 0
   let mut wy1 = 0
+  // 轴心遍历全部 dab（`raster_bbox`）⇒ 循环外算一次
+  let (pvx, pvy) = local_pivot(l)
   for d in l.dabs {
-    let (cx, cy) = dab_center(l, frames, d)
+    let (cx, cy) = dab_center(l, frames, d, pvx, pvy)
     match dab_box(cx, cy, d.r, w, h) {
       None => continue
       Some((px0, py0, px1, py1)) => {
@@ -1180,8 +1250,10 @@ fn dabs_window(
 
 ///|
 fn paint_dabs(l : @core.Layer, frames : Transform, scratch : @codec.RgbaBuf) -> Unit {
+  // 轴心遍历全部 dab ⇒ 循环外算一次（`local_pivot` 那条注释）
+  let (pvx, pvy) = local_pivot(l)
   for d in l.dabs {
-    let (cx, cy) = dab_center(l, frames, d)
+    let (cx, cy) = dab_center(l, frames, d, pvx, pvy)
     let (px0, py0, px1, py1) = match dab_box(cx, cy, d.r, scratch.width, scratch.height) {
       None => continue
       Some(b) => b
@@ -1329,6 +1401,9 @@ fn apply_adjust_layer(
     i = i + 1
   }
   apply_adjust(l.adjust, scratch)
+  // 蒙版的读点要经本层的逆变换，而笔触层的轴心来自**落笔范围**（要遍历全部
+  // dab）——所以在循环外算**一次**，别放进逐像素路径（PLAN 五十九那条）。
+  let (pvx, pvy) = local_pivot(l)
   let mut y = wy0
   while y < wy1 {
     let mut x = wx0
@@ -1338,7 +1413,7 @@ fn apply_adjust_layer(
       // 没有蒙版时覆盖度恒为 1（不是"跳过混合"）。
       let cover = match l.mask {
         Some(_) => {
-          let (mf_x, mf_y) = canvas_to_layer(l, frames, x.to_double() + 0.5, y.to_double() + 0.5)
+          let (mf_x, mf_y) = canvas_to_layer_p(l, frames, x.to_double() + 0.5, y.to_double() + 0.5, pvx, pvy)
           mask_cover_at(l, mf_x, mf_y)
         }
         None => 1.0
@@ -2191,11 +2266,16 @@ fn draw_overlays(
     }
     ordinal = ordinal + 1
     let color = overlay_palette[(ordinal - 1) % overlay_palette.length()]
+    // ⚠️ 盒子走 `@core.effective_box`——**与 `query-layer` 同一个事实源**。
+    // 读存下来的 `l.x/l.y/l.w/l.h` 会让两个报告面分家：笔触层/子组的存盒只是
+    // 建层时的快照（笔触层那份还是整幅画布尺寸），于是"`query-layer` 报落笔
+    // 范围、线框画整幅画布"（PLAN 六十实测抓到）。判据一处，报告面两处——所以两处必须读同一处。）
+    let (ex, ey, ew, eh) = @core.effective_box(l)
     // doc 坐标 bbox → 视图像素坐标
-    let bx0 = ((l.x - cx0.to_double()) * out.width.to_double() / cw.to_double()).to_int()
-    let by0 = ((l.y - cy0.to_double()) * out.height.to_double() / ch.to_double()).to_int()
-    let bx1 = ((l.x + l.w - cx0.to_double()) * out.width.to_double() / cw.to_double()).to_int()
-    let by1 = ((l.y + l.h - cy0.to_double()) * out.height.to_double() / ch.to_double()).to_int()
+    let bx0 = ((ex - cx0.to_double()) * out.width.to_double() / cw.to_double()).to_int()
+    let by0 = ((ey - cy0.to_double()) * out.height.to_double() / ch.to_double()).to_int()
+    let bx1 = ((ex + ew - cx0.to_double()) * out.width.to_double() / cw.to_double()).to_int()
+    let by1 = ((ey + eh - cy0.to_double()) * out.height.to_double() / ch.to_double()).to_int()
     stroke_rect_1px(out, bx0, by0, bx1, by1, color)
     draw_number(out, ordinal, bx0 + 2, by0 + 2, color)
   }

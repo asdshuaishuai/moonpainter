@@ -546,10 +546,17 @@ pub fn group_bbox(children : Array[Layer]) -> (Double, Double, Double, Double)? 
   if children.length() == 0 {
     return None
   }
-  let mut x0 = children[0].x
-  let mut y0 = children[0].y
-  let mut x1 = children[0].x + children[0].w
-  let mut y1 = children[0].y + children[0].h
+  // ⚠️ 初值必须是**第一个成员的派生盒**（`effective_box`），不是它存下来的
+  // `x/y/w/h`：成员自己是组/笔触层时存盒是建层时的快照（笔触层那份还是整幅
+  // 画布尺寸），拿它当并集初值就会把整个并集**吞掉**——组的盒子仍是画布、
+  // 轴心落在画布中心，而"盒子跟着内容走"这条在成员那一级白做了（实测：
+  // 笔触层当第一个成员时，整组的轴心是 (50,50) 而不是落笔范围中心 (45,15)，
+  // PLAN 六十）。
+  let (fx, fy, fw, fh) = effective_box(children[0])
+  let mut x0 = fx
+  let mut y0 = fy
+  let mut x1 = fx + fw
+  let mut y1 = fy + fh
   for c in children {
     let (cx, cy, cw, ch) = effective_box(c)
     if cx < x0 {
@@ -587,8 +594,66 @@ pub fn effective_box(l : Layer) -> (Double, Double, Double, Double) {
       Some(b) => b
       None => (l.x, l.y, l.w, l.h)
     }
+  } else if l.kind is ShapeKind::Raster {
+    // 笔触层同理：**内容**（落笔范围）决定盒子。存下来的那份是画布尺寸的快照
+    // （`add-paint` 建的），拿它当"这个层占了哪儿"就是把整幅画布报成一支小笔迹
+    // 的尺寸（PLAN 六十）。
+    match raster_bbox(l) {
+      Some(b) => b
+      None => (l.x, l.y, l.w, l.h)
+    }
   } else {
     (l.x, l.y, l.w, l.h)
+  }
+}
+
+///|
+/// **笔触层的落笔范围**（画布坐标，轴对齐）：全部 dab 的盒（圆心 ± 半径）的并集。
+///
+/// 与 `layer_bbox`/`group_bbox` 同一把尺子——"内容决定盒子"。`r <= 0` 的 dab
+/// 不落墨、不计（同 `dabs_window`）。一个都不剩就返回 `None`
+/// （空笔触层没有"内容范围"可言，同空组）。
+pub fn raster_bbox(l : Layer) -> (Double, Double, Double, Double)? {
+  let mut x0 = 0.0
+  let mut y0 = 0.0
+  let mut x1 = 0.0
+  let mut y1 = 0.0
+  let mut any = false
+  for d in l.dabs {
+    if d.r <= 0.0 {
+      continue
+    }
+    // dab 存的是**层局部**偏移 ⇒ 画布坐标要加 `l.x/l.y`（与
+    // `@render.dab_center` 的"平移"那一半同一件事）
+    let dx0 = l.x + d.x - d.r
+    let dy0 = l.y + d.y - d.r
+    let dx1 = l.x + d.x + d.r
+    let dy1 = l.y + d.y + d.r
+    if any {
+      if dx0 < x0 {
+        x0 = dx0
+      }
+      if dy0 < y0 {
+        y0 = dy0
+      }
+      if dx1 > x1 {
+        x1 = dx1
+      }
+      if dy1 > y1 {
+        y1 = dy1
+      }
+    } else {
+      any = true
+      x0 = dx0
+      y0 = dy0
+      x1 = dx1
+      y1 = dy1
+    }
+  }
+  if any {
+    Some((x0, y0, x1 - x0, y1 - y0))
+  } else {
+    None
   }
 }
 

@@ -131,7 +131,7 @@ pub fn list_tools() -> Array[AgentTool] {
   // 修图操作
   add(
     "add-paint",
-    "add-paint：新建画笔层（raster，全画布）。可选：" + add_paint_keys().map(fn(k) { "[\{k}=]" }).join(""),
+    "add-paint：新建画笔层（raster；盒子跟着**落笔范围**走，所以 resize 只改一份没人读的快照——画面与 query-layer 都不变）。可选：" + add_paint_keys().map(fn(k) { "[\{k}=]" }).join(""),
     "meta",
   )
   add("brush", "brush layer=<raster层> pts=x1,y1;x2,y2[;…] r=<半径px> [color=#RRGGBB[AA]]：沿折线落笔触", "meta")

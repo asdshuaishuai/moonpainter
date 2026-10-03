@@ -143,9 +143,15 @@ test "画笔坐标是画布坐标：层被 move 后落笔仍落在点击处" {
   let _ = run(s, "brush layer=l1 pts=100,100;100,100 r=10 color=#FF0000FF")
   let r = run(s, "sample 100 100")
   assert_true(r.contains("#FF0000"), msg=r)
-  // dab 实际存储为局部坐标 (50,60)
-  let q = run(s, "query-layer l1")
-  assert_true(q.contains("\"x\":50"), msg=q)
+  // 层的盒子**跟着落笔走**（PLAN 六十）：`query-layer` 报的是这一笔的范围
+  // (90,90,20,20) = 点击处 (100,100) ± 半径 10，不再是 `add-paint` 那份
+  // 300×300 的画布快照（此前 `query-layer` 会把整幅画布报成一支小笔迹的尺寸）。
+  // 这同时**证明了 dab 存的是局部偏移**：x = 50（层位）+ 50（dab 局部）− 10（半径）
+  // ——若 dab 存的是画布坐标 (100,100)，这里会是 50+100−10 = 140。
+  assert_eq(gmove_layer_num(s, "l1", "x"), 90.0, msg="盒子 x = 层位 + dab 局部 − 半径")
+  assert_eq(gmove_layer_num(s, "l1", "y"), 90.0, msg="盒子 y")
+  assert_eq(gmove_layer_num(s, "l1", "w"), 20.0, msg="盒子宽 = 2×半径（一支圆头笔迹）")
+  assert_eq(gmove_layer_num(s, "l1", "h"), 20.0, msg="盒子高")
 }
 
 ///|
