@@ -1828,14 +1828,14 @@ MUTS = [
         "Q25",
         "dab 盒去掉 ±1 松弛（落笔窗口太紧：笔触边缘被静默裁掉一列像素）",
         "render/scene.mbt",
-        """  let x0 = (l.x + d.x - d.r).to_int() - 1
-  let y0 = (l.y + d.y - d.r).to_int() - 1
-  let x1 = (l.x + d.x + d.r).to_int() + 1
-  let y1 = (l.y + d.y + d.r).to_int() + 1""",
-        """  let x0 = (l.x + d.x - d.r).to_int()
-  let y0 = (l.y + d.y - d.r).to_int()
-  let x1 = (l.x + d.x + d.r).to_int()
-  let y1 = (l.y + d.y + d.r).to_int()""",
+        """  let x0 = (cx - r).to_int() - 1
+  let y0 = (cy - r).to_int() - 1
+  let x1 = (cx + r).to_int() + 1
+  let y1 = (cy + r).to_int() + 1""",
+        """  let x0 = (cx - r).to_int()
+  let y0 = (cy - r).to_int()
+  let x1 = (cx + r).to_int()
+  let y1 = (cy + r).to_int()""",
         "killed",
     ),
     (
@@ -1946,8 +1946,8 @@ MUTS = [
         "Q52",
         "笔触窗口改用层盒子（w/h 不是读点：会把层外的墨整块裁掉）",
         "render/scene.mbt",
-        "dabs_window(l, buf.width, buf.height)",
-        "dabs_window(l, l.w.to_int(), l.h.to_int())",
+        "dabs_window(l, frames, buf.width, buf.height)",
+        "dabs_window(l, frames, l.w.to_int(), l.h.to_int())",
         "killed",
     ),
     (
@@ -2063,6 +2063,29 @@ MUTS = [
     let d = if l.flip_h && l.flip_v {""",
         r"""  if false {
     let d = if l.flip_h && l.flip_v {""",
+        "killed",
+    ),
+    (
+        "Q76",
+        "dab 的画布位置漏掉**祖先链**（组转了而笔触层逐位不动 = 本轮修的那个 bug）",
+        "render/scene.mbt",
+        r"""fn dab_center(l : @core.Layer, frames : Transform, d : @core.Dab) -> (Double, Double) {
+  to_canvas_in(frames, l.x + d.x, l.y + d.y)
+}""",
+        r"""fn dab_center(l : @core.Layer, frames : Transform, d : @core.Dab) -> (Double, Double) {
+  let _ = frames
+  (l.x + d.x, l.y + d.y)
+}""",
+        "killed",
+    ),
+    (
+        "Q77",
+        "落笔盒与覆盖判据各算一个中心（盒在转过的位置、圆斑判据还在原位）",
+        "render/scene.mbt",
+        r"""          let sx = px.to_double() + s.0 - cx
+          let sy = py.to_double() + s.1 - cy""",
+        r"""          let sx = px.to_double() + s.0 - (l.x + d.x)
+          let sy = py.to_double() + s.1 - (l.y + d.y)""",
         "killed",
     ),
     (

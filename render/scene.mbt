@@ -1000,7 +1000,7 @@ fn paint_raster(
   // 所以输出**逐位相同**。
   // 窗口必须**先**算出来：scratch 初值是不透明黑，得先把自己要读的那块清成
   // 透明，再落笔（顺序反过来就是把刚画的笔迹擦掉——实测被 4 条测试当场抓住）。
-  let (wx0, wy0, wx1, wy1) = match dabs_window(l, buf.width, buf.height) {
+  let (wx0, wy0, wx1, wy1) = match dabs_window(l, frames, buf.width, buf.height) {
     None => return // 一个 dab 都没落下：整层透明，连清零都不必
     Some(w) => w
   }
@@ -1014,7 +1014,7 @@ fn paint_raster(
     }
     wy = wy + 1
   }
-  paint_dabs(l, scratch)
+  paint_dabs(l, frames, scratch)
   // 合成：src alpha ← dab alpha × 层透明度 × 蒙版（只扫落笔窗口）
   let mut y = wy0
   while y < wy1 {
@@ -1047,19 +1047,26 @@ fn paint_raster(
 /// `paint_dabs` 与 `dabs_window` 都调它。分开各算一遍的话，一旦漂移（比如以后
 /// 把松弛从 ±1 改成 ±2），少的那个方向就是**静默被裁**——画面少一块而没有
 /// 任何东西会红。⚠️ `.to_int()` 是截断（负数朝零），别改成 floor。
+///
+/// 吃的是 dab 的**画布中心**（`dab_center`，已含本层与祖先的全部变换）：
+/// 圆斑旋转/镜像后还是同一个圆，所以盒 = 中心 ± (r+1) 对任何变换都**精确**
+/// ——不需要按旋转放大盒子。⚠️ 中心必须在**画布**坐标里算：写成
+/// `l.x + d.x` 就是把祖先组的旋转漏掉（实测 `rotate <组> 90` 而组里有笔触层时
+/// 画面**逐位不变**，见 PLAN 五十八）。
 fn dab_box(
-  l : @core.Layer,
-  d : @core.Dab,
+  cx : Double,
+  cy : Double,
+  r : Double,
   w : Int,
   h : Int,
 ) -> (Int, Int, Int, Int)? {
-  if d.r <= 0.0 {
+  if r <= 0.0 {
     return None
   }
-  let x0 = (l.x + d.x - d.r).to_int() - 1
-  let y0 = (l.y + d.y - d.r).to_int() - 1
-  let x1 = (l.x + d.x + d.r).to_int() + 1
-  let y1 = (l.y + d.y + d.r).to_int() + 1
+  let x0 = (cx - r).to_int() - 1
+  let y0 = (cy - r).to_int() - 1
+  let x1 = (cx + r).to_int() + 1
+  let y1 = (cy + r).to_int() + 1
   let px0 = if x0 < 0 { 0 } else { x0 }
   let py0 = if y0 < 0 { 0 } else { y0 }
   let px1 = if x1 > w { w } else { x1 }
@@ -1071,17 +1078,41 @@ fn dab_box(
 }
 
 ///|
+/// 一个 dab 的**画布中心**：dab 存的是**层局部**偏移（`d.x/d.y` 相对 `l.x/l.y`）。
+/// **只有这一处**——`paint_dabs`、`dabs_window`、`pick` 三边都从它拿。
+///
+/// ① 层局部 → 父坐标系：**只平移**（`l.x + d.x`，与 `to_canvas` 在无 rot/flip 时
+///    逐位相同）。⚠️ 这里**故意不**写成 `screen(l, frames, d.x, d.y)`
+///    （= `to_canvas` + 祖先链）：笔触层的**本层** `rot`/`flip` 还不生效
+///    （读点矩阵 `kind_only_fields` 里 raster 不在 `rotation_deg`/`flip_h`/
+///    `flip_v` 的允许集合里——入口拒、`lint` 报），顺手把本层变换也算进来
+///    就会让"渲染器不读它"变成假话，而入口又拒着 ⇒ 两个信号当面打架。
+///    等笔触层自己的轴心也能落到**内容中心**那一天（盒子跟着内容走 +
+///    每次渲染只算一遍有效盒），这一行才换成 `screen`（见 PLAN 五十八）。
+/// ② 父坐标系 → 画布：整条**祖先链**（组）。⚠️ 漏掉这一步就是本轮修的 bug：
+///    `rotate <组> 90` 而组里装着笔触层时，回包 `ok`、指纹变了，画面**逐位不变**。
+fn dab_center(l : @core.Layer, frames : Transform, d : @core.Dab) -> (Double, Double) {
+  to_canvas_in(frames, l.x + d.x, l.y + d.y)
+}
+
+///|
 /// 全部 dab 的落笔窗口（非空盒的并）= **真正可能被写过的像素集合**。
 /// `paint_raster` 用它决定清哪块、扫哪块：窗外从来没有被写过，旧实现也是靠
 /// `sa > 0` 跳过，所以只扫这窗输出**逐位相同**。没有落笔 → None。
-fn dabs_window(l : @core.Layer, w : Int, h : Int) -> (Int, Int, Int, Int)? {
+fn dabs_window(
+  l : @core.Layer,
+  frames : Transform,
+  w : Int,
+  h : Int,
+) -> (Int, Int, Int, Int)? {
   let mut touched = false
   let mut wx0 = 0
   let mut wy0 = 0
   let mut wx1 = 0
   let mut wy1 = 0
   for d in l.dabs {
-    match dab_box(l, d, w, h) {
+    let (cx, cy) = dab_center(l, frames, d)
+    match dab_box(cx, cy, d.r, w, h) {
       None => continue
       Some((px0, py0, px1, py1)) => {
         if touched {
@@ -1115,9 +1146,10 @@ fn dabs_window(l : @core.Layer, w : Int, h : Int) -> (Int, Int, Int, Int)? {
 }
 
 ///|
-fn paint_dabs(l : @core.Layer, scratch : @codec.RgbaBuf) -> Unit {
+fn paint_dabs(l : @core.Layer, frames : Transform, scratch : @codec.RgbaBuf) -> Unit {
   for d in l.dabs {
-    let (px0, py0, px1, py1) = match dab_box(l, d, scratch.width, scratch.height) {
+    let (cx, cy) = dab_center(l, frames, d)
+    let (px0, py0, px1, py1) = match dab_box(cx, cy, d.r, scratch.width, scratch.height) {
       None => continue
       Some(b) => b
     }
@@ -1130,8 +1162,8 @@ fn paint_dabs(l : @core.Layer, scratch : @codec.RgbaBuf) -> Unit {
       while px < px1 {
         let mut hits = 0
         for s in dab_samples {
-          let sx = px.to_double() + s.0 - (l.x + d.x)
-          let sy = py.to_double() + s.1 - (l.y + d.y)
+          let sx = px.to_double() + s.0 - cx
+          let sy = py.to_double() + s.1 - cy
           if sx * sx + sy * sy <= r2 {
             hits = hits + 1
           }
