@@ -80,7 +80,7 @@ let subsample_2x2 : Array[(Double, Double)] = [
 /// 只有恒等祖先下才成立——一处判据，别在每处各写一遍。
 fn frame_transformed(frames : Transform) -> Bool {
   for f in frames {
-    if f.rotation_deg != 0.0 || f.flip_h || f.flip_v {
+    if f.rot != 0.0 || f.flip_h || f.flip_v {
       return true
     }
   }
@@ -94,8 +94,22 @@ fn frames_for(frames : Transform, l : @core.Layer) -> Transform {
   for f in frames {
     out.push(f)
   }
-  out.push(l)
+  out.push(frame_of(l))
   out
+}
+
+///|
+/// **容器 → 预解算帧**：轴心（`@core.effective_box` 的中心）在**建链时**算一次。
+/// 只有这一处算轴心，所以正逆两个方向读到的必然是同一个值。
+fn frame_of(l : @core.Layer) -> Frame {
+  let (bx, by, bw, bh) = @core.effective_box(l)
+  {
+    rot: l.rotation_deg,
+    flip_h: l.flip_h,
+    flip_v: l.flip_v,
+    cx: bx + bw / 2.0,
+    cy: by + bh / 2.0,
+  }
 }
 
 ///|
@@ -131,7 +145,28 @@ fn canvas_to_layer(l : @core.Layer, frames : Transform, x : Double, y : Double) 
 /// 是单帧那一对）。空数组（根级层）就是恒等变换。
 /// ⚠️ 帧里装的只会是**组**：组的 `x/y` 已被 `move` 折叠进后代，所以帧的变换
 /// **不含平移**（见 `to_local_frame`）。
-pub type Transform = Array[@core.Layer]
+///
+/// 帧里带的是**预解算**过的一份数据（`Frame`），不是整个 `Layer`：轴心来自
+/// `effective_box`（组的盒子 = 成员的并集，要递归走一遍子树），而
+/// `to_local_frame` 是**每个像素**都调一次 ⇒ 留着整个 `Layer` 就等于每像素重算
+/// 一次子树并集（链长 d 时是每像素 O(d²)）。实测：同一份内容、同样的像素，只把
+/// 嵌套深度从 1 改成 16，1000×1000 渲染从 0.30 s 变成 5.65 s（19 倍，PLAN 五十八）。
+pub type Transform = Array[Frame]
+
+///|
+/// **预解算帧**：逆/正变换真正要的四样东西——翻转、旋转角、以及**算好一次的
+/// 轴心**（画布坐标）。
+///
+/// 顺带把"正逆两处必须是同一个轴心"变成**结构上不可能违反**：`to_local_frame`
+/// 与 `to_canvas_frame_pt` 读的是同一个 `Frame`，不再各自 `effective_box` 一遍
+/// （PLAN 五十六那条教训）。
+pub struct Frame {
+  rot : Double
+  flip_h : Bool
+  flip_v : Bool
+  cx : Double
+  cy : Double
+}
 
 ///|
 /// **组帧的逆变换**：绕**内容中心**的 rot/flip，**不含平移**。
@@ -145,14 +180,13 @@ pub type Transform = Array[@core.Layer]
 /// ⚠️ 轴心走 `@core.effective_box`（组的盒子 = 成员的并集，**实时派生**），
 /// 不读存下来的 `w/h`：那份只是建组时的快照，读它会让轴心固化成历史位置，
 /// 而且 `resize grp` 能把它挪走（PLAN 五十七）。
-fn to_local_frame(f : @core.Layer, px : Double, py : Double) -> (Double, Double) {
-  let (bx, by, bw, bh) = @core.effective_box(f)
-  let cx = bx + bw / 2.0
-  let cy = by + bh / 2.0
+fn to_local_frame(f : Frame, px : Double, py : Double) -> (Double, Double) {
+  let cx = f.cx
+  let cy = f.cy
   let mut u = px - cx
   let mut v = py - cy
-  if f.rotation_deg != 0.0 {
-    let rad = f.rotation_deg * 3.141592653589793 / 180.0
+  if f.rot != 0.0 {
+    let rad = f.rot * 3.141592653589793 / 180.0
     let cos_t = cos_rad(rad)
     let sin_t = sin_rad(rad)
     let u2 = u * cos_t + v * sin_t
@@ -193,10 +227,9 @@ pub fn to_local_in(frames : Transform, px : Double, py : Double) -> (Double, Dou
 /// 组局部坐标 → 画布点（`to_local_frame` 的**逆**，与它成对）。
 /// 轴心同样走 `@core.effective_box`——正逆两处必须**同一个**轴心，
 /// 各写一遍就会有一边先烂（`to_local`/`to_canvas` 那条教训）。
-fn to_canvas_frame_pt(f : @core.Layer, lx : Double, ly : Double) -> (Double, Double) {
-  let (bx, by, bw, bh) = @core.effective_box(f)
-  let cx = bx + bw / 2.0
-  let cy = by + bh / 2.0
+fn to_canvas_frame_pt(f : Frame, lx : Double, ly : Double) -> (Double, Double) {
+  let cx = f.cx
+  let cy = f.cy
   let mut u = lx - cx
   let mut v = ly - cy
   if f.flip_h {
@@ -205,8 +238,8 @@ fn to_canvas_frame_pt(f : @core.Layer, lx : Double, ly : Double) -> (Double, Dou
   if f.flip_v {
     v = -v
   }
-  if f.rotation_deg != 0.0 {
-    let rad = f.rotation_deg * 3.141592653589793 / 180.0
+  if f.rot != 0.0 {
+    let rad = f.rot * 3.141592653589793 / 180.0
     let cos_t = cos_rad(rad)
     let sin_t = sin_rad(rad)
     let u2 = u * cos_t - v * sin_t

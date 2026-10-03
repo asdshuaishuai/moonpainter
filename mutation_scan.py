@@ -2092,8 +2092,8 @@ MUTS = [
         "Q67",
         "组帧忘了做逆旋转（组的 rotate 在渲染里变成恒等）",
         "render/scene.mbt",
-        r"""  if f.rotation_deg != 0.0 {
-    let rad = f.rotation_deg * 3.141592653589793 / 180.0
+        r"""  if f.rot != 0.0 {
+    let rad = f.rot * 3.141592653589793 / 180.0
     let cos_t = cos_rad(rad)
     let sin_t = sin_rad(rad)
     let u2 = u * cos_t + v * sin_t
@@ -2102,7 +2102,7 @@ MUTS = [
     v = v2
   }""",
         r"""  if false {
-    let rad = f.rotation_deg * 3.141592653589793 / 180.0
+    let rad = f.rot * 3.141592653589793 / 180.0
     let cos_t = cos_rad(rad)
     let sin_t = sin_rad(rad)
     let u2 = u * cos_t + v * sin_t
