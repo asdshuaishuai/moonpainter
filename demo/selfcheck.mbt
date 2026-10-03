@@ -165,6 +165,22 @@ fn sc_near(a : Double, b : Double) -> Bool {
 }
 
 ///|
+/// 自检用的两张**自制**位图（4×3 蓝 / 6×2 红，各 ~100 字节的 base64）。
+/// 自造而不是塞真图：自检要能在浏览器里点、也要能在 Node 测试里跑，**图片字节
+/// 只能从命令面进去**（`add-image b64=`），所以常量必须内嵌、且越小越好。
+/// ⚠️ 这里曾经有一条边界写着"图像类命令没进清单，因为它们要吃图片字节，Node 与
+/// 浏览器两条路径不同"——**实测推翻了它**：`b64=` 是纯 ASCII 参数，两条路径
+/// 完全一样（那条边界是照着"图片资源文件"想的，而命令面根本不读文件）。
+fn sc_png_blue43() -> String {
+  "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAIAAAA7ljmRAAAAD0lEQVR4nGNgYPiPhHBxAN1JC/U39qNPAAAAAElFTkSuQmCC"
+}
+
+///|
+fn sc_png_red62() -> String {
+  "iVBORw0KGgoAAAANSUhEUgAAAAYAAAACCAIAAAD0PzoJAAAAEUlEQVR4nGP4z8CAhtD5QAQA7zYL9bpHqfQAAAAASUVORK5CYII="
+}
+
+///|
 /// 几何选择子（画布左下 20×30 那一块）：`select-preview`/`census within=` 吃的
 /// 就是它。**取 20×30 而不是 0.5×1**：选择子坐标的归一化/像素两种读法在仓库里
 /// 都出现过，取"两种读法下都覆盖到东西"的值，判据才不会因为口径而变成空集。
@@ -730,6 +746,52 @@ pub fn selfcheck_cases() -> Array[SCase] {
         json_num_str(all, "components") + "｜5×5 coverage " + json_num_str(tiny, "coverage") +
         " area " + sc_pre(facts_area.to_string()) + "｜coverage×1200 " +
         sc_pre((sc_get_num(tiny, "coverage") * 1200.0).to_string())
+      },
+    },
+    {
+      name: "位图：盒子跟着内容走、换图真的换画面、原地换不丢标签",
+      steps: [
+        sc_s("new 40 30 uuid=sc-img"),
+        // ① 不给 w=/h= ⇒ 盒子 = 资产像素尺寸（4×3）
+        fn(_) { "add-image id=i x=2 y=3 b64=" + sc_png_blue43() },
+        sc_s("query-layer i"),
+        // ② 只给 w=8 ⇒ 高按原比例推（4:3 ⇒ 6）
+        fn(_) { "add-image id=j x=20 y=3 w=8 b64=" + sc_png_blue43() },
+        sc_s("query-layer j"),
+        sc_s("tag i hero"),
+        // ③ 原地换图（6×2 红）：层序/标签/透明度都不该动
+        fn(_) { "set-image i b64=" + sc_png_red62() },
+        sc_s("query-layer i"),
+        sc_s("render 40"),
+        fn(_) { "set-image i b64=" + sc_png_blue43() },
+        sc_s("render 40"),
+      ],
+      check: fn(rs) {
+        let w0 = sc_field_num(rs[2], "w")
+        let h0 = sc_field_num(rs[2], "h")
+        let w1 = sc_field_num(rs[4], "w")
+        let h1 = sc_field_num(rs[4], "h")
+        let w2 = sc_field_num(rs[7], "w")
+        let h2 = sc_field_num(rs[7], "h")
+        // 换图必须换资产（asset 是内容寻址的 sha）；而**标签还在**说明是"原地换"
+        // 而不是"删了重加"（后者会把标签/层序/蒙版全丢掉、还把层推到栈顶）。
+        let asset_changed = sc_field(rs[7], "asset") != sc_field(rs[2], "asset") &&
+          sc_field(rs[7], "asset") != ""
+        let tag_kept = rs[7].stringify().contains("hero")
+        // 两张不同的图渲染必须不同——否则"换图成功"只是回包好看。
+        let render_changed = sc_sha(rs[8]) != sc_sha(rs[10]) && sc_sha(rs[8]) != ""
+        w0 == 4.0 && h0 == 3.0 && w1 == 8.0 && h1 == 6.0 && w2 == 6.0 && h2 == 2.0 &&
+        asset_changed && tag_kept && render_changed
+      },
+      want: "4×3 图缺省盒 4×3；只给 w=8 时 h=6（按原比例）；换 6×2 图后盒 6×2、asset 变、标签 hero 还在；换图前后 render 不同",
+      evidence: fn(rs) {
+        "缺省盒 " + json_num_str(sc_layer(rs[2]), "w") + "×" + json_num_str(sc_layer(rs[2]), "h") +
+        "｜只给 w=8 → " + json_num_str(sc_layer(rs[4]), "w") + "×" +
+        json_num_str(sc_layer(rs[4]), "h") + "｜换图后 " +
+        json_num_str(sc_layer(rs[7]), "w") + "×" + json_num_str(sc_layer(rs[7]), "h") + " asset " +
+        sc_pre(sc_field(rs[7], "asset")) + "（原 " + sc_pre(sc_field(rs[2], "asset")) + "）｜标签 " +
+        (if rs[7].stringify().contains("hero") { "在" } else { "丢了" }) + "｜render " +
+        sc_pre(sc_sha(rs[8])) + " → " + sc_pre(sc_sha(rs[10]))
       },
     },
     {
