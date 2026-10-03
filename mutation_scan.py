@@ -2010,6 +2010,37 @@ MUTS = [
         "killed",
     ),
     (
+        "Q64",
+        "组的 move 只改自己的 x/y（后代不动：回 ok 而画面一个像素不变）",
+        "agent/session.mbt",
+        "    update_layer(doc.layers, id, fn(l) { shift_layer_tree(l, dx, dy) })",
+        "    update_layer(doc.layers, id, fn(l) { { ..l, x, y } })",
+        "killed",
+    ),
+    (
+        "Q66",
+        "嵌套后代被搬两遍（同一棵子树的 delta 叠加：更深的后代挪了两倍）",
+        "agent/ops.mbt",
+        "  { ..l, x: l.x + dx, y: l.y + dy, children: kids }",
+        "  { ..l, x: l.x + dx * 2.0, y: l.y + dy * 2.0, children: kids }",
+        # 只在**有嵌套**时露馅：`agent/group_move_test.mbt` 的 `go>gi>a` 用例
+        # 断言最内层 `a` 的盒子恰好是 7,3（搬两遍会是 14,6）。
+        "killed",
+    ),
+    (
+        "Q65",
+        "递归平移把后代搬两遍（重复 push 同一个子层）",
+        "agent/ops.mbt",
+        "    kids.push(shift_layer_tree(c, dx, dy))\n  }",
+        "    kids.push(shift_layer_tree(c, dx, dy))\n    kids.push(shift_layer_tree(c, dx, dy))\n  }",
+        # **等价**：重复 push 的是同一个 `kids` 数组——`kids[j]` 被后一个（同样的值）
+        # 覆盖，数组内容与长度都不变。实测：推演一遍（两条路径都只搬一次）后
+        # 手工把这段注入源文件跑全量测试，119 条全过、一条都不红 ⇒ 判定等价，
+        # 与 `Q65` 最初想守的"祖先位移叠加到后代头上"根本不是同一件事
+        # （那需要 `x: c.x + dx` 这种真的多加一次，见 PLAN 五十五）。
+        "equivalent",
+    ),
+    (
         "Q56",
         "能力表把字段名写错（读点矩阵查不到 ⇒ 这个能力永远不报，画面参数静默不可达）",
         "agent/ops.mbt",

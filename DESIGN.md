@@ -510,7 +510,9 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
   （字典是模型唯一的说明书，承诺一件做不到的事就是在骗它）。命令键 →
   表字段的映射只有一处（`key_field`），参数报错里的"为什么不生效"也从表算
   （`kind_only_dead_note`）。⚠️ `opacity`/`visible`
-  不在矩阵里：它们真的生效（单子层时 `set-style g1 opacity=0.5` 与
+  组的 `move` 是**搬内容**（连后代一起平移，回包给 `moved_layers`）——
+组的 `x/y` 渲染器不读，只改盒子就是"回 ok 而画面不动"（PLAN 五十五）；
+不在矩阵里：它们真的生效（单子层时 `set-style g1 opacity=0.5` 与
   `set-style r1 opacity=0.5` 同一个 sha256；多子层重叠时组的 α 是**整体打折**，
   与"每个子层各打一次折"不同，见上）；`x/y/w/h` 也不在——它们有消费者
   （`query-layer` 报告、取景线框 `render overlay=1` 按它画），但渲染器不读：
@@ -667,7 +669,7 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
   | 10 层 + 软蒙版 | 6.17 s | **1.24 s** | −80% |
 
   每层边际 **0.55 s → 0.08 s**、**软蒙版边际 0.53 s → 0.11 s**，像素逐位未变
-  （314 条测试含 golden sha256 全绿）。
+  （318 条测试含 golden sha256 全绿）。
 
   **圆角矩形随后也进来了**（同一个内接盒，各边再内缩半径）：半径的**夹取**
   提成了一处实现（`clamped_radius`，渲染器 `in_rounded_rect` 与快速路径共用

@@ -89,9 +89,10 @@ test "caps：逐 kind 的完整能力表（人类面板据此画控件）" {
     caps_str(s, "p1") == "move,opacity,mask",
     msg="笔触层：\{caps_str(s, "p1")}",
   )
-  // 组：只有"能有子层"；x/y 与盒子都不读（实测画面逐位不变）
+  // 组：`move` 是"搬后代"（组自己没画面，后代里有读位置的层才算有能力——
+  // 见 `group_has_movable`），另有 `children`；盒子/旋转/翻转都不读
   assert_true(
-    caps_str(s, "grp") == "opacity,children",
+    caps_str(s, "grp") == "move,opacity,children",
     msg="组的能力表：\{caps_str(s, "grp")}",
   )
   // 调整层：只有蒙版与算子；位置/盒子/旋转/翻转都不读

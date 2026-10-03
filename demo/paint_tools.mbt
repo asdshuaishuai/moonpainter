@@ -237,7 +237,7 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
         ("name", "string:新名称"),
       ],
     ),
-    make_tool("move", "移动图层", [("id", "string:req:图层 id"), ("x", "number:req:新 x"), ("y", "number:req:新 y")]),
+    make_tool("move", "移动图层（选中组时整个搬走它里面的内容）", [("id", "string:req:图层 id"), ("x", "number:req:新 x"), ("y", "number:req:新 y")]),
     make_tool("resize", "改图层尺寸", [("id", "string:req:图层 id"), ("w", "number:req:新宽"), ("h", "number:req:新高")]),
     make_tool("rotate", "旋转图层", [("id", "string:req:图层 id"), ("deg", "number:req:角度")]),
     make_tool(

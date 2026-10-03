@@ -65,7 +65,7 @@ pub fn list_tools() -> Array[AgentTool] {
     "set-style <id> " + set_style_keys().map(fn(k) { "\{k}=/" }).join("") + "（lgrad 端点归一化 0..1，非像素；**points=x,y;x,y;… 是层内局部坐标**，只对 polygon/line 有意义，用来原地改顶点——顶点原先只能建层时给；tag= 追加标签，与 tag 命令同一实现）",
     "meta",
   )
-  add("move", "move <id> <x> <y>", "meta")
+  add("move", "move <id> <x> <y>：改层的位置。**组**是搬内容——连后代一起平移（回包给 `moved_layers`）；其余层只改自己的 x/y", "meta")
   add("resize", "resize <id> <w> <h>", "meta")
   add("rotate", "rotate <id> <deg>（绕层中心，顺时针）", "meta")
   add("flip", "flip <id> h|v|both|none（翻转；先翻转后旋转）", "meta")

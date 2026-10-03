@@ -294,7 +294,9 @@ test "属性面板：引擎没报 caps 时一个能力控件都不画，并说�
 
 ///|
 test "拖动判据：caps 说没有 move 就不发命令，并说清为什么（不是拖了没反应）" {
-  // `move` 在组/调整层上回 `ok` 而画面逐位不变（实测，PLAN 五十一）——
+  // `move` 在**调整层**上回 `ok` 而画面逐位不变（实测，PLAN 五十一）；组曾经同病，
+  // 现在组会**搬内容**（连后代一起平移，PLAN 五十五）⇒ 组的 caps 里有 `move`，
+  // 这一格不再是"拒绝"的例子，而是"允许"的例子（判据仍然只看 caps，不看 kind）。
   // 手势层照发就是**静默失败的手势**。判据提成纯函数（`move_gesture_refusal`），
   // 所以这条测试**不用引擎**就能把正反两向都咬住。
   let rect = parse_json_safe(
@@ -305,9 +307,14 @@ test "拖动判据：caps 说没有 move 就不发命令，并说清为什么（
     "{\"id\":\"p1\",\"kind\":\"raster\",\"caps\":[\"move\",\"opacity\",\"mask\"]}",
   )
   assert_true(move_gesture_refusal(p) == "", msg="笔触的 x/y 是真的（挪笔触）：\{move_gesture_refusal(p)}")
-  // 组与调整层：拒绝，且理由里要**点出 kind 与为什么**
-  let g = parse_json_safe("{\"id\":\"g1\",\"kind\":\"group\",\"caps\":[\"opacity\",\"children\"]}")
-  let gr = move_gesture_refusal(g)
+  // 有内容的组：引擎报得出 `move` ⇒ 手势**必须**放行（它是真的搬内容）
+  let g = parse_json_safe(
+    "{\"id\":\"g1\",\"kind\":\"group\",\"caps\":[\"move\",\"opacity\",\"children\"]}",
+  )
+  assert_true(move_gesture_refusal(g) == "", msg="有内容的组能拖：\{move_gesture_refusal(g)}")
+  // 空组 / 只装调整层的组：引擎不报 `move`（搬了画面逐位相同）⇒ 拒绝并点出 kind
+  let ge = parse_json_safe("{\"id\":\"g2\",\"kind\":\"group\",\"caps\":[\"opacity\",\"children\"]}")
+  let gr = move_gesture_refusal(ge)
   assert_true(gr.contains("不参与渲染"), msg=gr)
   assert_true(gr.contains("group"), msg="理由要点出是哪种层：\{gr}")
   let a = parse_json_safe("{\"id\":\"a1\",\"kind\":\"adjust\",\"caps\":[\"opacity\",\"mask\",\"adjust\"]}")

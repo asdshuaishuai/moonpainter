@@ -918,13 +918,24 @@ fn cmd_move(s : Session, tokens : Array[String]) -> String {
     Some(v) => v
     None => return err("y=\{tokens[3]} 不是数字")
   }
-  if @core.find_layer(doc.layers, id) is None {
-    return err("层不存在：\{id}")
+  let target = match @core.find_layer(doc.layers, id) {
+    Some(l) => l
+    None => return err("层不存在：\{id}")
   }
+  // 组：**连后代一起搬**（组的 x/y 渲染器不读，只改盒子会"回 ok 而画面不动"，
+  // 见 `shift_layer_tree`）。非组：只改自己的 x/y（历史行为，一个像素不变）。
+  let is_group = target.kind is @core.ShapeKind::Group
+  let dx = x - target.x
+  let dy = y - target.y
   snapshot(s, doc, "move \{id}")
-  let ok = update_layer(doc.layers, id, fn(l) { { ..l, x, y } })
+  let moved = if is_group { count_layer_tree(target) } else { 1 }
+  let ok = if is_group {
+    update_layer(doc.layers, id, fn(l) { shift_layer_tree(l, dx, dy) })
+  } else {
+    update_layer(doc.layers, id, fn(l) { { ..l, x, y } })
+  }
   if ok {
-    "{\"ok\":true,\"op\":\"move\",\"id\":\"\{id}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+    "{\"ok\":true,\"op\":\"move\",\"id\":\"\{id}\",\"moved_layers\":\{moved},\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
   } else {
     err("层不存在：\{id}")
   }

@@ -277,6 +277,36 @@ pub fn image_box(
 }
 
 ///|
+/// 把**一棵子树整体平移**（连同后代一起搬）。
+///
+/// `move <组> x y` 的语义是"把这个容器的**内容**搬过去"——组的 `x/y` 渲染器
+/// 不读（组没有自己的画面），只改盒子就是**回 ok 而画面一个像素不动**（实测：
+/// 组的盒子 0,0 → 15,10、子层盒子不动、`render_sha256` 逐位相同、`lint` 报 0
+/// 违规）。所以对组必须连后代一起搬，见 PLAN 五十五。
+///
+/// 递归到每个后代、每个后代各平移**一次**（嵌套组的子层也是后代，不会被搬两遍）。
+pub fn shift_layer_tree(l : @core.Layer, dx : Double, dy : Double) -> @core.Layer {
+  let kids : Array[@core.Layer] = []
+  for c in l.children {
+    // ⚠️ 只搬**一次**：`shift_layer_tree` 递归到每个后代、每个后代各平移一遍。
+    // 这里再补一次 delta 就是"嵌套后代搬两遍"（实测那条变异 Q65 存活过一次：
+    // 循环里再加一次看似"更保险"，其实是把祖先的位移叠加到后代头上）。
+    kids.push(shift_layer_tree(c, dx, dy))
+  }
+  { ..l, x: l.x + dx, y: l.y + dy, children: kids }
+}
+
+///|
+/// 一棵子树的层数（含自己）——`move` 用它回报"这次真正搬了多少层"。
+pub fn count_layer_tree(l : @core.Layer) -> Int {
+  let mut n = 1
+  for c in l.children {
+    n = n + count_layer_tree(c)
+  }
+  n
+}
+
+///|
 /// 递归替换层（就地替换数组槽位；children 数组是引用，可变）。
 pub fn update_layer(
   layers : Array[@core.Layer],
@@ -1294,7 +1324,13 @@ pub fn layer_caps(l : @core.Layer) -> Array[String] {
     k is @core.ShapeKind::Line ||
     k is @core.ShapeKind::Image
   // 顺序即文档顺序（DESIGN §3 的 caps 列表按这个顺序报）
+  let group_kind = k is @core.ShapeKind::Group
   if face || text_kind || raster_kind {
+    caps.push("move")
+  } else if group_kind && group_has_movable(l) {
+    // 组自己没画面：它的 `move` 是"搬后代"（`shift_layer_tree`）。只有后代里
+    // 真的有人读位置时才算有能力——空组 / 只装调整层的组搬了也是画面逐位相同，
+    // 那正是 `caps` 要拦住的那种"说有 ⇒ 画面变"的反例。
     caps.push("move")
   }
   if face {
@@ -1318,6 +1354,18 @@ pub fn layer_caps(l : @core.Layer) -> Array[String] {
     }
   }
   caps
+}
+
+///|
+/// 组里有没有"读位置"的后代（递归穿透嵌套组）——`layer_caps` 给组报 `move`
+/// 的判据。**判据只有这一处**：命令面（`cmd_move` 的搬法）与能力表都照它。
+fn group_has_movable(l : @core.Layer) -> Bool {
+  for c in l.children {
+    if layer_caps(c).contains("move") {
+      return true
+    }
+  }
+  false
 }
 
 ///|
