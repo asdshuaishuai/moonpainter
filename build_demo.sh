@@ -375,6 +375,31 @@ if n < 20:
 print('功能自检条数 OK（README 与实际都是 %d 条）' % n)
 PYD
 
+# **导入上限对账**：demo 的 `MAX_IMPORT_SIDE` 必须**正好**是引擎能建出来的最大画布边。
+# 这个数决定"一张 48MP（8064×6048）照片导进来会不会变成只画左上角 4096²"：
+# 引擎的 `new`/`set-canvas` 拒绝超过 `RENDER_MAX_SIDE` 的画布，而位图层仍按原生
+# 尺寸存在 ⇒ 预览（缩到 800）看着正常、**导出整块丢内容**（渲染器只画左上角那块，
+# 静默）。所以它不能是 demo 里手抄的一个数：这里对账"demo 的常量 == 引擎的常量"
+# （引擎那份是唯一事实源），行为面实测过：`new 4096 8` 收、`new 4097 8` 拒。
+python3 - <<'PYL'
+import re, sys
+eng = open('render/scene.mbt', encoding='utf-8').read()
+m = re.search(r'RENDER_MAX_SIDE\s*:\s*Int\s*=\s*(\d+)', eng)
+if not m:
+    print('FAIL: render/scene.mbt 里找不到 RENDER_MAX_SIDE'); sys.exit(1)
+limit = int(m.group(1))
+demo = open('demo/main.mbt', encoding='utf-8').read()
+d = re.search(r'MAX_IMPORT_SIDE\s*:\s*Int\s*=\s*(\d+)', demo)
+if not d:
+    print('FAIL: demo/main.mbt 里找不到 MAX_IMPORT_SIDE'); sys.exit(1)
+got = int(d.group(1))
+if got != limit:
+    print('FAIL: demo 的导入上限 %d != 引擎可渲染上限 %d（超了会让照片只画左上角那块）'
+          % (got, limit))
+    sys.exit(1)
+print('导入上限对账 OK（demo MAX_IMPORT_SIDE = 引擎 RENDER_MAX_SIDE = %d）' % limit)
+PYL
+
 echo "== 9/9 demo 测试（工具面 + MVSL 闭环可达；需 Node） =="
 # 这条守住"引擎有能力"与"产品里的 AI 用得上"之间的缝：mock 模型经真实
 # tool provider 驱动真实 wasm 引擎，跑完整 MVSL 闭环（普查→试选→装表→

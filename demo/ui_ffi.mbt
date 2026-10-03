@@ -24,9 +24,6 @@ extern "js" fn js_log_append(id : String, text : String) -> Unit =
   #|   }
 
 ///|
-extern "js" fn js_set_img(id : String, b64 : String) -> Unit =
-  #| (id, b64) => { const el = document.getElementById(id); if (el) el.src = 'data:image/png;base64,' + b64; }
-
 ///|
 extern "js" fn js_val(id : String) -> String =
   #| (id) => { const el = document.getElementById(id); return el ? el.value : ''; }
@@ -80,24 +77,71 @@ extern "js" fn js_html(id : String, html : String) -> Unit =
   #| (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; }
 
 ///|
+/// 装**唯一一份**"文件 → PNG base64"的读取器（`globalThis.__mpImageToPngB64`）。
+///
+/// 为什么只有一份：选文件（`js_read_file_input`）和拖文件（`js_setup_drop`）
+/// 是两条入口，但"解码 → 缩到上限 → 转 PNG → 取尺寸"这件事**必须**同一份实现
+/// ——抄两份的话，先烂的那份一定没人读（复制粘贴的代码没人会去同步）。
+///
+/// 返回 `{ ok, b64, name, w, h, scaled_from }`；失败给 `{ ok:false, error }`，
+/// **error 是给人看的原话**（含 HEIC 这类最常见的坑）。`max_side` 由 MoonBit
+/// 侧传进来（引擎可渲染单边上限，别在 JS 里再抄一个数字）。
+extern "js" fn js_install_image_reader(max_side : Int) -> Unit =
+  #| (maxSide) => {
+  #|   globalThis.__MP_MAX_SIDE = maxSide;
+  #|   if (globalThis.__mpImageToPngB64) return;
+  #|   globalThis.__mpImageToPngB64 = async (file, maxSide) => {
+  #|     const lower = (file.name || '').toLowerCase();
+  #|     const heic = file.type === 'image/heic' || file.type === 'image/heif' ||
+  #|                  lower.endsWith('.heic') || lower.endsWith('.heif');
+  #|     const hint = heic
+  #|       ? '（iPhone 的 HEIC 多数浏览器解不开：先在「照片」里导出/另存为 JPEG 再试）'
+  #|       : '';
+  #|     if (!file.type.startsWith('image/') && !heic) {
+  #|       return { ok: false, error: '这不是图片：' + (file.type || '未知类型') + hint };
+  #|     }
+  #|     const url = URL.createObjectURL(file);
+  #|     const img = new Image();
+  #|     try {
+  #|       await new Promise((res, rej) => {
+  #|         img.onload = res;
+  #|         img.onerror = () => rej(new Error('浏览器解不开这张图'));
+  #|         img.src = url;
+  #|       });
+  #|     } catch (e) {
+  #|       URL.revokeObjectURL(url);
+  #|       return { ok: false, error: (e && e.message ? e.message : '解码失败') + hint };
+  #|     }
+  #|     URL.revokeObjectURL(url);
+  #|     const ow = img.naturalWidth, oh = img.naturalHeight;
+  #|     if (!ow || !oh) return { ok: false, error: '读不出图片尺寸' + hint };
+  #|     // 超过引擎可渲染单边上限就**按比例缩到上限**——不缩的话画布会超出可渲染
+  #|     // 上限（引擎会拒绝，或 lint 报 P0），人只会看到"导不进来"。
+  #|     const k = Math.min(1, maxSide / Math.max(ow, oh));
+  #|     const w = Math.max(1, Math.round(ow * k)), h = Math.max(1, Math.round(oh * k));
+  #|     const cv = document.createElement('canvas');
+  #|     cv.width = w; cv.height = h;
+  #|     cv.getContext('2d').drawImage(img, 0, 0, w, h);
+  #|     const dataUrl = cv.toDataURL('image/png');
+  #|     const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+  #|     if (!b64 || b64.length < 32) return { ok: false, error: '转 PNG 失败（图可能太大）' + hint };
+  #|     return {
+  #|       ok: true, b64, name: file.name.replace(/\.[^.]+$/, '.png'), w, h,
+  #|       scaled_from: k < 1 ? ow + 'x' + oh : '',
+  #|     };
+  #|   };
+  #| }
+
+///|
 extern "js" fn js_read_file_input(input_id : String) -> @js_async.Promise[Json] =
   #| (inputId) => (async () => {
   #|     const input = document.getElementById(inputId);
-  #|     if (!input || !input.files || input.files.length === 0) return { ok: false, error: 'no file selected' };
+  #|     if (!input || !input.files || input.files.length === 0) {
+  #|       return { ok: false, error: '没有选到文件' };
+  #|     }
   #|     const file = input.files[0];
   #|     input.value = '';
-  #|     if (!file.type.startsWith('image/')) return { ok: false, error: 'not an image: ' + file.type };
-  #|     const img = new Image();
-  #|     const url = URL.createObjectURL(file);
-  #|     await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = () => reject(new Error('image decode failed')); img.src = url; });
-  #|     URL.revokeObjectURL(url);
-  #|     const cv = document.createElement('canvas');
-  #|     cv.width = img.naturalWidth;
-  #|     cv.height = img.naturalHeight;
-  #|     cv.getContext('2d').drawImage(img, 0, 0);
-  #|     const dataUrl = cv.toDataURL('image/png');
-  #|     const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
-  #|     return { ok: true, b64, name: file.name.replace(/\.[^.]+$/, '.png'), size: b64.length };
+  #|     return await globalThis.__mpImageToPngB64(file, globalThis.__MP_MAX_SIDE || 4096);
   #|   })()
 
 ///|
@@ -128,23 +172,19 @@ extern "js" fn js_setup_drop(target_id : String, global_fn : String) -> Unit =
   #|       e.preventDefault(); el.style.borderColor = '#333';
   #|       const files = e.dataTransfer?.files;
   #|       if (!files || files.length === 0) return;
-  #|       const file = files[0];
-  #|       if (!file.type.startsWith('image/')) return;
   #|       try {
-  #|         const img = new Image();
-  #|         const url = URL.createObjectURL(file);
-  #|         await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
-  #|         URL.revokeObjectURL(url);
-  #|         const cv = document.createElement('canvas');
-  #|         cv.width = img.naturalWidth; cv.height = img.naturalHeight;
-  #|         cv.getContext('2d').drawImage(img, 0, 0);
-  #|         const dataUrl = cv.toDataURL('image/png');
-  #|         const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
-  #|         globalThis[fnName](b64, file.name);
-  #|       } catch (err) { console.error('drop import failed:', err); }
+  #|         // 与"选文件"**同一个**读取器（解码/缩到上限/转 PNG 只有一处实现）
+  #|         const r = await globalThis.__mpImageToPngB64(files[0], globalThis.__MP_MAX_SIDE || 4096);
+  #|         if (!r.ok) { globalThis.__mpErr(fnName, new Error(r.error)); return; }
+  #|         globalThis[fnName](r.b64, r.name, r.scaled_from || '');
+  #|       } catch (err) {
+  #|         // 静默失败是最坏的一种：拖进来没反应，人会以为"这个功能根本没有"
+  #|         globalThis.__mpErr(fnName, err);
+  #|       }
   #|     });
   #|   }
 
+///|
 ///|
 extern "js" fn js_toggle_ai() -> Unit =
   #| () => {
@@ -245,6 +285,18 @@ extern "js" fn js_reg2s(name : String, f : (String, String) -> Unit) -> Unit =
   #|     globalThis[name] = (a, b) => {
   #|       try {
   #|         f(a, b);
+  #|       } catch (e) {
+  #|         globalThis.__mpErr(name, e);
+  #|       }
+  #|     };
+  #|   }
+
+///|
+extern "js" fn js_reg3s(name : String, f : (String, String, String) -> Unit) -> Unit =
+  #| (name, f) => {
+  #|     globalThis[name] = (a, b, c) => {
+  #|       try {
+  #|         f(a, b, c);
   #|       } catch (e) {
   #|         globalThis.__mpErr(name, e);
   #|       }

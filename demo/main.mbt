@@ -427,10 +427,10 @@ fn bootstrap() -> Unit {
   let _ = engine_reset()
   let _ = engine_exec_line("session-open full_image")
   let _ = engine_exec_line("new 800 600 uuid=painter")
-  let _ = engine_exec_line("add-rect x=0 y=0 w=800 h=600 fill=#F5F0EBFF name=画布底色 tag=background")
-  let _ = engine_exec_line("add-rect x=80 y=100 w=300 h=200 fill=#2C3E6BFF radius=16 name=主卡片")
-  let _ = engine_exec_line("add-ellipse x=440 y=120 w=180 h=180 lgrad=#FF7A45FF,#2E6FE8FF,0,0,1,1 name=渐变球")
-  let _ = engine_exec_line("add-text x=100 y=340 text=MoonPainter font_size=32 fill=#2C3E6BFF name=标题")
+  // **一进来是空的照片工作台**，不是一张画好的矢量海报：这个工具要干的是
+  // "把一张正经照片导进来修"，开机就摆一张假图会让人以为它是画图/做海报的
+  // （实测：用户就是这么判断"方向错了"的）。白底留着，导出/画画的底色有着落。
+  let _ = engine_exec_line("add-rect x=0 y=0 w=800 h=600 fill=#FFFFFFFF name=画布底色 tag=background")
   g_paint.val = ""
   g_ready.val = true
   eng_render(800)
@@ -1626,6 +1626,62 @@ fn do_export() -> Unit {
 /// 一次文件选择 → 一条命令行：**「导入新层」还是「原地换图」由调用方给的
 /// swap_id 决定**（空 = 导入）。抽成纯函数是为了让这条分叉可测——它是那种
 /// "选完文件画面变了但变错了"的经典位置（把换图做成新层，蒙版/标签/层序全丢）。
+/// 导入一张照片时的**落点与画布尺寸**（纯函数，一处实现）。
+///
+/// 规则只有一条，但它是"照片编辑器"与"画图板"的分界：
+/// **图片永远 1:1（绝不拉伸）；装不下就把画布放大到装得下；装得下就居中。**
+/// 返回 `(x, y, 目标画布宽, 目标画布高)`；`w`/`h` 不合法时原样退回。
+///
+/// ⚠️ 此前人类侧写死 `x=100 y=60 w=600 h=450`——引擎明明报得出 `asset_size`
+/// （原生尺寸）也会被这个盒子**拉伸**：一张 3024×2016（3:2）的照片进 600×450
+/// （4:3）就变形了，而且落在画布外。**"能把图放进来"和"能拿它修图"是两件事。**
+pub fn import_placement(cw : Int, ch : Int, w : Int, h : Int) -> (Int, Int, Int, Int) {
+  if w <= 0 || h <= 0 {
+    return (0, 0, cw, ch)
+  }
+  let tw = if w > cw { w } else { cw }
+  let th = if h > ch { h } else { ch }
+  ((tw - w) / 2, (th - h) / 2, tw, th)
+}
+
+///|
+/// `"3024x2016"` → `(3024, 2016)`（引擎的 `asset_size` 就是这个格式）。
+fn parse_size_pair(s : String) -> (Int, Int) {
+  let parts : Array[String] = []
+  for p in s.split("x") {
+    parts.push(p.to_owned())
+  }
+  if parts.length() != 2 {
+    (0, 0)
+  } else {
+    (parse_int_safe(parts[0]), parse_int_safe(parts[1]))
+  }
+}
+
+///|
+/// 当前画布尺寸（从 `census` 的 `canvas: [w, h]` 读；读不到回 `(0, 0)`）。
+fn canvas_wh() -> (Int, Int) {
+  let c = eng("census")
+  match json_get(c, "canvas") {
+    Some(Json::Array(a)) =>
+      if a.length() >= 2 {
+        (jint_at(a, 0), jint_at(a, 1))
+      } else {
+        (0, 0)
+      }
+    _ => (0, 0)
+  }
+}
+
+///|
+fn jint_at(a : Array[Json], i : Int) -> Int {
+  match a[i] {
+    Json::Number(n, ..) => n.to_int()
+    _ => 0
+  }
+}
+
+///|
 fn import_line(swap_id : String, b64 : String, name : String) -> String {
   if swap_id != "" {
     "set-image " + swap_id + " b64=" + b64
@@ -1635,18 +1691,43 @@ fn import_line(swap_id : String, b64 : String, name : String) -> String {
 }
 
 ///|
-fn do_import(b64 : String, name : String) -> Unit {
+fn do_import(b64 : String, name : String, note : String) -> Unit {
   bootstrap()
-  let cmd = "add-image x=100 y=60 w=600 h=450 b64=\{b64} name=\{quote_arg(name)}"
-  let r = eng(cmd)
-  if eng_ok(r) {
-    js_log_line("📷 导入: \{name}（任意格式已转 PNG）", "#4a4")
-    g_sel.val = eng_s(r, "id")
-    eng_render(800)
-    refresh_ui()
-  } else {
-    js_log_line("❌ 导入失败", "#f66")
+  if b64 == "" {
+    js_log_line("❌ 导入失败：没有拿到图片字节", "#f66")
+    return
   }
+  // ① 先按**原生尺寸**放进来：`w=`/`h=` 一个都不给——盒子由引擎按资产尺寸定
+  //    （`image_box` 一处实现）。写死尺寸就是把照片拉伸，这正是"导进来没法修"的原因。
+  let r = eng("add-image x=0 y=0 name=" + quote_arg(name) + " b64=" + b64)
+  if !eng_ok(r) {
+    // 失败必须说**引擎原话**：只写"导入失败"等于让人自己猜（此前就是这样）
+    js_log_line("❌ 导入失败：" + eng_s(r, "error"), "#f66")
+    return
+  }
+  let id = eng_s(r, "id")
+  // ② 画布跟着照片走：装不下就放大（`set-canvas` 不动已有图层），装得下就居中
+  let (w, h) = parse_size_pair(eng_s(r, "asset_size"))
+  let (cw, ch) = canvas_wh()
+  let (x, y, tw, th) = import_placement(cw, ch, w, h)
+  if tw != cw || th != ch {
+    // 画布放大失败**不能吞**：那样照片会落在画布外（看着"导进来了"却只看到一角）
+    let rc = eng("set-canvas \{tw} \{th}")
+    if !eng_ok(rc) {
+      js_log_line("⚠ 画布没能放大到 \{tw}×\{th}：" + eng_s(rc, "error"), "#fa0")
+    }
+  }
+  if x != 0 || y != 0 {
+    let rm = eng("move \{id} \{x} \{y}")
+    if !eng_ok(rm) {
+      js_log_line("⚠ 照片居中失败：" + eng_s(rm, "error"), "#fa0")
+    }
+  }
+  let scaled = if note != "" { "，已从 \{note} 缩到 {MAX_IMPORT_SIDE} 以内" } else { "" }
+  js_log_line("📷 已打开 \{name}（画布 \{tw}×\{th}，1:1 不缩放\{scaled}）", "#4a4")
+  g_sel.val = id
+  eng_render(800)
+  refresh_ui()
 }
 
 async fn ai_turn() -> Unit {
@@ -1967,6 +2048,8 @@ fn inject_html() -> Unit {
 
 async fn on_file_selected() -> Unit {
   bootstrap()
+  // 大图（十几 MB PNG 要几秒）先说一句——不然人会以为点了没反应
+  js_log_line("📷 正在读取照片…（大图要几秒）", "#8af")
   let result = js_read_file_input("file-in").wait()
   let ok = match json_get(result, "ok") {
     Some(Json::True) => true
@@ -1980,6 +2063,10 @@ async fn on_file_selected() -> Unit {
     let name = match json_get(result, "name") {
       Some(Json::String(s)) => s
       _ => "image"
+    }
+    let note = match json_get(result, "scaled_from") {
+      Some(Json::String(s)) => s
+      _ => ""
     }
     if b64 != "" {
       let swap_id = g_swap.val
@@ -1995,7 +2082,7 @@ async fn on_file_selected() -> Unit {
           js_log_line("❌ 换图失败：\{eng_s(r, "error")}", "#f66")
         }
       } else {
-        do_import(b64, name)
+        do_import(b64, name, note)
       }
     }
   } else {
@@ -2010,7 +2097,14 @@ async fn on_file_selected() -> Unit {
 ///|
 /// 把所有事件处理器挂到 `globalThis` 上（页面里 `onclick='globalThis.__x()'` 靠它）。
 /// `pub` 是为了让测试能注册一遍再去核对页面 HTML 的引用——见 `app_html`。
+/// 导入照片时**送进引擎的单边像素上限** = 引擎可渲染上限（`render_limit_error`）。
+/// 超过它的照片先在浏览器画布上按比例缩小（JS 侧读取器只认这一个数，由这里传进去
+/// —— 别在 JS 里再抄一个 4096）。
+pub const MAX_IMPORT_SIDE : Int = 4096
+
+///|
 pub fn register_globals() -> Unit {
+  js_install_image_reader(MAX_IMPORT_SIDE)
   // 处理器异常的用户面反馈只有一处实现（`__mpErr`）：三个注册变体共用它。
   // ⚠️ 这行曾被"注入验证的还原点"抹掉过——`git checkout -- demo/main.mbt` 把
   // **未提交的真实改动**跟注入一起还原了，于是 `catch` 里调一个没装上的钩子，
@@ -2138,7 +2232,10 @@ pub fn register_globals() -> Unit {
     let s = eng("stats")
     js_log_line("📊 \{s.stringify()}", "#8af")
   })
-  js_reg2s("__drop", fn(b64 : String, name : String) { do_import(b64, name) })
+  // 拖文件进来的那条路：与"选文件"共用同一个读取器，缩放说明一起带进来
+  js_reg3s("__drop", fn(b64 : String, name : String, note : String) {
+    do_import(b64, name, note)
+  })
   // ── 自检 / 调试面板 ────────────────────────────────────────────────
   // ⚠️ 每条命令名都写成**字面量**并且和引擎调用写在**同一行**里：`ui_audit.py`
   // 判"人类前端真的发得出去"靠的是"字符串首词是命令名 + 同语句里有引擎入口"。
@@ -2436,7 +2533,10 @@ fn main {
     bootstrap()
     js_setup_canvas("canvas-img")
     js_bind_size_labels()
-    js_status_bar("就绪 — 🖌 直接在画布上画 / 右侧一键修图 / 🤖 AI 面板")
-    js_log_line("🎨 MoonPainter 就绪。画笔/橡皮/裁剪/吸管在左侧工具栏；右侧「调整·美颜」一键叠加滤镜；或拖拽图片导入。", "#6af")
+    js_status_bar("就绪 — 📷 先导入一张照片（左栏 📷 或直接拖进来）")
+    js_log_line(
+      "🖼 照片工作台就绪：点左栏 \{""}📷 导入图片\{""}或把照片拖进来 —— **导入后画布自动变成照片尺寸、1:1 不缩放**（超过 {MAX_IMPORT_SIDE} 像素的长边会先等比缩到上限）。导入后右栏「调整·美颜」直接作用于它，左栏是画笔/裁剪/吸管。",
+      "#6af",
+    )
   }
 }

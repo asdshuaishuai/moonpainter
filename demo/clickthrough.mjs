@@ -126,12 +126,18 @@ check(
   Object.keys(globalThis).filter((k) => k.startsWith('__')).length,
 );
 
-// **与浏览器从同一状态出发**：浏览器在 main 里 bootstrap（装载示例场景）。
+// **与浏览器从同一状态出发**：浏览器在 main 里 bootstrap（开照片工作台）。
 // 不先做这一步的话，第一个调用 `bootstrap()` 的处理器会把下面的测试文档整个
-// 换成示例场景——那时四条断言会一起错，而现象看着像"pick 报错了层"。
+// 换成工作台——那时四条断言会一起错，而现象看着像"pick 报错了层"。
 globalThis.__headless_boot();
 await new Promise((r) => setTimeout(r, 0));
-check('初始化：示例场景装进来了（说明驱动器与浏览器同状态）', layers().length === 4, layers().length);
+// 工作台是**空的**（1 层白底），不是一张预置的矢量海报：这个工具要干的是
+// "把照片导进来修"。此前预置 4 层示例，人一打开就以为它是画图/做海报的。
+check(
+  '初始化：进来就是空照片工作台（1 层白底，没有预置海报）——说明驱动器与浏览器同状态',
+  layers().length === 1 && layers()[0].name === '画布底色' && layers()[0].kind === 'rect',
+  JSON.stringify(layers().map((l) => l.name)),
+);
 
 // 干净起点：确定性画布（引擎的会话在 headless 自检里已经开好）
 exec('new 300 200 uuid=ct');
@@ -693,11 +699,51 @@ check(
   hErr.map((e) => e.name + ': ' + e.msg).join('；') || '0 条',
 );
 
+// ⑰ 导入照片的两条入口：**拒绝路径必须说人话**（成功路径要真的 File/Image，
+// 只有浏览器能给——所以这里验的是"没选文件/没拿到字节时它明说"）。
+el('ailog').children.length = 0;
+await globalThis.__file_sel();
+const noFile = logText('ailog');
+el('ailog').children.length = 0;
+await globalThis.__drop('', 'x.png', '');
+const noBytes = logText('ailog');
+check(
+  '导入照片的两条入口（选文件 / 拖进来）：没选文件、没拿到字节时都说清原因（不静默）',
+  /没有选到文件|文件读取失败/.test(noFile) && /导入失败/.test(noBytes),
+  `选文件="${noFile.trim().slice(0, 60)}" 拖入="${noBytes.trim().slice(0, 60)}"`,
+);
+
+
+// ⑱ 导入一张**正经照片**：不再被拉伸、画布跟着照片走。
+// 驱动器能跑到这里已经很接近浏览器了：`__drop` 就是拖拽入口，直通同一条
+// `do_import`（引擎 add-image → 读 asset_size → 算落点 → 必要时放大画布）。
+// 只有"浏览器把 File 解成 PNG"那一步是壳给不了的（那一层由 TESTING.md 手工验）。
+const PNG_300x100 = 'iVBORw0KGgoAAAANSUhEUgAAASwAAABkCAIAAACzY5qXAAAA50lEQVR42u3TAQkAAAjAMDWI/aMYyxgibBEOz+kO4E5JACYEEwImBBMCJgQTAiYEEwImBBMCJgQTAiYEEwImBBMCJgQTAiYEEwImBBMCJgQTAiYEEwImBBMCJgQTAiYEEwImBBMCJgQTAiYEEwImBBMCJgQTAiYEEwImBBMCJgQTAiYEEwImBBMCJgQTAiYEEwImBBMCJgQTAiYEEwImBBOCCQETggkBE4IJAROCCQETggkBE4IJAROCCQETggkBE4IJAROCCQETggkBE4IJAROCCQETggkBE4IJAROCCQETggkBE8JnC2rGAcw33RhRAAAAAElFTkSuQmCC';
+const PNG_1200x300 = 'iVBORw0KGgoAAAANSUhEUgAABLAAAAEsCAIAAABc390HAAAF1ElEQVR42u3XMQEAMAjAsDEh6EQishDBSSKhXyOrHwAAAPd8CQAAAAwhAAAAhhAAAABDCAAAgCEEAADAEAIAAGAIAQAAMIQAAAAYQgAAAAwhAAAAhhAAAABDCAAAgCEEAADAEAIAAGAIAQAAMIQAAAAYQgAAAAwhAAAAhhAAAABDCAAAgCEEAADAEAIAAGAIAQAAMIQAAACGEAAAAEMIAACAIQQAAMAQAgAAYAgBAAAwhAAAABhCAAAADCEAAACGEAAAAEMIAACAIQQAAMAQAgAAYAgBAAAwhAAAABhCAAAADCEAAACGEAAAAEMIAACAIQQAAMAQAgAAYAgBAAAwhAAAABhCAAAAQwgAAIAhBAAAwBACAABgCAEAADCEAAAAGEIAAAAMIQAAAIYQAAAAQwgAAIAhBAAAwBACAABgCAEAADCEAAAAGEIAAAAMIQAAAIYQAAAAQwgAAIAhBAAAwBACAABgCAEAADCEAAAAGEIAAAAMIQAAAIYQAADAEAIAAGAIAQAAMIQAAAAYQgAAAAwhAAAAhhAAAABDCAAAgCEEAADAEAIAAGAIAQAAMIQAAAAYQgAAAAwhAAAAhhAAAABDCAAAgCEEAADAEAIAAGAIAQAAMIQAAAAYQgAAAAwhAAAAhhAAAABDCAAAYAgBAAAwhAAAABhCAAAADCEAAACGEAAAAEMIAACAIQQAAMAQAgAAYAgBAAAwhAAAABhCAAAADCEAAACGEAAAAEMIAACAIQQAAMAQAgAAYAgBAAAwhAAAABhCAAAADCEAAACGEAAAAEMIAACAIQQAAMAQAgAAGEIAAAAMIQAAAIYQAAAAQwgAAIAhBAAAwBACAABgCAEAADCEAAAAGEIAAAAMIQAAAIYQAAAAQwgAAIAhBAAAwBACAABgCAEAADCEAAAAGEIAAAAMIQAAAIYQAAAAQwgAAIAhBAAAwBACAABgCAEAAAwhAAAAhhAAAABDCAAAgCEEAADAEAIAAGAIAQAAMIQAAAAYQgAAAAwhAAAAhhAAAABDCAAAgCEEAADAEAIAAGAIAQAAMIQAAAAYQgAAAAwhAAAAhhAAAABDCAAAgCEEAADAEAIAAGAIAQAAMIQAAAAYQgAAAEMIAACAIQQAAMAQAgAAYAgBAAAwhAAAABhCAAAADCEAAACGEAAAAEMIAACAIQQAAMAQAgAAYAgBAAAwhAAAABhCAAAADCEAAACGEAAAAEMIAACAIQQAAMAQAgAAYAgBAAAwhAAAABhCAAAADCEAAIAhBAAAwBACAABgCAEAADCEAAAAGEIAAAAMIQAAAIYQAAAAQwgAAIAhBAAAwBACAABgCAEAADCEAAAAGEIAAAAMIQAAAIYQAAAAQwgAAIAhBAAAwBACAABgCAEAADCEAAAAGEIAAAAMIQAAAIYQAAAAQwgAAGAIAQAAMIQAAAAYQgAAAAwhAAAAhhAAAABDCAAAgCEEAADAEAIAAGAIAQAAMIQAAAAYQgAAAAwhAAAAhhAAAABDCAAAgCEEAADAEAIAAGAIAQAAMIQAAAAYQgAAAAwhAAAAhhAAAABDCAAAgCEEAAAwhAAAABhCAAAADCEAAACGEAAAAEMIAACAIQQAAMAQAgAAYAgBAAAwhAAAABhCAAAADCEAAACGEAAAAEMIAACAIQQAAMAQAgAAYAgBAAAwhAAAABhCAAAADCEAAACGEAAAAEMIAACAIQQAAMAQAgAAGEIJAAAADCEAAACGEAAAAEMIAACAIQQAAMAQAgAAYAgBAAAwhAAAABhCAAAADCEAAACGEAAAAEMIAACAIQQAAMAQAgAAYAgBAAAwhAAAABhCAAAADCEAAACGEAAAAEMIAACAIQQAAMAQAgAAYAgBAAAwhAAAAIYQAAAAQwgAAIAhBAAAwBACAABgCAEAADCEAAAAGEIAAAAMIQAAAIYQAAAAQwgAAIAhBAAAwBACAABgCAEAADCEAAAAGEIAAAAMIQAAAIYQAACArQGSoQO2yT9YzgAAAABJRU5ErkJggg==';
+exec('new 800 600 uuid=ct2');
+await globalThis.__drop(PNG_300x100, 'photo.png', '');
+const small = layers()[layers().length - 1];
+const smallBox = { x: small.x, y: small.y, w: small.w, h: small.h };
+check(
+  '导入 300×100 的照片：**按原生尺寸落进来**（不拉伸），画布不动、照片居中',
+  small.kind === 'image' && smallBox.w === 300 && smallBox.h === 100 &&
+    smallBox.x === 250 && smallBox.y === 250,
+  JSON.stringify(smallBox),
+);
+await globalThis.__drop(PNG_1200x300, 'wide.png', '');
+const wide = layers()[layers().length - 1];
+const canvas = exec('census').canvas;
+check(
+  '导入 1200×300 的照片：装不下就把画布放大到装得下（画布 1200×600），照片仍 1:1 居中',
+  canvas[0] === 1200 && canvas[1] === 600 && wide.w === 1200 && wide.h === 300 && wide.y === 150,
+  `画布=${canvas.join('x')} 层=${wide.w}x${wide.h}@${wide.x},${wide.y}`,
+);
+
 // ⑯ 覆盖清单（机器对账用，格式由 `build_demo.sh#html-wiring` 解析）：
 // driver 走不到的处理器必须在这儿**写明原因**，否则"没覆盖"会静默变成"覆盖了"。
 /* coverage:begin
 driven: __selfcheck __dbg_lint __dbg_edits __dbg_census __dbg_probe __dbg_help __dbg_tools __dbg_schema __dbg_preview __mvsl_set __mvsl_show __mvsl_impact __mvsl_assert __mvsl_clear __param_list __param_set __param_del __cmd __build_badge __save __export __run __sel __vis __front __back __setx __sety __setw __seth __move_delta __rotate __flip __op __del __undo __redo __rename __tag_add __tag_del __reparent __ungroup_sel __text_at __text_add __text_set __text_font __mask_ready __mask_invert __mask_clear __adj_op __adj_val __af __stroke __new __set_canvas __crop_ready __crop_apply __crop_cancel __zoom __refresh __stats __optip __toggle_ai __tool __poly_click __poly_finish __poly_cancel __shape_ready __group_sel __pick_at
-browser-only: __drop=需要 FileReader 读拖进来的文件内容（壳里没有 FileReader，真造一个等于把"读文件"这条链假装测了）; __file_sel=同上（读 <input type=file> 的文件）; __mpd_sel=同上（读选中的 .mpd 文件字节）; __img_swap=同上（换图要先有文件）；且它们的"选文件"这一步只有浏览器能触发
+browser-only: __drop=拒绝路径已被 driver 走过（没字节时明说）；成功路径要真的 File+Image 解码，壳里造一个等于把"读文件"假装测了; __file_sel=同上（driver 走的是"没选到文件"那条）; __mpd_sel=要真的 .mpd 文件字节，壳里没有 FileReader; __img_swap=换图必须先有一张真图进来
 coverage:end */
 
 const bad = results.filter((r) => !r.ok);
