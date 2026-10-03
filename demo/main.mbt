@@ -730,8 +730,19 @@ fn props_html(l : Json, roots : Array[Json]) -> String {
   sb.write_string(txt_input("层名", gname, "__rename", gid))
   sb.write_string(num_input("X", gx, "__setx", gid))
   sb.write_string(num_input("Y", gy, "__sety", gid))
-  sb.write_string(num_input("W", gw, "__setw", gid))
-  sb.write_string(num_input("H", gh, "__seth", gid))
+  if gkind == "raster" {
+    // 笔触层的 `w/h` **不参与渲染**（`paint_raster` 的窗口是画布尺寸）⇒ 改它画面
+    // 一个像素不动，只会让 `query-layer`/`overlay` 报出的范围与画面分家（引擎侧
+    // `raster_box_error` 会报）。发一个"改了没反应"的输入框就是**静默失败的入口**，
+    // 所以这里不发控件、只把当前值与理由印出来；`move`（X/Y）是真的挪笔触，照旧给。
+    sb.write_string(
+      "<span class='pk'>W/H</span><span class='pv' title='笔触层的 w/h 不参与渲染（笔触窗口是画布尺寸）：改它画面不会变，只会让 query-layer 与 overlay 线框跟画面分家（lint 的 raster_box_error 会报）'>" +
+      html_attr(gw) + "×" + html_attr(gh) + "（不参与渲染，故不可改；挪笔触用 X/Y）</span>",
+    )
+  } else {
+    sb.write_string(num_input("W", gw, "__setw", gid))
+    sb.write_string(num_input("H", gh, "__seth", gid))
+  }
   sb.write_string(num_input("旋转", grot, "__rotate", gid))
   sb.write_string("<button class='ghost' title='水平翻转' onclick='globalThis.__flip(\"")
   sb.write_string(gid)

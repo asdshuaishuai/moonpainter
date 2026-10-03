@@ -223,3 +223,28 @@ test "换图：文件选择走「原地换掉」还是「导入新层」由状�
   )
   assert_true(lacks_sub(props_html(rect, roots), "__img_swap"), msg="矩形上不该有「换图」")
 }
+
+///|
+test "属性面板：笔触层不发 W/H 输入框（改了画面不动 = 静默入口），X/Y 照旧" {
+  let roots = panel_layers()
+  let r = parse_json_safe(
+    "{\"id\":\"p1\",\"name\":\"笔触\",\"kind\":\"raster\",\"x\":0,\"y\":0,\"w\":320,\"h\":240,\"opacity\":1,\"blend\":\"normal\"}",
+  )
+  let h = props_html(r, roots)
+  // 反控：不发那两个「改了不生效」的控件
+  assert_true(lacks_sub(h, "__setw("), msg="笔触层不该有 W 输入框：\{h}")
+  assert_true(lacks_sub(h, "__seth("), msg="笔触层不该有 H 输入框：\{h}")
+  // 正控①：理由与当前值都要印出来（不是悄悄少一个框）
+  assert_true(has_sub(h, "不参与渲染"), msg=h)
+  assert_true(has_sub(h, "320×240"), msg=h)
+  // 正控②：X/Y 照旧可改——`move` 是真的挪笔触（对笔触层有效果）
+  assert_true(has_sub(h, "globalThis.__setx("), msg=h)
+  assert_true(has_sub(h, "globalThis.__sety("), msg=h)
+  // 正控③：别的 kind 照旧发 W/H（判据两头都咬得住）
+  let rr = parse_json_safe(
+    "{\"id\":\"r1\",\"name\":\"矩形\",\"kind\":\"rect\",\"x\":1,\"y\":2,\"w\":30,\"h\":40,\"opacity\":1,\"blend\":\"normal\"}",
+  )
+  let hr = props_html(rr, roots)
+  assert_true(has_sub(hr, "globalThis.__setw("), msg=hr)
+  assert_true(has_sub(hr, "globalThis.__seth("), msg=hr)
+}
