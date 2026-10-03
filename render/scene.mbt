@@ -856,6 +856,28 @@ fn paint_solid_rect_interior(
 
 ///|
 /// 渲染单个层到画布（含 2×2 子采样 AA 与混合）。
+///|
+/// **"这一层到底看不看得见"只有一处**：`visible` + **有效不透明度**（自己 × 继承）。
+///
+/// 返回 `0.0` 表示"不画/不拾/不画框"。三个消费者——渲染 `paint_layer`、
+/// `pick_from`、选中线框 `draw_overlays_in`——**共用这一处**：同一条判断写三遍，
+/// 先烂的一定是没人读的那两遍（PLAN 六十三：线框那遍是从 `pick` 抄的，当场把
+/// 变异 R56 的锚点撞成"命中 2 处"——锚点撞车就是重复的体检报告）。
+///
+/// ⚠️ `l.opacity <= 0.0` 的早退**不能**省：`clamp01(0 × NaN)` 是 `NaN`，而
+/// `NaN <= 0.0` 为假 ⇒ 省掉它会让"α=0 的层"在继承值是 NaN 时漏过去（`paint_layer`
+/// 一直有这个早退，`pick` 没有——收成一处之后两者对齐）。
+fn effective_opacity(l : @core.Layer, inherited_opacity : Double) -> Double {
+  if !l.visible {
+    return 0.0
+  }
+  if l.opacity <= 0.0 {
+    return 0.0
+  }
+  clamp01(l.opacity * inherited_opacity)
+}
+
+///|
 fn paint_layer(
   l : @core.Layer,
   buf : @codec.RgbaBuf,
@@ -863,10 +885,7 @@ fn paint_layer(
   inherited_opacity : Double,
   frames : Transform,
 ) -> Unit {
-  if !l.visible || l.opacity <= 0.0 {
-    return
-  }
-  let eff_opacity = clamp01(l.opacity * inherited_opacity)
+  let eff_opacity = effective_opacity(l, inherited_opacity)
   if eff_opacity <= 0.0 {
     return
   }
@@ -2245,7 +2264,17 @@ let overlay_palette : Array[Int] = [
 ]
 
 ///|
-/// 画全部层的 bbox 线框与序号。
+/// 画全部层的**选中线框**与序号。
+///
+/// ⚠️ 框是**四边形**（四个角过完整变换链），不是轴对齐的盒子：`effective_box`
+/// 是"层自己的坐标系里那个矩形"，它在画布上占的地方要过"自己的 rot/flip +
+/// 整条祖先链"才知道。此前这里把盒子直接投影成轴对齐矩形，于是**转过之后线框
+/// 还停在原地**（把矩形转 90°，线框仍在原来的位置——报告面与画面分家，PLAN 六十三）。
+///
+/// ⚠️ 遍历**递归带祖先链**（与 `pick_from`/`paint_layer` 同一把尺子）：组自己
+/// 没有面、不画框，但子层要带着组的帧；`!visible` 与"有效不透明度 ≤ 0"时整棵
+/// 子树都不画——这不是新规矩，而是与 `pick`/渲染**对齐**（此前那是平铺遍历，
+/// 隐藏组的子层照样有线框，而渲染器一个像素都没画它）。
 fn draw_overlays(
   doc : @core.Document,
   out : @codec.RgbaBuf,
@@ -2254,10 +2283,33 @@ fn draw_overlays(
   cw : Int,
   ch : Int,
 ) -> Unit {
-  let all = @core.all_layers(doc.layers)
-  let mut ordinal = 0
-  for l in all {
-    if !l.visible || (l.kind is @core.ShapeKind::Group) {
+  let _ = draw_overlays_in(doc.layers, [], 1.0, out, cx0, cy0, cw, ch, 0)
+}
+
+///|
+/// `draw_overlays` 的递归体，返回下一个可用序号（层号 = 可见且有面的层按序数）。
+fn draw_overlays_in(
+  layers : Array[@core.Layer],
+  frames : Transform,
+  inherited_opacity : Double,
+  out : @codec.RgbaBuf,
+  cx0 : Int,
+  cy0 : Int,
+  cw : Int,
+  ch : Int,
+  start : Int,
+) -> Int {
+  let mut ordinal = start
+  for l in layers {
+    // 与 `paint_layer`/`pick_from` 同一把尺子（判据一处：`effective_opacity`）
+    let eff = effective_opacity(l, inherited_opacity)
+    if eff <= 0.0 {
+      continue
+    }
+    if l.kind is @core.ShapeKind::Group {
+      ordinal = draw_overlays_in(
+        l.children, frames_for(frames, l), eff, out, cx0, cy0, cw, ch, ordinal,
+      )
       continue
     }
     ordinal = ordinal + 1
@@ -2266,20 +2318,74 @@ fn draw_overlays(
     // 读存下来的 `l.x/l.y/l.w/l.h` 会让两个报告面分家：笔触层/子组的存盒只是
     // 建层时的快照（笔触层那份还是整幅画布尺寸），于是"`query-layer` 报落笔
     // 范围、线框画整幅画布"（PLAN 六十实测抓到）。判据一处，报告面两处——所以两处必须读同一处。）
-    let (ex, ey, ew, eh) = @core.effective_box(l)
-    // doc 坐标 bbox → 视图像素坐标
-    let bx0 = ((ex - cx0.to_double()) * out.width.to_double() / cw.to_double()).to_int()
-    let by0 = ((ey - cy0.to_double()) * out.height.to_double() / ch.to_double()).to_int()
-    let bx1 = ((ex + ew - cx0.to_double()) * out.width.to_double() / cw.to_double()).to_int()
-    let by1 = ((ey + eh - cy0.to_double()) * out.height.to_double() / ch.to_double()).to_int()
-    stroke_rect_1px(out, bx0, by0, bx1, by1, color)
-    draw_number(out, ordinal, bx0 + 2, by0 + 2, color)
+    let quad = box_quad_canvas(l, frames)
+    // doc 坐标 → 视图像素坐标（与原先同一个映射）；顺带攒重心给序号用
+    let pts : Array[(Int, Int)] = []
+    let mut sx = 0
+    let mut sy = 0
+    for q in quad {
+      let vx = ((q.0 - cx0.to_double()) * out.width.to_double() / cw.to_double()).to_int()
+      let vy = ((q.1 - cy0.to_double()) * out.height.to_double() / ch.to_double()).to_int()
+      pts.push((vx, vy))
+      sx = sx + vx
+      sy = sy + vy
+    }
+    stroke_poly_1px(out, pts, color)
+    // 序号画在四边形的**重心**：框转过之后它仍在框里（此前画在盒子的左上角 +2，
+    // 转过时那个点会飘到框外——"报告面"的字也得跟着画面）
+    draw_number(out, ordinal, sx / 4 + 2, sy / 4 + 2, color)
+  }
+  ordinal
+}
+
+///|
+/// 一层的**选中框**在画布坐标下的四个角（顺序：盒的左上 → 右上 → 右下 → 左下）。
+///
+/// 两个分支说的是同一件事——"盒子 → 画布"，差别只在**自己的变换怎么进坐标系**：
+/// * 普通层：`effective_box` 是**父坐标系**里的盒子（笔触层那份还含 `l.x/l.y`，
+///   见 `core.raster_bbox`），所以局部角要减掉 `l.x/l.y` 再交给 `screen`
+///   （`screen` = 自己的 rot/flip 绕 `local_pivot` + 整条祖先链）；
+/// * 组：`effective_box` 的原点就是父坐标系里的原点，组自己**没有平移**
+///   （`x/y` 已被 `move` 折叠进后代，PLAN 五十五），所以先套自己的帧
+///   （`frame_of` = 绕**派生**盒中心转/翻）再套祖先链。
+///
+/// ⚠️ 两个分支都要走**完整**的链：漏自己的变换 = "转过的层线框不转"，漏祖先链
+/// = "组转了而子层线框不转"（两条都实测过，变异 Q91/Q92 各守一条）。
+fn box_quad_canvas(l : @core.Layer, frames : Transform) -> Array[(Double, Double)] {
+  let (ex, ey, ew, eh) = @core.effective_box(l)
+  let corners = [(0.0, 0.0), (ew, 0.0), (ew, eh), (0.0, eh)]
+  let out : Array[(Double, Double)] = []
+  if l.kind is @core.ShapeKind::Group {
+    let f = frame_of(l)
+    for c in corners {
+      let (qx, qy) = to_canvas_frame_pt(f, ex + c.0, ey + c.1)
+      out.push(to_canvas_in(frames, qx, qy))
+    }
+  } else {
+    for c in corners {
+      out.push(screen(l, frames, ex - l.x + c.0, ey - l.y + c.1))
+    }
+  }
+  out
+}
+
+///|
+/// 1px 折线（自动闭合，含端点）。越界由 `rgba_set` 丢弃。
+fn stroke_poly_1px(buf : @codec.RgbaBuf, pts : Array[(Int, Int)], color : Int) -> Unit {
+  let n = pts.length()
+  if n < 2 {
+    return
+  }
+  for i in 0..<n {
+    let a = pts[i]
+    let b = pts[(i + 1) % n]
+    stroke_line_1px(buf, a.0, a.1, b.0, b.1, color)
   }
 }
 
 ///|
-/// 1px 矩形描边（含端点，越界自动裁剪）。
-fn stroke_rect_1px(
+/// 1px 直线段（Bresenham，含两个端点）。
+fn stroke_line_1px(
   buf : @codec.RgbaBuf,
   x0 : Int,
   y0 : Int,
@@ -2287,17 +2393,27 @@ fn stroke_rect_1px(
   y1 : Int,
   color : Int,
 ) -> Unit {
+  let dx = if x1 > x0 { x1 - x0 } else { x0 - x1 }
+  let dy = if y1 > y0 { y1 - y0 } else { y0 - y1 }
+  let sx = if x0 < x1 { 1 } else { -1 }
+  let sy = if y0 < y1 { 1 } else { -1 }
+  let mut err = dx - dy
   let mut x = x0
-  while x <= x1 {
-    @codec.rgba_set(buf, x, y0, color)
-    @codec.rgba_set(buf, x, y1, color)
-    x = x + 1
-  }
   let mut y = y0
-  while y <= y1 {
-    @codec.rgba_set(buf, x0, y, color)
-    @codec.rgba_set(buf, x1, y, color)
-    y = y + 1
+  while true {
+    @codec.rgba_set(buf, x, y, color)
+    if x == x1 && y == y1 {
+      break
+    }
+    let e2 = 2 * err
+    if e2 > -dy {
+      err = err - dy
+      x = x + sx
+    }
+    if e2 < dx {
+      err = err + dx
+      y = y + sy
+    }
   }
 }
 
@@ -2414,10 +2530,8 @@ fn pick_from(
   while i >= 0 {
     let l = layers[i]
     i = i - 1
-    if !l.visible {
-      continue
-    }
-    let eff = clamp01(l.opacity * inherited_opacity)
+    // 看得见吗（`visible` + 继承的 α）：判据一处，`effective_opacity`
+    let eff = effective_opacity(l, inherited_opacity)
     if eff <= 0.0 {
       continue
     }

@@ -745,19 +745,41 @@ MUTS = [
     ),
     (
         "R56",
-        "pick 不查继承下来的透明度（组 opacity=0 / 祖先全透明的子层照样被报出来）",
+        "看不见的判据不看 `visible`（隐藏的层照样被渲染、被 pick、被画框）",
         "render/scene.mbt",
-        r"""    let eff = clamp01(l.opacity * inherited_opacity)
-    if eff <= 0.0 {
-      continue
-    }
-    if l.kind is @core.ShapeKind::Group {""",
-        r"""    let eff = clamp01(l.opacity * inherited_opacity)
-    if false {
-      continue
-    }
-    if l.kind is @core.ShapeKind::Group {""",
+        r"""  if !l.visible {
+    return 0.0
+  }
+  if l.opacity <= 0.0 {""",
+        r"""  if false {
+    return 0.0
+  }
+  if l.opacity <= 0.0 {""",
         "killed",
+    ),
+    (
+        "R65",
+        "看不见的判据对 α 视而不见（α=0 的幽灵层 / 祖先 α=0 的子层照样被渲染、被 pick、被画框）",
+        "render/scene.mbt",
+        r"""  if l.opacity <= 0.0 {
+    return 0.0
+  }
+  clamp01(l.opacity * inherited_opacity)""",
+        r"""  if false {
+    return 0.0
+  }
+  1.0""",
+        "killed",
+    ),
+    (
+        "R66",
+        "看不见的判据不看**继承**下来的 α（等价：α=0 的祖先在它自己那一层就短路了，子树根本没被访问——实测三条消费者全部照过，故宣布等价）",
+        "render/scene.mbt",
+        r"""  clamp01(l.opacity * inherited_opacity)
+}""",
+        r"""  clamp01(l.opacity * 1.0)
+}""",
+        "equivalent",
     ),
     (
         "R57",
@@ -1954,8 +1976,8 @@ MUTS = [
         "Q82",
         "overlay 线框读**存下来的**盒子（与 query-layer 的派生盒分家：报落笔范围、画整幅画布）",
         "render/scene.mbt",
-        """    let (ex, ey, ew, eh) = @core.effective_box(l)""",
-        """    let (ex, ey, ew, eh) = (l.x, l.y, l.w, l.h)""",
+        """  let (ex, ey, ew, eh) = @core.effective_box(l)""",
+        """  let (ex, ey, ew, eh) = (l.x, l.y, l.w, l.h)""",
         "killed",
     ),
     (
@@ -2107,6 +2129,69 @@ MUTS = [
   to_canvas_in(frames, ox, oy)""",
         """  let _ = (pvx, pvy)
   to_canvas_in(frames, l.x + d.x, l.y + d.y)""",
+        "killed",
+    ),
+    (
+        "Q91",
+        "选中线框不走**祖先链**（组转了、线框不转：渲染与 pick 都转了）",
+        "render/scene.mbt",
+        """      out.push(screen(l, frames, ex - l.x + c.0, ey - l.y + c.1))""",
+        """      out.push(screen(l, [], ex - l.x + c.0, ey - l.y + c.1))""",
+        "killed",
+    ),
+    (
+        "Q92",
+        "选中线框漏掉**本层**的 rot/flip（转过的层线框停在原地）",
+        "render/scene.mbt",
+        """      out.push(screen(l, frames, ex - l.x + c.0, ey - l.y + c.1))""",
+        """      out.push(to_canvas_in(frames, ex + c.0, ey + c.1))""",
+        "killed",
+    ),
+    (
+        "Q93",
+        "选中线框退回**外接矩形**（四边形退化成最小包围盒：45° 那一格必红）",
+        "render/scene.mbt",
+        """  } else {
+    for c in corners {
+      out.push(screen(l, frames, ex - l.x + c.0, ey - l.y + c.1))
+    }
+  }
+  out""",
+        """  } else {
+    let mut qx0 = 0.0
+    let mut qy0 = 0.0
+    let mut qx1 = 0.0
+    let mut qy1 = 0.0
+    let mut first = true
+    for c in corners {
+      let (qx, qy) = screen(l, frames, ex - l.x + c.0, ey - l.y + c.1)
+      if first {
+        qx0 = qx
+        qy0 = qy
+        qx1 = qx
+        qy1 = qy
+        first = false
+      } else {
+        if qx < qx0 {
+          qx0 = qx
+        }
+        if qy < qy0 {
+          qy0 = qy
+        }
+        if qx > qx1 {
+          qx1 = qx
+        }
+        if qy > qy1 {
+          qy1 = qy
+        }
+      }
+    }
+    out.push((qx0, qy0))
+    out.push((qx1, qy0))
+    out.push((qx1, qy1))
+    out.push((qx0, qy1))
+  }
+  out""",
         "killed",
     ),
     # Q53/Q54/Q55（笔触盒子判据的等号 / 半径 / 画布裁剪）已**退休**：
