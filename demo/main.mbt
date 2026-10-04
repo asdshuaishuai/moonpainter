@@ -1395,6 +1395,7 @@ fn refresh_props() -> Unit {
     g_sel_seen.val = id
   }
   if id == "" {
+    tf_clear()
     js_update_props("<div class='ns'>点击图层查看属性</div>")
     return
   }
@@ -1421,6 +1422,8 @@ fn refresh_props() -> Unit {
       None => ""
     }
   }
+  // 画布上的自由变换框跟着**选中层**走（几何与能力都来自引擎）
+  tf_push(l)
   js_update_props(props_html(l, roots, g_sel_prev.val, prev_name))
 }
 
@@ -2319,6 +2322,95 @@ fn do_adj_key(id : String, key : String, v : String) -> Unit {
 }
 
 ///|
+/// 把选中层的**自由变换框**推给画布（`window.__MP_TF`）：几何来自引擎的
+/// `query-layer`，**能力**（能不能挪 / 能不能缩放）来自同一份 `caps`——
+/// 前端不猜 kind（PLAN 五十一：判断两处实现必然先烂）。框的格式
+/// `x,y,w,h,rot` 与回来时的那条（`__tf_ready`）**同一个格式**，一处解析。
+fn tf_push(l : Json) -> Unit {
+  let caps = caps_of(l)
+  // 两个能力位：`mv` 决定框里能不能拖动、`rs` 决定画不画八个缩放手柄。
+  // 它们从 `caps` 出（引擎一处算），JS 只按位画——不猜 kind。
+  let mv = if caps.contains("move") { "1" } else { "0" }
+  let rs = if caps.contains("resize") { "1" } else { "0" }
+  let rot = match json_get(l, "rot") {
+    Some(_) => json_num_str(l, "rot")
+    None => "0"
+  }
+  let box = json_num_str(l, "x") +
+    "," +
+    json_num_str(l, "y") +
+    "," +
+    json_num_str(l, "w") +
+    "," +
+    json_num_str(l, "h") +
+    "," +
+    rot
+  js_tf_box(json_get_str(l, "id"), box, mv + rs)
+}
+
+///|
+/// 没有选中层 / 选中层查不到：把框撤掉（`__MP_TF = null`）——留着上一次的框
+/// 就会让人对着一个**已经不在选中状态**的框拖，而命令发到别的层上。
+fn tf_clear() -> Unit {
+  js_tf_box("", "", "00")
+}
+
+///|
+/// 自由变换落定（人侧手势松开时调用一次）：`box` = `x,y,w,h,rot`（**画布像素**，
+/// 与 `__MP_TF` 同一格式）。发**一条** `transform`——所以一个手势是**一步历史**
+/// （分开发 move/resize/rotate 就是三步，撤销要按三次）。
+///
+/// 数值在本处收口：非数 → 状态栏说清且**不发命令**（不发一个"空变换"）；
+/// `w`/`h` 夹到 ≥ 1（拖到手柄重合时不该发一条 `w=0` 让引擎拒——那是"手势本身
+/// 没画成"而不是"参数写错了"）。夹紧这件事是**显式**的：状态栏不报，因为它
+/// 不是错误，是拖拽的退化情形；命令里带着夹紧后的值，回读得到的就是这个值。
+fn do_tf_ready(box : String) -> Unit {
+  let id = g_sel.val
+  if id == "" {
+    js_status_bar("⚠ 自由变换：先选一个图层")
+    return
+  }
+  let parts : Array[StringView] = box.split(",").collect()
+  if parts.length() < 4 {
+    js_status_bar("⚠ 自由变换：框格式应为 x,y,w,h[,rot]")
+    return
+  }
+  let nums : Array[Double] = []
+  for i = 0; i < parts.length() && i < 5; i = i + 1 {
+    let t = parts[i].trim()
+    if t == "" {
+      if i < 4 {
+        js_status_bar("⚠ 自由变换：框里第 \{i + 1} 个数是空的")
+        return
+      }
+      nums.push(0.0)
+    } else {
+      nums.push(parse_double_safe(t.to_owned()))
+    }
+  }
+  if nums.length() < 4 {
+    js_status_bar("⚠ 自由变换：框至少要四个数（x,y,w,h）")
+    return
+  }
+  let rot = if nums.length() >= 5 { nums[4] } else { 0.0 }
+  let w = if nums[2] < 1.0 { 1.0 } else { nums[2] }
+  let h = if nums[3] < 1.0 { 1.0 } else { nums[3] }
+  let cmd = "transform " +
+    id +
+    " x=" +
+    d2s(nums[0]) +
+    " y=" +
+    d2s(nums[1]) +
+    " w=" +
+    d2s(w) +
+    " h=" +
+    d2s(h) +
+    " rot=" +
+    d2s(rot)
+  let _ = do_ui_cmd(cmd)
+}
+
+///|
 /// 改混合模式（人侧下拉）。**只改这一格**（`set-style <id> blend=`）——
 /// 与 AI 侧 `set_style` 是同一命令面；模式名走白名单（值来自 HTML 的
 /// `<option value=...>`，与键名同理：DOM 里写的不能当可信输入）。
@@ -2828,6 +2920,7 @@ pub fn app_html() -> String {
       #|<div class='t' data-tool='poly' title='多边形图层（逐点点击 ≥3 点；双击/回车闭合，Esc 放弃）' onclick='globalThis.__tool("poly")'>⬠</div>
       #|<div class='t' data-tool='lasso' title='任意形状选区（套索：逐点点击 ≥3 点圈出一块，只改这块；选区 = 该层的蒙版。双击/回车圈定，Esc 放弃）' onclick='globalThis.__tool("lasso")'>🪢</div>
       #|<div class='t' data-tool='pen' title='钢笔/路径（逐点点击落锚点；**按住拖动**拉控制柄成曲线；点回第一个锚点闭合收口，双击/回车落定为开放路径，Esc 放弃）' onclick='globalThis.__tool("pen")'>✒</div>
+      #|<div class='t' data-tool='transform' title='自由变换（PS 的 Ctrl+T）：选中层后拖**框内**移动、拖**八个手柄**改尺寸（Shift 等比）、拖**上方圆点**绕中心旋转——松开时走**一条** `transform` 命令，所以**一步历史**、撤销一次就回去' onclick='globalThis.__tool("transform")'>⤢</div>
       #|<div class='ts'></div>
       #|<div class='t' title='放大' onclick='globalThis.__zoom("1.25")'>🔍+</div>
       #|<div class='t' title='缩小' onclick='globalThis.__zoom("0.8")'>🔍−</div>
@@ -3124,6 +3217,8 @@ pub fn register_globals() -> Unit {
   js_reg2s("__text_font", fn(id : String, v : String) { do_text_font(id, v) })
   js_reg2s("__adj_op", fn(id : String, v : String) { do_adj_op(id, v) })
   js_reg2s("__blend", fn(id : String, v : String) { do_blend(id, v) })
+  js_reg1("__tf_ready", fn(box : String) { do_tf_ready(box) })
+  js_reg1("__tf_hint", fn(_x : String) { js_status_bar("⚠ 自由变换：先在图层列表里选中一个图层（框没画出来时按下不会动任何东西）") })
   js_reg3s("__adj_key", fn(id : String, k : String, v : String) { do_adj_key(id, k, v) })
   js_reg2s("__adj_val", fn(id : String, v : String) { do_adj(id, "value", v) })
   js_reg2s("__tag_add", fn(id : String, v : String) { do_tag_add(id, v) })

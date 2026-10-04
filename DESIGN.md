@@ -47,7 +47,7 @@ macOS 原生类 Photoshop 编辑器。对本工程最有价值的三块遗产：
 
 ```
 宿主    cli（native 行协议 + 文件 FFI + 原子落盘）
-交互    agent（69 命令 · vision 闸 · undo/redo · 步骤历史 history/goto · P0–P2 lint · MVSL 闭环 · 工具字典）
+交互    agent（70 命令 · vision 闸 · undo/redo · 步骤历史 history/goto · P0–P2 lint · MVSL 闭环 · 工具字典）
 容器    mpd（pack/unpack · manifest/params/agent/mvsl · 指纹对账 · 限额 · 预览生成）
 渲染    render（RGBA 画布 · 2×2 子采样 AA · W3C 混合 · 旋转 · 取景 · pick · stats）
 核心    core（IR 层树 · canonical JSON 双向 · 指纹 · 层定位原语 · MVSL 编辑表 IR）
@@ -282,10 +282,10 @@ manifest 的 `mvsl` 版本块 pin 住四个独立版本号（`render_contract` /
   **空断言**即保护断言的选择子零命中（P1——恒真，比"被违反"更坏，因为它给的是虚假的安心）。
   空编辑表是合法状态，不报条目——lint 不该对「我还没改任何东西」报警。
 
-## 6. 命令集（69 个；字典 = agent/tools.mbt 单一事实源）
+## 6. 命令集（70 个；字典 = agent/tools.mbt 单一事实源）
 
 会话：`session-open` `list-tools` `help`；文档：`new` `set-canvas` `list-layers` `query-layer` `lint`；
-绘制：`add-rect/ellipse/polygon/line` `add-path` `path-preview` `bool-op`（两个形状 → 一个新路径层）`add-image`（b64）`set-image`（原地换图，只换像素）`set-style` `move` `resize` `rotate` `rename` `tag` `delete` `visible` `reorder` `group` `ungroup` `group-add` `group-remove`（成员增删）；
+绘制：`add-rect/ellipse/polygon/line` `add-path` `path-preview` `bool-op`（两个形状 → 一个新路径层）`add-image`（b64）`set-image`（原地换图，只换像素）`set-style` `move` `resize` `rotate` `transform`（自由变换：位置+盒子+旋转**一次**写完 = 一步历史）`rename` `tag` `delete` `visible` `reorder` `group` `ungroup` `group-add` `group-remove`（成员增删）；
 元参数：`list-params` `set-param` `remove-param`；视觉：`render` `pick` `stats` `census` `probe`；
 修图：`add-paint` `brush` `erase` `crop` `sample` `add-adjust` `set-adjust` `add-mask` `set-mask` `remove-mask`；
 MVSL：`mvsl-set` `mvsl-show` `mvsl-clear` `select-preview` `mvsl-impact` `mvsl-assert`；
@@ -540,6 +540,15 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
   三种模式名走字面量白名单（值来自 HTML 的 `<option>`，与键名同理：DOM 里
   写的不能当可信输入），引擎报的值若不在本页认识的名字里也**照实显示并标注**
   （静默回落到 normal 会把"这层其实是 multiply"显示成 normal）。
+
+  **`transform` 是"组合动词"的样板**（自由变换）：它**不重写** `move`/`resize`/
+  `rotate` 的任何判据，而是调用它们同一批内部路径（组的 `shift_layer_tree`、
+  `w/h>0` 那一句、`rotation_deg` 的 kind 门禁），区别只在**同一个快照**下写完
+  ——于是画布上一个拖拽手势（挪/拉手柄/转）是**一步历史**，`undo` 一次回到
+  变换前。判据：`edits` 只涨一条、`undo` 一次后位置/盒子/旋转全回、空键要报错
+  （回 ok 而什么都不做是这仓库反复堵的静默失败）。人类侧的画布框与八个手柄
+  **按 `caps` 画**（没有 `resize` 的 kind 只画框不画缩放手柄），数值收口
+  （非数报错、零尺寸夹到 1）在 `do_tf_ready` 一处。
 
   **这张矩阵也是"能力表"（`caps`）的唯一事实源**：`query-layer`/`list-layers`
   回包里有一份 `caps`（`agent.layer_caps`）——"这条命令对这个 kind 的**画面**

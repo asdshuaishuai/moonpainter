@@ -2490,6 +2490,42 @@ MUTS = [
         "killed",
     ),
     (
+        "R117",
+        "transform 的空动作不报错（什么都不给的变换回 ok、历史里多一条什么都没干的步骤）",
+        "agent/session.mbt",
+        """  if m.length() == 0 {
+    return err("transform 至少要给一个键（x=/y=/w=/h=/rot=）——什么都不给的变换是空动作")
+  }""",
+        """  if m.length() == 0 {
+    // 变异：静默收下
+  }""",
+        "killed",
+    ),
+    (
+        "R118",
+        "transform 不查 w/h 为正（自由变换把手柄拖到零尺寸也照收：盒子成 0 而画面空掉）",
+        "agent/session.mbt",
+        """  if m.get("w") is Some(_) || m.get("h") is Some(_) {
+    if nw <= 0.0 || nh <= 0.0 {
+      return err("w/h 必须为正")
+    }
+  }""",
+        """  if false {
+    if nw <= 0.0 || nh <= 0.0 {
+      return err("w/h 必须为正")
+    }
+  }""",
+        "killed",
+    ),
+    (
+        "R119",
+        "transform 不记快照（一个手势不再是**一步**历史：撤销回不到变换前）",
+        "agent/session.mbt",
+        """  snapshot(s, doc, "transform \{id} \{touched.join("+")}")""",
+        """  let _ = touched""",
+        "killed",
+    ),
+    (
         "R116",
         "caps 漏报 blend（面板据此不画混合控件：人类侧改不动混合模式）",
         "agent/ops.mbt",

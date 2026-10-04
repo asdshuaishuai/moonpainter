@@ -348,6 +348,114 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #|   wrap.appendChild(svg);
   #|   const pl = svg.querySelector('polyline');
   #|   const pc = svg.querySelector('circle');
+  #|   // 自由变换的**框 + 手柄**（PS 的 Ctrl+T）：框从引擎来（`window.__MP_TF`，
+  #|   // 由 `js_tf_box` 在每次刷新属性面板时推来），这里只负责**画**与**命中判定**。
+  #|   // 手柄画不画由能力位决定（`resize` 才有八个缩放手柄；`move` 才能框内拖动）
+  #|   // ——能力只有引擎一处算（`caps`），前端不猜 kind。
+  #|   const tf = document.createElement('div');
+  #|   tf.id = 'tf-ov';
+  #|   tf.style.cssText = 'position:absolute;display:none;border:1px solid #6a9cff;pointer-events:none;z-index:3';
+  #|   wrap.appendChild(tf);
+  #|   const TF_POS = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+  #|   const tfHandles = {};
+  #|   for (const pos of TF_POS) {
+  #|     const h = document.createElement('div');
+  #|     h.dataset.pos = pos;
+  #|     h.style.cssText = 'position:absolute;width:7px;height:7px;background:#fff;border:1px solid #6a9cff;transform:translate(-50%,-50%)';
+  #|     tf.appendChild(h);
+  #|     tfHandles[pos] = h;
+  #|   }
+  #|   const tfRot = document.createElement('div');
+  #|   tfRot.id = 'tf-rot';
+  #|   tfRot.style.cssText = 'position:absolute;width:9px;height:9px;border-radius:50%;background:#ffd166;border:1px solid #b8860b;transform:translate(-50%,-50%)';
+  #|   tf.appendChild(tfRot);
+  #|   window.__MP_TF = null;
+  #|   // 画布显示尺寸 ↔ 文档像素（与 `toDoc` 同一对比例；正反各算一处就会分叉，
+  #|   // 所以两边都从这里出）
+  #|   const tfScale = () => {
+  #|     const r = img.getBoundingClientRect();
+  #|     return [r.width / (img.naturalWidth || 1), r.height / (img.naturalHeight || 1), r];
+  #|   };
+  #|   // 画一个**文档坐标**的框：框、八个手柄、旋转圆点一次画完。
+  #|   // 拖动过程中画的是"草稿框"（还没发命令），松手才落定——预览与落定**同一个
+  #|   // 函数**，所以"看到的框"与"报出去的框"不可能不一致。
+  #|   window.__tfPaint = (t) => {
+  #|     const sc = tfScale();
+  #|     const x = t.x * sc[0], y = t.y * sc[1], w = t.w * sc[0], h = t.h * sc[1];
+  #|     tf.style.left = x + 'px'; tf.style.top = y + 'px';
+  #|     tf.style.width = Math.max(1, w) + 'px'; tf.style.height = Math.max(1, h) + 'px';
+  #|     const at = {
+  #|       nw: [0, 0], n: [w / 2, 0], ne: [w, 0], e: [w, h / 2],
+  #|       se: [w, h], s: [w / 2, h], sw: [0, h], w: [0, h / 2],
+  #|     };
+  #|     for (const pos of TF_POS) {
+  #|       const el = tfHandles[pos];
+  #|       el.style.display = t.resize ? '' : 'none';
+  #|       el.style.left = at[pos][0] + 'px'; el.style.top = at[pos][1] + 'px';
+  #|     }
+  #|     tfRot.style.left = (w / 2) + 'px'; tfRot.style.top = '-18px';
+  #|   };
+  #|   // 工具/选中态变了就重画（工具不是 transform 或没选中层 ⇒ 整块藏起来）
+  #|   window.__tfRefresh = () => {
+  #|     const t = window.__MP_TF;
+  #|     const tool = window.MPST ? window.MPST.tool : 'move';
+  #|     if (!t || tool !== 'transform') { tf.style.display = 'none'; return; }
+  #|     tf.style.display = '';
+  #|     window.__tfPaint(t);
+  #|   };
+  #|   // 命中判定：8 个手柄（±6 显示像素）→ 旋转圆点 → 框内（能挪才认）→ 空白。
+  #|   // **先判手柄再判框内**：角上那 7px 既在框内也压着手柄，顺序反了就永远拉不到角。
+  #|   const tfHit = (px, py, b) => {
+  #|     const sc = tfScale();
+  #|     const x = b.x * sc[0], y = b.y * sc[1], w = b.w * sc[0], h = b.h * sc[1];
+  #|     const TOL = 6;
+  #|     const near = (hx, hy) => Math.abs(px - hx) <= TOL && Math.abs(py - hy) <= TOL;
+  #|     if (near(x + w / 2, y - 18)) return 'rot';
+  #|     if (b.resize) {
+  #|       const pts = {
+  #|         nw: [x, y], n: [x + w / 2, y], ne: [x + w, y], e: [x + w, y + h / 2],
+  #|         se: [x + w, y + h], s: [x + w / 2, y + h], sw: [x, y + h], w: [x, y + h / 2],
+  #|       };
+  #|       for (const pos of TF_POS) {
+  #|         if (near(pts[pos][0], pts[pos][1])) return pos;
+  #|       }
+  #|     }
+  #|     if (b.move && px > x && px < x + w && py > y && py < y + h) return 'in';
+  #|     return null;
+  #|   };
+  #|   // 这一手的草稿框：**纯函数**（起点 + 当前指针 + Shift ⇒ 新框），
+  #|   // 预览与落定都调它 ⇒ 两处不可能给出不同的数。
+  #|   // 角手柄拖的是"对角固定"；边手柄只改一个方向；框内拖 = 平移；圆点 = 绕中心转。
+  #|   const tfDraft = (st, x, y, shift) => {
+  #|     const b = st.b;
+  #|     if (st.hit === 'in') {
+  #|       return { x: b.x + (x - st.x), y: b.y + (y - st.y), w: b.w, h: b.h, rot: b.rot };
+  #|     }
+  #|     if (st.hit === 'rot') {
+  #|       const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+  #|       const a0 = Math.atan2(st.y - cy, st.x - cx);
+  #|       const a1 = Math.atan2(y - cy, x - cx);
+  #|       let deg = b.rot + (a1 - a0) * 180 / Math.PI;
+  #|       if (shift) deg = Math.round(deg / 15) * 15;
+  #|       return { x: b.x, y: b.y, w: b.w, h: b.h, rot: Math.round(deg * 100) / 100 };
+  #|     }
+  #|     // 缩放：先按"抓到的那个手柄"算出新的左边/上边/宽/高（对角固定）
+  #|     let x0 = b.x, y0 = b.y, x1 = b.x + b.w, y1 = b.y + b.h;
+  #|     const west = st.hit.includes('w'), east = st.hit.includes('e');
+  #|     const north = st.hit.includes('n'), south = st.hit.includes('s');
+  #|     if (west) x0 = Math.min(x, x1 - 1); else if (east) x1 = Math.max(x, x0 + 1);
+  #|     if (north) y0 = Math.min(y, y1 - 1); else if (south) y1 = Math.max(y, y0 + 1);
+  #|     let w = x1 - x0, h = y1 - y0;
+  #|     if (shift && (west || east) && (north || south) && b.w > 0 && b.h > 0) {
+  #|       // 等比：按"变化更大的那一维"定倍数（PS 的 Shift 手感）
+  #|       const k = Math.max(w / b.w, h / b.h);
+  #|       const nw = b.w * k, nh = b.h * k;
+  #|       if (west) x0 = x1 - nw; 
+  #|       if (north) y0 = y1 - nh;
+  #|       w = nw; h = nh;
+  #|     }
+  #|     return { x: x0, y: y0, w: Math.max(1, w), h: Math.max(1, h), rot: b.rot };
+  #|   };
   #|   // **点拾取类工具只有这一份清单**：折线/多边形逐点建层、套索逐点圈选区。
   #|   // 三处（点击/双击/按键）都读它——抄第二遍就是"加了个工具而某个入口没跟上"。
   #|   window.__MP_POLY_TOOLS = ['line', 'poly', 'lasso', 'pen'];
@@ -370,7 +478,9 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #|   let drawing = false; let toolDown = 'move';
   #|   let lastPt = null; let lastSend = 0;
   #|   let cropStart = null; let moveStart = null; let maskStart = null; let shapeStart = null;
-  #|   let penDown = null;  // 钢笔这一笔的起点（画布坐标），松开时算控制柄位移
+  #|   let penDown = null;
+  #| let tfStart = null;  // 自由变换这一手的起点（画布坐标 + 抓到了哪儿 + 起始框）
+  #| let tfStartBox = { x: 0, y: 0, w: 0, h: 0, rot: 0 };  // 钢笔这一笔的起点（画布坐标），松开时算控制柄位移
   #|   const toDoc = (e) => {
   #|     const r = img.getBoundingClientRect();
   #|     const sx = (img.naturalWidth || 1) / r.width, sy = (img.naturalHeight || 1) / r.height;
@@ -414,7 +524,21 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #|       ov.style.display = 'block';
   #|       ov.style.left = dx + 'px'; ov.style.top = dy + 'px';
   #|       ov.style.width = '0px'; ov.style.height = '0px';
-  #|     } else if (window.__MP_POLY_TOOLS.includes(t)) {
+  #|     } else if (t === 'transform') {
+  #|       // 自由变换：**按下就先看清抓到了什么**（手柄 / 框内 / 空白），抓空就什么都
+  #|       // 不做（不许"以为在拖手柄、其实在挪别的东西"）
+  #|       const b = window.__MP_TF;
+  #|       if (!b) {
+  #|         globalThis.__tf_hint('');
+  #|       } else {
+  #|         const r0 = img.getBoundingClientRect();
+  #|         const hit = tfHit(e.clientX - r0.left, e.clientY - r0.top, b);
+  #|         if (hit) {
+  #|           tfStart = { hit, x, y, b: { x: b.x, y: b.y, w: b.w, h: b.h, rot: b.rot } };
+  #|           tfStartBox = tfStart.b;
+  #|         }
+  #|       }
+  #|    } else if (window.__MP_POLY_TOOLS.includes(t)) {
   #|       globalThis.__poly_click(x + ',' + y);
   #|       // 钢笔：拖拽 = 给**刚落的那个锚点**拉控制柄（曲线）。
   #|       // 起止点都记在画布坐标里，松开时只报**位移**——前端不猜锚点，
@@ -442,7 +566,10 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #|       ov.style.top = Math.min(dy, maskStart.dy) + 'px';
   #|       ov.style.width = Math.abs(dx - maskStart.dx) + 'px';
   #|       ov.style.height = Math.abs(dy - maskStart.dy) + 'px';
-  #|     } else if (shapeStart) {
+  #|     } else if (tfStart) {
+  #|       const [x, y] = toDoc(e);
+  #|       window.__tfPaint(tfDraft(tfStart, x, y, e.shiftKey));
+  #|    } else if (shapeStart) {
   #|       const [dx, dy] = toDisp(e);
   #|       ov.style.left = Math.min(dx, shapeStart.dx) + 'px';
   #|       ov.style.top = Math.min(dy, shapeStart.dy) + 'px';
@@ -490,7 +617,20 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #|       globalThis.__move_delta(String(x - moveStart[0]), String(y - moveStart[1]));
   #|       moveStart = null;
   #|     }
-  #|     if (shapeStart) {
+  #|     if (tfStart) {
+  #|       const [x, y] = toDoc(e);
+  #|       const box = tfDraft(tfStart, x, y, e.shiftKey);
+  #|       tfStart = null;
+  #|       // 一个手势 = **一条** `transform`（一步历史）：数值收口（非数/夹紧）在
+  #|       // MoonBit 那侧的 `do_tf_ready` **一处**做，这里只把框报上去。
+  #|       // 一点没变（只是点了一下）就不发命令——不发空动作。
+  #|       if (Math.abs(box.x - tfStartBox.x) > 0.001 || Math.abs(box.y - tfStartBox.y) > 0.001 ||
+  #|           Math.abs(box.w - tfStartBox.w) > 0.001 || Math.abs(box.h - tfStartBox.h) > 0.001 ||
+  #|           Math.abs(box.rot - tfStartBox.rot) > 0.001) {
+  #|         globalThis.__tf_ready(box.x + ',' + box.y + ',' + box.w + ',' + box.h + ',' + box.rot);
+  #|       }
+  #|     }
+  #|    if (shapeStart) {
   #|       const [x, y] = toDoc(e);
   #|       const x0 = Math.min(shapeStart.x, x), y0 = Math.min(shapeStart.y, y);
   #|       const w = Math.abs(x - shapeStart.x), h = Math.abs(y - shapeStart.y);
@@ -518,6 +658,21 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #| }
 
 ///|
+/// 把**自由变换框**推给画布：`id` 空 = 撤框；`box` = `x,y,w,h,rot`（画布像素，
+/// 与 `__tf_ready` 回来时同一格式）；`flags` 两位 = 能不能挪 / 能不能缩放
+/// （来自引擎的 `caps`，前端只按位画手柄与判定命中，不猜 kind）。
+extern "js" fn js_tf_box(id : String, box : String, flags : String) -> Unit =
+  #| (id, box, flags) => {
+  #|   if (!id) { window.__MP_TF = null; if (window.__tfRefresh) window.__tfRefresh(); return; }
+  #|   const p = box.split(',').map(Number);
+  #|   window.__MP_TF = {
+  #|     id, x: p[0], y: p[1], w: p[2], h: p[3], rot: p[4] || 0,
+  #|     move: flags[0] === '1', resize: flags[1] === '1',
+  #|   };
+  #|   if (window.__tfRefresh) window.__tfRefresh();
+  #| }
+
+///|
 extern "js" fn js_set_tool(name : String) -> Unit =
   #| (name) => {
   #|   if (!window.MPST) window.MPST = { tool: 'move', color: '#ff3366', size: 10, strength: 0.5, zoom: 1 };
@@ -530,6 +685,7 @@ extern "js" fn js_set_tool(name : String) -> Unit =
   #|   });
   #|   if (name !== 'crop' && window.__hideCrop) window.__hideCrop();
   #|   if (name !== 'mask' && name !== 'mask_e' && window.__hideMask) window.__hideMask();
+  #|   if (window.__tfRefresh) window.__tfRefresh();
   #| }
 
 ///|

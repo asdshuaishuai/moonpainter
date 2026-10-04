@@ -214,6 +214,33 @@ test "工具面的第二张表：tool_line 真的拼得出命令行（含自由�
     ),
     "rename l1 \"背景 层\"",
   )
+  // 自由变换：**只拼给了的键**（缺键 = 不改那一格；引擎按"部分更新"处理），
+  // 五个键都给时顺序固定 `x y w h rot`（键表 `transform_arg_keys` 一处）
+  assert_eq(
+    @demo.tool_line(
+      "transform",
+      Json::object(
+        Map::from_array([("id", Json::string("l1")), ("rot", Json::number(15.0))]),
+      ),
+    ),
+    "transform l1 rot=15",
+  )
+  assert_eq(
+    @demo.tool_line(
+      "transform",
+      Json::object(
+        Map::from_array([
+          ("id", Json::string("l1")),
+          ("x", Json::number(30.0)),
+          ("y", Json::number(25.0)),
+          ("w", Json::number(40.0)),
+          ("h", Json::number(20.0)),
+          ("rot", Json::number(15.0)),
+        ]),
+      ),
+    ),
+    "transform l1 x=30 y=25 w=40 h=20 rot=15",
+  )
   // 顺手钉住一个老工具，证明这张表整体在用（也证明这条测试真的会红——
   // 第一版我把工具名猜成了 resolve_color，它当场失败）
   assert_eq(

@@ -81,6 +81,7 @@ fn tool_cmd(name : String) -> String? {
     "move" => Some("move")
     "resize" => Some("resize")
     "rotate" => Some("rotate")
+    "transform" => Some("transform")
     "flip" => Some("flip")
     "delete" => Some("delete")
     "reorder" => Some("reorder")
@@ -134,6 +135,14 @@ fn tool_cmd(name : String) -> String? {
     "set_canvas" => Some("set-canvas")
     _ => None
   }
+}
+
+///|
+/// `transform` 的参数键清单（`tool_line` 用；与引擎 `@agent.transform_keys()`
+/// 同名同序——demo 不许 import 引擎包，两份漂移由引擎的 `check_kv_args`
+/// 当场拒（"不认识 transform 的参数"），不会静默）。
+fn transform_arg_keys() -> Array[String] {
+  ["x", "y", "w", "h", "rot"]
 }
 
 ///|
@@ -294,6 +303,20 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
     make_tool("move", "移动图层（选中组时整个搬走它里面的内容）", [("id", "string:req:图层 id"), ("x", "number:req:新 x"), ("y", "number:req:新 y")]),
     make_tool("resize", "改图层尺寸", [("id", "string:req:图层 id"), ("w", "number:req:新宽"), ("h", "number:req:新高")]),
     make_tool("rotate", "旋转图层", [("id", "string:req:图层 id"), ("deg", "number:req:角度")]),
+    // 自由变换：位置 + 盒子 + 旋转**一次**写完 ⇒ **一步历史**（分开发三条命令
+    // 就是三步、撤销要按三次）。键都可选，至少给一个。
+    make_tool(
+      "transform",
+      "自由变换：位置/尺寸/旋转一次写完（一步历史）。至少要给一个参数；w/h 必须为正",
+      [
+        ("id", "string:req:图层 id"),
+        ("x", "number:opt:新 x"),
+        ("y", "number:opt:新 y"),
+        ("w", "number:opt:新宽"),
+        ("h", "number:opt:新高"),
+        ("rot", "number:opt:角度（顺时针，绕层中心）"),
+      ],
+    ),
     make_tool(
       "flip",
       "翻转图层",
@@ -733,6 +756,18 @@ pub fn tool_line(name : String, args : Json) -> String {
     "rotate" => {
       let id = arg_of(args, "id")
       "rotate \{id} \{arg_of(args, "deg")}"
+    }
+    "transform" => {
+      // 只拼**给了的**键（`arg_of` 对缺键回空串；这些值不可能是合法空串）。
+      // 键表一处：`transform_arg_keys()` —— 与引擎 `transform_keys()` 同名同序
+      // （engine 那份是唯一事实源；两份漂移会被引擎的"不认识的参数"当场拒）。
+      let id = arg_of(args, "id")
+      let tail = args_to_tail(args, transform_arg_keys())
+      if tail == "" {
+        "transform \{id}"
+      } else {
+        "transform \{id} \{tail}"
+      }
     }
     "flip" => {
       let id = arg_of(args, "id")

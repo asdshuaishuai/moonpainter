@@ -682,6 +682,52 @@ check(
   `value=${a1.value} op=${a2.op} 层数 ${nBefore} → ${nAfter}`,
 );
 
+// ⑪c 自由变换（PS 的 Ctrl+T）：一个手势 = **一条** `transform` = **一步历史**；
+// 框能不能挪/能不能缩放由引擎 `caps` 决定（前端只按位画手柄），
+// 数值收口（非数/夹紧）在人侧一处做
+exec('add-rect id=tfr x=10 y=10 w=20 h=10');
+await globalThis.__sel('tfr');
+const tfFrame = globalThis.window.__MP_TF || null;
+const tfEdit0 = exec('edits').count;
+await globalThis.__tf_ready('30,25,40,20,15');
+const tfGot = layer('tfr');
+const tfEdit1 = exec('edits').count;
+await globalThis.__undo();
+const tfBack = layer('tfr');
+// 夹紧：框退化成 0×0 时发的是 1×1（不是让引擎拒一条 w=0）
+await globalThis.__tf_ready('5,5,0,0,0');
+const tfMin = layer('tfr');
+// 非数：状态栏说清且**不发命令**（edits 不动）
+const tfEdit2 = exec('edits').count;
+await globalThis.__tf_ready('abc');
+const tfEdit3 = exec('edits').count;
+// 没选中层时（先取消选中）不发命令
+await globalThis.__sel('');
+await globalThis.__tf_ready('1,1,2,2,0');
+const tfEdit4 = exec('edits').count;
+await globalThis.__tf_hint('');
+const tfHint = status();
+await globalThis.__sel('tfr');
+check(
+  '自由变换：一个手势 = 一条命令 = 一步历史（撤销一次回到原样）；框的能力位来自 caps',
+  tfFrame && tfFrame.id === 'tfr' && tfFrame.move === true && tfFrame.resize === true &&
+    tfEdit1 === tfEdit0 + 1 && tfGot.x === 30 && tfGot.y === 25 && tfGot.w === 40 &&
+    tfGot.h === 20 && tfGot.rot === 15 &&
+    tfBack.x === 10 && tfBack.y === 10 && tfBack.w === 20 && tfBack.h === 10 && tfBack.rot === 0 &&
+    tfMin.w === 1 && tfMin.h === 1 &&
+    tfEdit3 === tfEdit2 && tfEdit4 === tfEdit2 && tfHint.includes('自由变换'),
+  `框=${tfFrame && JSON.stringify(tfFrame)}｜一步历史 ${tfEdit0}→${tfEdit1}｜落定 x${tfGot.x} y${tfGot.y} w${tfGot.w} h${tfGot.h} rot${tfGot.rot}｜撤销后 ${tfBack.x},${tfBack.y},${tfBack.w},${tfBack.h},rot${tfBack.rot}｜夹紧 ${tfMin.w}×${tfMin.h}｜坏输入 edits ${tfEdit2}→${tfEdit3}｜没选中 ${tfEdit4}｜状态栏=${tfHint}`,
+);
+// 调整层没有 move/resize 能力 ⇒ 框画出来也拖不动（能力位为假，前端据此不画手柄）
+await globalThis.__sel('adj1');
+const tfAdj = globalThis.window.__MP_TF || null;
+check(
+  '自由变换：调整层的位置/盒子不参与渲染 ⇒ 能力位为假（画出来也拖不动，不发空命令）',
+  tfAdj && tfAdj.id === 'adj1' && tfAdj.move === false && tfAdj.resize === false,
+  `调整层的框=${tfAdj && JSON.stringify(tfAdj)}`,
+);
+await globalThis.__sel('tfr');
+
 // ⑫ 画笔：`__stroke` 落笔（人画的那条链），画面与文档都要变
 const fpPaint0 = exec('fingerprint').fingerprint;
 await globalThis.__stroke('draw', '10,10 14,12 18,16');
@@ -1134,7 +1180,7 @@ check(
 // ⑯ 覆盖清单（机器对账用，格式由 `build_demo.sh#html-wiring` 解析）：
 // driver 走不到的处理器必须在这儿**写明原因**，否则"没覆盖"会静默变成"覆盖了"。
 /* coverage:begin
-driven: __selfcheck __dbg_lint __dbg_edits __dbg_census __dbg_probe __dbg_help __dbg_tools __dbg_schema __dbg_preview __mvsl_set __mvsl_show __mvsl_impact __mvsl_assert __mvsl_clear __param_list __param_set __param_del __cmd __build_badge __save __export __run __sel __vis __front __back __setx __sety __setw __seth __move_delta __rotate __flip __op __del __undo __redo __rename __tag_add __tag_del __reparent __ungroup_sel __text_at __text_add __text_set __text_font __mask_ready __mask_invert __mask_clear __adj_op __adj_val __adj_key __blend __af __stroke __new __set_canvas __crop_ready __crop_apply __crop_cancel __zoom __refresh __stats __optip __toggle_ai __tool __poly_click __poly_finish __poly_cancel __shape_ready __group_sel __pick_at __clone_src __goto __pen_handle __bool_op
+driven: __selfcheck __dbg_lint __dbg_edits __dbg_census __dbg_probe __dbg_help __dbg_tools __dbg_schema __dbg_preview __mvsl_set __mvsl_show __mvsl_impact __mvsl_assert __mvsl_clear __param_list __param_set __param_del __cmd __build_badge __save __export __run __sel __vis __front __back __setx __sety __setw __seth __move_delta __rotate __flip __op __del __undo __redo __rename __tag_add __tag_del __reparent __ungroup_sel __text_at __text_add __text_set __text_font __mask_ready __mask_invert __mask_clear __adj_op __adj_val __adj_key __blend __tf_ready __tf_hint __af __stroke __new __set_canvas __crop_ready __crop_apply __crop_cancel __zoom __refresh __stats __optip __toggle_ai __tool __poly_click __poly_finish __poly_cancel __shape_ready __group_sel __pick_at __clone_src __goto __pen_handle __bool_op
 browser-only: __drop=拒绝路径已被 driver 走过（没字节时明说）；成功路径要真的 File+Image 解码，壳里造一个等于把"读文件"假装测了; __file_sel=同上（driver 走的是"没选到文件"那条）; __mpd_sel=要真的 .mpd 文件字节，壳里没有 FileReader; __img_swap=换图必须先有一张真图进来
 coverage:end */
 

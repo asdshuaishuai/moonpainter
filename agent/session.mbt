@@ -275,6 +275,7 @@ pub fn exec(s : Session, line : String) -> String {
     "set-style" => cmd_set_style(s, tokens)
     "move" => cmd_move(s, tokens)
     "resize" => cmd_resize(s, tokens)
+    "transform" => cmd_transform(s, tokens)
     "rotate" => cmd_rotate(s, tokens)
     "flip" => cmd_flip(s, tokens)
     "rename" => cmd_rename(s, tokens)
@@ -1008,6 +1009,14 @@ pub fn add_adjust_keys() -> Array[String] {
 /// 就判失败（静默跳过 = 这门禁有洞）。字面量带来的漂移风险由一条测试堵住
 /// （`adjust_params_test.mbt` 断言两份清单只差 id/name）——"一处实现"的替代
 /// 不是"再抄一份没人管"，而是"两份 + 一条会红的等式"。
+///|
+/// `transform` 认的全部键（字面量：`param_audit.py` 从 `check_kv_args` 的第三个
+/// 实参读键表，读不出字面量就判这门禁有洞；四个键都已在 `field_audit.KEY_FIELD`
+/// 里登记过——`transform` 只是把它们**一次**写下去）。
+pub fn transform_keys() -> Array[String] {
+  ["x", "y", "w", "h", "rot"]
+}
+
 pub fn set_adjust_keys() -> Array[String] {
   ["op", "value", "in_lo", "in_hi", "gamma", "out_lo", "out_hi", "points"]
 }
@@ -1240,6 +1249,123 @@ fn cmd_rotate(s : Session, tokens : Array[String]) -> String {
   snapshot(s, doc, "rotate \{id} \{@core.fmt_num(deg)}")
   let _ = update_layer(doc.layers, id, fn(l) { { ..l, rotation_deg: deg } })
   "{\"ok\":true,\"op\":\"rotate\",\"id\":\"\{id}\",\"rot\":\{@core.fmt_num(deg)},\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+}
+
+///|
+/// `transform <id> [x=][y=][w=][h=][rot=]`：**自由变换**——把"位置 + 盒子 +
+/// 旋转"在**一条命令里**写下去，于是画布上的一个拖拽手势（挪/拉手柄/转）
+/// 是**一步历史**，`undo` 一次就回到变换前。
+///
+/// 为什么不复用三条既有命令：`move`+`resize`+`rotate` 是**三步**（历史面板里
+/// 一次手势会变成三条、撤销要按三次；PS 的自由变换是一步）。所以这里不是
+/// "再写一遍那三个判断"，而是**调用它们的同一批判据**：
+///   * `w`/`h` 必须为正（与 `resize` 同一句话）；
+///   * `rot` 走 `kind_only_write_error(候选层, "rotation_deg")`——与 `rotate`
+///     同一条入口判据（写不生效的字段要在入口拒；`rot` 恰好等于该 kind 的
+///     默认值则放行，那是"清字段"的写法）；
+///   * `x`/`y` 对组是"连后代一起搬"（与 `move` 同一条 `shift_layer_tree` 路径）。
+///
+/// 至少要给一个键：一个键都不给就是"回 ok 而什么都没做"，那正是这仓库反复
+/// 堵的那类静默失败。
+fn cmd_transform(s : Session, tokens : Array[String]) -> String {
+  if tokens.length() < 2 {
+    return err("用法：transform <id> [x=] [y=] [w=] [h=] [rot=]")
+  }
+  let doc = match require_doc(s) {
+    Ok(d) => d
+    Err(e) => return err(e)
+  }
+  let id = tokens[1]
+  match check_kv_args(tokens, 2, transform_keys(), "transform") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }
+  let m = kv_args(tokens, 2)
+  if m.length() == 0 {
+    return err("transform 至少要给一个键（x=/y=/w=/h=/rot=）——什么都不给的变换是空动作")
+  }
+  let target = match @core.find_layer(doc.layers, id) {
+    Some(l) => l
+    None => return err("层不存在：\{id}")
+  }
+  // 逐键解析：**给了才改**（部分更新；`arg_d` 把"给了但不是数"变成错误）
+  let nx = match m.get("x") {
+    Some(v) =>
+      match to_d(v) {
+        Some(d) => d
+        None => return err("x=\{v} 不是数字")
+      }
+    None => target.x
+  }
+  let ny = match m.get("y") {
+    Some(v) =>
+      match to_d(v) {
+        Some(d) => d
+        None => return err("y=\{v} 不是数字")
+      }
+    None => target.y
+  }
+  let nw = match m.get("w") {
+    Some(v) =>
+      match to_d(v) {
+        Some(d) => d
+        None => return err("w=\{v} 不是数字")
+      }
+    None => target.w
+  }
+  let nh = match m.get("h") {
+    Some(v) =>
+      match to_d(v) {
+        Some(d) => d
+        None => return err("h=\{v} 不是数字")
+      }
+    None => target.h
+  }
+  let nrot = match m.get("rot") {
+    Some(v) =>
+      match to_d(v) {
+        Some(d) => d
+        None => return err("rot=\{v} 不是数字")
+      }
+    None => target.rotation_deg
+  }
+  if m.get("w") is Some(_) || m.get("h") is Some(_) {
+    if nw <= 0.0 || nh <= 0.0 {
+      return err("w/h 必须为正")
+    }
+  }
+  // 旋转：与 `rotate` 同一条入口判据（传**候选层**：只有值非默认 + 这个 kind
+  // 不读它才拒；`rot=0` 是清字段，照过）
+  match kind_only_write_error({ ..target, rotation_deg: nrot }, "rotation_deg") {
+    Some(e) => return err(e)
+    None => ()
+  }
+  // 位置：组的 x/y 渲染器不读 ⇒ 与 `move` 一样走"搬整棵子树"，不然就是
+  // "回 ok 而画面不动"
+  let is_group = target.kind is @core.ShapeKind::Group
+  let dx = nx - target.x
+  let dy = ny - target.y
+  let touched : Array[String] = []
+  if m.get("x") is Some(_) || m.get("y") is Some(_) {
+    touched.push("xy")
+  }
+  if m.get("w") is Some(_) || m.get("h") is Some(_) {
+    touched.push("wh")
+  }
+  if m.get("rot") is Some(_) {
+    touched.push("rot")
+  }
+  snapshot(s, doc, "transform \{id} \{touched.join("+")}")
+  let moved = if is_group && (m.get("x") is Some(_) || m.get("y") is Some(_)) {
+    count_layer_tree(target)
+  } else {
+    1
+  }
+  let _ = update_layer(doc.layers, id, fn(l) {
+    let moved_l = if is_group { shift_layer_tree(l, dx, dy) } else { { ..l, x: nx, y: ny } }
+    { ..moved_l, w: nw, h: nh, rotation_deg: nrot }
+  })
+  "{\"ok\":true,\"op\":\"transform\",\"id\":\"\{id}\",\"x\":\{@core.fmt_num(nx)},\"y\":\{@core.fmt_num(ny)},\"w\":\{@core.fmt_num(nw)},\"h\":\{@core.fmt_num(nh)},\"rot\":\{@core.fmt_num(nrot)},\"moved_layers\":\{moved},\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
 }
 
 ///|

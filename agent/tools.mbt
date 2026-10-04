@@ -84,6 +84,11 @@ pub fn list_tools() -> Array[AgentTool] {
   add("resize", "resize <id> <w> <h>", "meta")
   add("rotate", "rotate <id> <deg>（绕层中心，顺时针）", "meta")
   add("flip", "flip <id> h|v|both|none（翻转；先翻转后旋转）", "meta")
+  add(
+    "transform",
+    "transform <id> [x=] [y=] [w=] [h=] [rot=]：**自由变换**——位置 + 盒子 + 旋转一次写完，**一步历史**（move+resize+rotate 分开发是三步，撤销要按三次）。至少要给一个键；`w`/`h` 必须为正；`rot` 的 kind 门禁与 rotate 同一条（写不生效的字段照旧被拒）；`x`/`y` 对**组**是搬整棵子树（回包给 `moved_layers`）",
+    "meta",
+  )
   add("rename", "rename <id> <new-name>", "meta")
   add(
     "tag",
