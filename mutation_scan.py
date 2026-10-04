@@ -488,20 +488,22 @@ MUTS = [
         "lint 不报非 polygon/line 上的死顶点（表格把 points 的合法 kind 放宽到 rect）",
         "agent/ops.mbt",
         r"""      field: "points",
-      reader: "polygon/line",
+      reader: "polygon/line/path",
       hint: "渲染器不读它的顶点（矩形/椭圆用 w/h/radius 定义形状；要折线请用 add-line）",
-      kinds: ["polygon", "line"],""",
+      kinds: ["polygon", "line", "path"],""",
         r"""      field: "points",
-      reader: "polygon/line",
+      reader: "polygon/line/path",
       hint: "渲染器不读它的顶点（矩形/椭圆用 w/h/radius 定义形状；要折线请用 add-line）",
-      kinds: ["polygon", "line", "rect"],""",
+      kinds: ["polygon", "line", "path", "rect"],""",
         "killed",
     ),
     (
         "R39",
         "query-layer 不报顶点（polygon 的形状读不回来）",
         "agent/session.mbt",
-        r"""    if l.kind is @core.ShapeKind::Polygon || l.kind is @core.ShapeKind::Line {
+        r"""    if l.kind is @core.ShapeKind::Polygon ||
+      l.kind is @core.ShapeKind::Line ||
+      l.kind is @core.ShapeKind::Path {
       sb.write_string(",\"points\":[")""",
         r"""    if false {
       sb.write_string(",\"points\":[")""",
@@ -2194,6 +2196,68 @@ MUTS = [
   out""",
         "killed",
     ),
+    (
+        "R82",
+        "路径采样**忽略控制柄**（曲线退化成锚点折线：画出来的不是那条曲线）",
+        "core/path.mbt",
+        """  if pairs {
+    (
+      (a.0 + handles[i * 2 + 1].0, a.1 + handles[i * 2 + 1].1),
+      (b.0 + handles[((i + 1) % n) * 2].0, b.1 + handles[((i + 1) % n) * 2].1),
+    )
+  } else {
+    (a, b)
+  }""",
+        """  if false && pairs {
+    (
+      (a.0 + handles[i * 2 + 1].0, a.1 + handles[i * 2 + 1].1),
+      (b.0 + handles[((i + 1) % n) * 2].0, b.1 + handles[((i + 1) % n) * 2].1),
+    )
+  } else {
+    (a, b)
+  }""",
+        "killed",
+    ),
+    (
+        "R83",
+        "闭合语义反过来（`NoFill` 当闭合、有填充当开放：点回首锚收口与回车落定对调）",
+        "core/path.mbt",
+        """    NoFill => false""",
+        """    NoFill => true""",
+        "killed",
+    ),
+    (
+        "R84",
+        "路径包围盒只按锚点算（控制柄鼓出去的曲线不在盒子里 ⇒ 渲染窗裁掉它）",
+        "core/path.mbt",
+        """  let pts = path_samples(anchors, handles, closed)""",
+        """  let pts = path_samples(anchors, [], closed)""",
+        "killed",
+    ),
+    (
+        "R86",
+        "包含判定忽略 `closed`（开放路径也围出一块面：只描边的折线突然能填）",
+        "core/path.mbt",
+        """  if n < 3 || !closed {""",
+        """  if n < 3 {""",
+        "killed",
+    ),
+    (
+        "R87",
+        "控制柄条数不校验（给一半也收：控制柄与锚点错位的静默形状）",
+        "core/path.mbt",
+        """  if handles != need {""",
+        """  if false {""",
+        "killed",
+    ),
+    (
+        "R85",
+        "路径的渲染契约不升档（老引擎不认 path ⇒ 静默不画）",
+        "core/document.mbt",
+        """    if l.kind is ShapeKind::Path && rc < RENDER_CONTRACT_PATH {""",
+        """    if false && l.kind is ShapeKind::Path && rc < RENDER_CONTRACT_PATH {""",
+        "killed",
+    ),
     # Q53/Q54/Q55（笔触盒子判据的等号 / 半径 / 画布裁剪）已**退休**：
     # `effective_box` 从 PLAN 六十起认 Raster（盒子 = 落笔范围**派生**），
     # "盒子装不下自己的笔触"这个状态**不可能出现**了，`raster_box_error`
@@ -2433,16 +2497,16 @@ MUTS = [
         "Q42",
         "fill 那一行漏掉 polygon（多边形的填充被当成死数据，正常路径被误伤）",
         "agent/ops.mbt",
-        '      kinds: ["rect", "ellipse", "polygon", "text"],',
-        '      kinds: ["rect", "ellipse", "text"],',
+        '      kinds: ["rect", "ellipse", "polygon", "text", "path"],',
+        '      kinds: ["rect", "ellipse", "text", "path"],',
         "killed",
     ),
     (
         "Q43",
         "stroke 那一行把 polygon 也算成读描边的（多边形描边静默收下、画面不变）",
         "agent/ops.mbt",
-        '      kinds: ["rect", "ellipse", "line"],',
-        '      kinds: ["rect", "ellipse", "line", "polygon"],',
+        '      kinds: ["rect", "ellipse", "line", "path"],',
+        '      kinds: ["rect", "ellipse", "line", "path", "polygon"],',
         "killed",
     ),
     (
@@ -2652,6 +2716,10 @@ MUTS = [
         "core/document.mbt",
         """  let mut rc = 1
   for l in doc.layers {
+    // 贝塞尔路径：老引擎不认这个 kind（整层不画）⇒ 必须升档
+    if l.kind is ShapeKind::Path && rc < RENDER_CONTRACT_PATH {
+      rc = RENDER_CONTRACT_PATH
+    }
     // 克隆笔触：老引擎会把它画成普通笔色（整笔一块死色）⇒ 必须升档
     for d in l.dabs {
       if d.clone && rc < RENDER_CONTRACT_CLONE {
@@ -2676,6 +2744,10 @@ MUTS = [
   rc""",
         """  let mut rc = 1
   for l in doc.layers {
+    // 贝塞尔路径：老引擎不认这个 kind（整层不画）⇒ 必须升档
+    if l.kind is ShapeKind::Path && rc < RENDER_CONTRACT_PATH {
+      rc = RENDER_CONTRACT_PATH
+    }
     // 克隆笔触：老引擎会把它画成普通笔色（整笔一块死色）⇒ 必须升档
     for d in l.dabs {
       if d.clone && rc < RENDER_CONTRACT_CLONE {

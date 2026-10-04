@@ -16,7 +16,7 @@ test "build_shape_layer：非 polygon/line 给 points 必须拒绝（命令面�
   // rect：必须拒绝（渲染器只在 in_polygon 与折线描边里读顶点）
   match build_shape_layer("r1", @core.ShapeKind::Rect, m) {
     Ok(_) => abort("rect 上的 points 必须被拒")
-    Err(e) => assert_true(e.contains("只对polygon/line有意义"), msg=e)
+    Err(e) => assert_true(e.contains("只对polygon/line/path有意义"), msg=e)
   }
   // polygon：够数就接受（样本从 2 个顶点改成 3 个——不是"迁就测试"：
   // `in_polygon` 第一句就是 `if pts.length() < 3 { return false }`，

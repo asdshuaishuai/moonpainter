@@ -47,6 +47,11 @@ pub(all) enum ShapeKind {
   Adjust
   /// 画笔层：dabs 笔触为唯一内容（画笔/橡皮擦落点），局部坐标
   Raster
+  /// **钢笔/贝塞尔路径**（④）：锚点在 `points`、每锚两个控制柄偏移在 `handles`
+  /// （局部坐标，`[in0,out0,in1,out1,…]`）。`fill` 非 `NoFill` = **闭合**路径
+  /// （填充），`NoFill` = 开放路径（只描边，同 SVG 的语义）——不新增 `closed`
+  /// 字段：闭合与否**本来就等价于"有没有面"**，多一个字段就多一处可能自相矛盾。
+  Path
 }
 
 ///|
@@ -218,6 +223,7 @@ pub fn mask_param_error(m : LayerMask) -> String {
 /// 目前有两档需要升级：
 ///   * 2 = 用到蒙版毛边（`roughen > 0`）
 ///   * 3 = 用到**多边形蒙版**（`kind = Polygon`）
+///   * 5 = 用到**贝塞尔路径**（`kind = Path`，老引擎不认识 ⇒ 整层不画）
 /// 别在这里写"总是 3"——那等于把所有容器都标成新契约，闸就失去了分辨力。
 /// ⚠️ 取**所有层里的最高档**（不是遇到第一档就 return）：一份文档完全可能既有
 /// 毛边蒙版（2）又有套索蒙版（3），只看先遇到的那一层就会把 3 报成 2，
@@ -225,6 +231,10 @@ pub fn mask_param_error(m : LayerMask) -> String {
 pub fn required_render_contract(doc : Document) -> Int {
   let mut rc = 1
   for l in doc.layers {
+    // 贝塞尔路径：老引擎不认这个 kind（整层不画）⇒ 必须升档
+    if l.kind is ShapeKind::Path && rc < RENDER_CONTRACT_PATH {
+      rc = RENDER_CONTRACT_PATH
+    }
     // 克隆笔触：老引擎会把它画成普通笔色（整笔一块死色）⇒ 必须升档
     for d in l.dabs {
       if d.clone && rc < RENDER_CONTRACT_CLONE {
@@ -421,7 +431,12 @@ pub(all) struct Layer {
   font_size : Double // Text 层字号（像素，5x7 点阵缩放基准 7）
   mask : LayerMask? // 矢量蒙版（与层同变换；None=无）
   adjust : Adjust? // Adjust 层的算子参数；其余恒 None
-  points : Array[(Double, Double)] // Line/Polygon 顶点（局部坐标，0..w / 0..h）
+  points : Array[(Double, Double)] // Line/Polygon 顶点、Path 的**锚点**（局部坐标，0..w / 0..h）
+  /// Path 的贝塞尔控制柄**偏移**（相对锚点，局部坐标；长度恒为 2×锚点数，
+  /// 依次为 `[in0,out0,in1,out1,…]`）。其余 kind 恒空。
+  /// ⚠️ 缺省（全 0）= 折线（控制柄贴在锚点上），所以"画一条折线路径"不需要
+  /// 任何新语法：`handles` 全 0 的路径就是折线。
+  handles : Array[(Double, Double)]
   dabs : Array[Dab] // Raster 层笔触（局部坐标）；其余层恒空
   fill : Fill
   stroke : Stroke
@@ -513,6 +528,7 @@ pub fn default_layer(
     mask: None,
     adjust: None,
     points: [],
+    handles: [],
     dabs: [],
     fill: Solid(0xFF808080),
     stroke: { color: 0xFF000000, width: 0.0 },

@@ -41,6 +41,16 @@ pub fn list_tools() -> Array[AgentTool] {
     "meta",
   )
   add(
+    "path-preview",
+    "path-preview points=x,y;x,y;… [handles=dx,dy;…] [closed=true|false]：把锚点/控制柄**采样成折线**回报（只读）。钢笔在落定之前的预览走它——采样规则只有引擎一处（@core.path_samples），界面照它给的折线画，预览与落定不可能不一致",
+    "both",
+  )
+  add(
+    "add-path",
+    "add-path x= y= points=x,y;x,y;…（锚点，局部坐标）[handles=dx,dy;dx,dy;…]" + add_shape_keys(@core.ShapeKind::Path).map(fn(k) { "[\{k}=]" }).join("") + "：**钢笔/贝塞尔路径**（④）。锚点在 points，控制柄在 handles——每个锚点 in/out 两个**相对锚点的偏移**（共 2×锚点数，不给 = 全 0 = 折线）。**fill=none ⇒ 开放路径（只描边）；给了填充 ⇒ 闭合路径（自动收口）**：闭合与否等价于「有没有面」，没有单独的 closed 键。默认 fill=none（钢笔先画线，填色要显式说）",
+    "meta",
+  )
+  add(
     "add-polygon",
     "add-polygon x= y= w= h= points=x,y;x,y;…（局部坐标）" + add_shape_keys(@core.ShapeKind::Polygon).map(fn(k) { "[\{k}=]" }).join("") + "：多边形（键见上，另需 points；**没有 stroke=/stroke_w=**——描边只实现了矩形/椭圆/线段）",
     "meta",
@@ -62,7 +72,7 @@ pub fn list_tools() -> Array[AgentTool] {
   )
   add(
     "set-style",
-    "set-style <id> " + set_style_keys().map(fn(k) { "\{k}=/" }).join("") + "（lgrad 端点归一化 0..1，非像素；**points=x,y;x,y;… 是层内局部坐标**，只对 polygon/line 有意义，用来原地改顶点——顶点原先只能建层时给；tag= 追加标签，与 tag 命令同一实现）",
+    "set-style <id> " + set_style_keys().map(fn(k) { "\{k}=/" }).join("") + "（lgrad 端点归一化 0..1，非像素；**points=x,y;x,y;… 是层内局部坐标**，对 polygon/line/path 有意义，用来原地改顶点/锚点；**handles=… 只对 path 有意义**（锚点的 in/out 偏移，条数 = 2×锚点数）；tag= 追加标签，与 tag 命令同一实现）",
     "meta",
   )
   add("move", "move <id> <x> <y>：改层的位置。**组**是搬内容——连后代一起平移（回包给 `moved_layers`）；其余层只改自己的 x/y", "meta")

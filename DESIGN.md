@@ -47,7 +47,7 @@ macOS 原生类 Photoshop 编辑器。对本工程最有价值的三块遗产：
 
 ```
 宿主    cli（native 行协议 + 文件 FFI + 原子落盘）
-交互    agent（66 命令 · vision 闸 · undo/redo · 步骤历史 history/goto · P0–P2 lint · MVSL 闭环 · 工具字典）
+交互    agent（68 命令 · vision 闸 · undo/redo · 步骤历史 history/goto · P0–P2 lint · MVSL 闭环 · 工具字典）
 容器    mpd（pack/unpack · manifest/params/agent/mvsl · 指纹对账 · 限额 · 预览生成）
 渲染    render（RGBA 画布 · 2×2 子采样 AA · W3C 混合 · 旋转 · 取景 · pick · stats）
 核心    core（IR 层树 · canonical JSON 双向 · 指纹 · 层定位原语 · MVSL 编辑表 IR）
@@ -73,15 +73,18 @@ macOS 原生类 Photoshop 编辑器。对本工程最有价值的三块遗产：
 
 - 层类型（`ShapeKind`，与代码**逐字对账**，`verify.sh#deps`）：
   <!-- layer-kinds:begin -->
-  `Rect` `Ellipse` `Line` `Polygon` `Image` `Group` `Text` `Adjust` `Raster`
+  `Rect` `Ellipse` `Line` `Polygon` `Image` `Group` `Text` `Adjust` `Raster` `Path`
   <!-- layer-kinds:end -->
   ——`Text` 是 ASCII 真字形（非 ASCII 盒形占位，诚实边界）、`Adjust` 作用于其下
-  全部可见层的合成结果（PSD 语义）、`Raster` 是画笔层（`dabs` 为唯一内容）。
+  全部可见层的合成结果（PSD 语义）、`Raster` 是画笔层（`dabs` 为唯一内容）、
+  `Path` 是**钢笔/贝塞尔路径**（`points` 锚点 + `handles` 每个锚点的 in/out 偏移；
+  `fill = NoFill` 表示开放路径，否则闭合——闭合与否**等价于"有没有面"**，
+  所以没有单独的 `closed` 字段）。
 - 层属性（`Layer` 字段，与代码**逐字对账**）：
   <!-- layer-fields:begin -->
   `id` `name` `kind` `visible` `opacity` `blend` `x` `y` `w` `h` `rotation_deg`
   `corner_radius` `flip_h` `flip_v` `text` `font_size` `mask` `adjust` `points`
-  `dabs` `fill` `stroke` `asset_hash` `tags` `children`
+  `handles` `dabs` `fill` `stroke` `asset_hash` `tags` `children`
   <!-- layer-fields:end -->
   ——`opacity` 0..1；`rotation_deg` 顺时针绕层中心；`flip_h/flip_v` 先翻转后旋转；
   部分字段只对特定 kind 有意义，那一面由 `agent/ops.mbt` 的 `kind_only_fields`
@@ -279,7 +282,7 @@ manifest 的 `mvsl` 版本块 pin 住四个独立版本号（`render_contract` /
   **空断言**即保护断言的选择子零命中（P1——恒真，比"被违反"更坏，因为它给的是虚假的安心）。
   空编辑表是合法状态，不报条目——lint 不该对「我还没改任何东西」报警。
 
-## 6. 命令集（66 个；字典 = agent/tools.mbt 单一事实源）
+## 6. 命令集（68 个；字典 = agent/tools.mbt 单一事实源）
 
 会话：`session-open` `list-tools` `help`；文档：`new` `set-canvas` `list-layers` `query-layer` `lint`；
 绘制：`add-rect/ellipse/polygon/line` `add-image`（b64）`set-image`（原地换图，只换像素）`set-style` `move` `resize` `rotate` `rename` `tag` `delete` `visible` `reorder` `group` `ungroup` `group-add` `group-remove`（成员增删）；
@@ -341,7 +344,8 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
   逐位等于旧实现**（既有 golden 一个像素都没动），
   可反复编辑参数的独立调整层（levels/curves/hue_sat 面板）仍未做；
   **文本层**做了 **ASCII 点阵字形**（无 CJK、无字体文件）。
-- **仍未做**：贝塞尔、图层样式 fx、多色渐变/径向渐变；
+- **仍未做**：图层样式 fx、多色渐变/径向渐变；
+  **路径（贝塞尔）本轮是 Stage A**：锚点 + 每锚 in/out 控制柄的采样 / 包含 / 描边 / 包围盒，闭合语义只有一处（`core.fill_closed`：`fill = NoFill` ⇒ 开放）。布尔运算（并/差/交/异或）、路径上再编辑（加/删锚点、人侧除「点下拖出」以外的控制柄手柄）、把已有形状转成路径、路径文字、SVG/AI 导入**仍未做**——判据只咬「这条曲线画得对不对」，不咬「能不能布尔」。
 - **PSD L1 读 → L3 写**（PSD 为第一公民，Photopea 天然覆盖）、AI（PDF 层）导入、Sketch/XCF/KRA；原文保全策略（source/ 层）；
 - MCP server / WASM 面向宿主、SKILL.md、mpdView 只读查看器（ddpView 模式）、collab 合并、变体（fork/score/merge）；
 - 动态 Huffman、16/32-bit、色彩管理（本轮 sRGB 恒定）。

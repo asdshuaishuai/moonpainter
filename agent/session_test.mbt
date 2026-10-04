@@ -968,7 +968,7 @@ test "参数零容忍：拼错的键、漏了 = 的裸词、空值都必须拒�
   // 这一层是矩形，所以拒绝改由 kind 门给出（与 radius 同一句话），
   // 断言咬住"两类层才收顶点"这个语义，而不是某句措辞。
   let ep = run(s, "set-style l1 points=0,0;1,1")
-  assert_true(ep.contains("只对polygon/line有意义"), msg="points 要指路：\{ep}")
+  assert_true(ep.contains("只对polygon/line/path有意义"), msg="points 要指路：\{ep}")
   assert_true(ep.contains("add-line"), msg="points 被拒要给出路（要折线用 add-line）：\{ep}")
   assert_true(run(s, "set-style l1 text=hi").contains("set-text"), msg="text 要指路")
   assert_true(run(s, "set-style l1 w=10").contains("resize"), msg="w 要指路")

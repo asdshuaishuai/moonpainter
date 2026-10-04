@@ -74,6 +74,8 @@ fn tool_cmd(name : String) -> String? {
     "add_ellipse" => Some("add-ellipse")
     "add_line" => Some("add-line")
     "add_polygon" => Some("add-polygon")
+    "pen_path" => Some("add-path")
+    "path_preview" => Some("path-preview")
     "set_style" => Some("set-style")
     "move" => Some("move")
     "resize" => Some("resize")
@@ -221,6 +223,31 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
       ],
     ),
     make_tool(
+      "pen_path",
+      "画一条**钢笔/贝塞尔路径**（锚点在 points，控制柄在 handles：每个锚点 in/out 两个相对偏移，共 2×锚点数，不给 = 全 0 = 折线）。fill=none ⇒ 开放路径（只描边，默认）；给了 fill ⇒ 闭合路径（自动收口）。x/y 是占位盒左上、points 是**盒内局部坐标**；w/h 不给就按采样后的包围盒自算",
+      [
+        ("x", "number:占位盒左上 x"),
+        ("y", "number:占位盒左上 y"),
+        ("w", "number:盒宽（不给 = 按路径采样自算）"),
+        ("h", "number:盒高（不给 = 按路径采样自算）"),
+        ("points", "string:req:锚点 x,y;x,y;…（局部坐标）"),
+        ("handles", "string:控制柄 dx,dy;dx,dy;…（每锚 in/out 两个偏移；不给 = 折线）"),
+        ("fill", "string:填充色 #RRGGBB[AA] 或 none（默认 none = 开放路径）"),
+        ("stroke", "string:描边色"),
+        ("stroke_w", "number:描边宽"),
+        ("name", "string:图层名"),
+      ],
+    ),
+    make_tool(
+      "path_preview",
+      "把锚点/控制柄**采样成折线**回报（只读；采样规则与落定/渲染同一处——用它确认一条路径到底画成什么形状）",
+      [
+        ("points", "string:req:锚点 x,y;x,y;…"),
+        ("handles", "string:控制柄 dx,dy;…"),
+        ("closed", "string:true/false（默认 false = 开放）"),
+      ],
+    ),
+    make_tool(
       "set_style",
       "修改图层样式",
       [
@@ -232,7 +259,8 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
         ("opacity", "number:透明度 0..1"),
         ("blend", "string:混合模式"),
         ("radius", "number:圆角"),
-        ("points", "string:顶点 x,y;x,y;…（层内局部坐标，只对 polygon/line 有效）"),
+        ("points", "string:顶点/锚点 x,y;x,y;…（层内局部坐标，对 polygon/line/path 有效）"),
+        ("handles", "string:控制柄 dx,dy;…（只对 path 有效，每锚 in/out 两个偏移）"),
         ("rot", "number:旋转角度（顺时针度）"),
         ("visible", "string:true/false"),
         ("name", "string:新名称"),
@@ -870,6 +898,18 @@ pub fn tool_line(name : String, args : Json) -> String {
         "mvsl-impact max=" + mx
       }
     }
+    "path_preview" => {
+      let mut l = "path-preview points=" + arg_of(args, "points")
+      let hs = arg_of(args, "handles")
+      if hs != "" {
+        l = l + " handles=" + hs
+      }
+      let cl = arg_of(args, "closed")
+      if cl != "" {
+        l = l + " closed=" + cl
+      }
+      l
+    }
     "mvsl_show" => "mvsl-show"
     "mvsl_clear" => "mvsl-clear"
     "mvsl_assert" => "mvsl-assert"
@@ -879,7 +919,7 @@ pub fn tool_line(name : String, args : Json) -> String {
         args,
         [
           "id", "x", "y", "w", "h", "fill", "lgrad", "stroke", "stroke_w",
-          "radius", "opacity", "blend", "points", "name",
+          "radius", "opacity", "blend", "points", "handles", "name",
         ],
       )
       "\{cmd} \{tail}"

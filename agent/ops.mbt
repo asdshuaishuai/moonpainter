@@ -355,7 +355,8 @@ pub fn remove_layer(layers : Array[@core.Layer], id : String) -> Bool {
 pub fn points_min_count(kind : @core.ShapeKind) -> Int {
   if kind is @core.ShapeKind::Polygon {
     3
-  } else if kind is @core.ShapeKind::Line {
+  } else if kind is @core.ShapeKind::Line || kind is @core.ShapeKind::Path {
+    // path 的锚点与折线同一条下界：1 个锚点（哪怕带着控制柄）画不出任何一段
     2
   } else {
     0 // 不适用：矩形/椭圆/文本/位图都不用顶点定义形状
@@ -627,6 +628,40 @@ pub fn apply_style_kv(
     }
     None => ()
   }
+  // 控制柄（只有 path 读它）：`handles=dx,dy;…` 长度必须 == 2×锚点数
+  // （每个锚点 in/out 两个偏移）。**条数判据只有一处**（`@core.handles_count_error`），
+  // 入口与 `lint` 共用——两处各写一遍必然一边先烂。
+  match m.get("handles") {
+    Some(v) => {
+      match kind_only_kind_error(nl.kind, nl.id, "handles") {
+        Some(e) => return Err(e)
+        None => ()
+      }
+      match parse_points(v) {
+        Ok(hs) => nl = { ..nl, handles: hs }
+        Err(e) => return Err(e)
+      }
+      let ce = @core.handles_count_error(nl.points.length(), nl.handles.length())
+      if ce != "" {
+        return Err(ce)
+      }
+    }
+    None => ()
+  }
+  // **盒子跟着内容走**（text/image/raster 同一条纪律）：路径的锚点/控制柄改了，
+  // 而这一条命令没显式给 `w=`/`h=`，就把盒子重算成采样后的包围盒——
+  // 否则"改了形状、盒子还是老的"，渲染窗（以盒子为心）会把新形状裁掉。
+  if nl.kind is @core.ShapeKind::Path &&
+    nl.points.length() > 0 &&
+    m.get("w") is None &&
+    m.get("h") is None {
+    let b = @core.path_box(nl.points, nl.handles, @core.fill_closed(nl.fill))
+    let bw = b.2 - b.0
+    let bh = b.3 - b.1
+    if bw > 0.0 && bh > 0.0 {
+      nl = { ..nl, x: nl.x + b.0, y: nl.y + b.1, w: bw, h: bh }
+    }
+  }
   match m.get("radius") {
     Some(v) => match to_d(v) {
       Some(r) => {
@@ -721,6 +756,15 @@ pub fn build_shape_layer(
   // 的范围检查都在两边各写一遍。两份拷贝的后果实测到了：往这里注入
   // "kind 门不生效"的变异**不会红**——另一份拷贝还在守（变异门判 SURVIVED）。
   // 判据存活的原因不是"没人守"，是"守的人有两个"。
+  // 钢笔的默认是**开放路径**（只描边）：新画的一条线不该凭空长出一块填充。
+  // 默认灰填充是其余形状建层时的语义（矩形/椭圆/多边形），照搬过来会让
+  // "画了一条线"变成"填了一个面"——填色要显式说（`fill=`/`lgrad=`）。
+  // ⚠️ 这条默认只改**建层**；`set-style` 不碰 fill（不显式给就不动）。
+  if kind is @core.ShapeKind::Path &&
+    m.get("fill") is None &&
+    m.get("lgrad") is None {
+    l = { ..l, fill: @core.Fill::NoFill, stroke: { color: 0xFF000000, width: 2.0 } }
+  }
   if !(m.get("points") is Some(_)) && kind is @core.ShapeKind::Line {
     // 默认对角线
     l = { ..l, points: [(0.0, 0.0), (w, h)], fill: @core.Fill::NoFill, stroke: { color: 0xFF000000, width: 2.0 } }
@@ -806,10 +850,23 @@ fn kind_only_fields() -> Array[KindOnly] {
       },
     },
     {
+      field: "handles",
+      reader: "path",
+      hint: "渲染器只用 path 的控制柄（其余 kind 用 points/w/h 定义形状；要折线请用 add-line 或 handles 全 0 的 add-path）",
+      kinds: ["path"],
+      dead: fn(l) {
+        if l.handles.length() > 0 {
+          "\{l.handles.length()} 个控制柄"
+        } else {
+          ""
+        }
+      },
+    },
+    {
       field: "points",
-      reader: "polygon/line",
+      reader: "polygon/line/path",
       hint: "渲染器不读它的顶点（矩形/椭圆用 w/h/radius 定义形状；要折线请用 add-line）",
-      kinds: ["polygon", "line"],
+      kinds: ["polygon", "line", "path"],
       dead: fn(l) {
         if l.points.length() > 0 {
           "\{l.points.length()} 个顶点"
@@ -914,9 +971,11 @@ fn kind_only_fields() -> Array[KindOnly] {
     //   ——"写了默认值"与"没写"必须一样，否则清字段的写法会被自己拒掉。
     {
       field: "fill",
-      reader: "有填充面的层（矩形/椭圆/多边形/文本）",
+      reader: "有填充面的层（矩形/椭圆/多边形/文本/路径）",
       hint: "折线只有描边（要颜色请用 stroke=），位图/笔触/调整层/组没有填充面",
-      kinds: ["rect", "ellipse", "polygon", "text"],
+      // 路径**读** fill：它既是面颜色，也是"闭不闭合"的开关（`NoFill` = 开放）
+      // ——放在这里不是"多给一个键"，而是渲染器真的读它（见 `path_closed`）。
+      kinds: ["rect", "ellipse", "polygon", "text", "path"],
       dead: fn(l) {
         match l.fill {
           // 默认灰：没写过填充
@@ -929,9 +988,9 @@ fn kind_only_fields() -> Array[KindOnly] {
     },
     {
       field: "stroke",
-      reader: "矩形/椭圆/线段（`inside_stroke` 只实现这三种）",
-      hint: "描边只实现了矩形/椭圆/线段；位图/文本/笔触/调整层/组都没有描边",
-      kinds: ["rect", "ellipse", "line"],
+      reader: "矩形/椭圆/线段/路径（`inside_stroke` 实现了这四种）",
+      hint: "描边只实现了矩形/椭圆/线段/路径；位图/文本/笔触/调整层/组都没有描边",
+      kinds: ["rect", "ellipse", "line", "path"],
       dead: fn(l) {
         let w = if l.stroke.width != 0.0 {
           "stroke_w=\{@core.fmt_num(l.stroke.width)}"
@@ -1033,6 +1092,7 @@ fn ctx_shape_kind(ctx : String) -> @core.ShapeKind? {
     "add-ellipse" => Some(@core.ShapeKind::Ellipse)
     "add-polygon" => Some(@core.ShapeKind::Polygon)
     "add-line" => Some(@core.ShapeKind::Line)
+    "add-path" => Some(@core.ShapeKind::Path)
     "add-image" => Some(@core.ShapeKind::Image)
     "add-text" => Some(@core.ShapeKind::Text)
     "add-adjust" => Some(@core.ShapeKind::Adjust)
@@ -1293,7 +1353,8 @@ pub fn layer_caps(l : @core.Layer) -> Array[String] {
     k is @core.ShapeKind::Ellipse ||
     k is @core.ShapeKind::Polygon ||
     k is @core.ShapeKind::Line ||
-    k is @core.ShapeKind::Image
+    k is @core.ShapeKind::Image ||
+    k is @core.ShapeKind::Path
   // 顺序即文档顺序（DESIGN §3 的 caps 列表按这个顺序报）
   let group_kind = k is @core.ShapeKind::Group
   if face || text_kind || raster_kind {

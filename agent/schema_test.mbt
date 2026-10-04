@@ -214,6 +214,7 @@ test "lint 兜住手改容器的越界渐变端点（命令面之外的入口）
     mask: None,
     adjust: None,
     points: [],
+    handles: [],
     dabs: [],
     fill: @core.Fill::LinearGradient(0xFFE8B23C, 0xFFB4361E, 0.0, 0.0, 60.0, 40.0),
     stroke: { color: 0, width: 0.0 },

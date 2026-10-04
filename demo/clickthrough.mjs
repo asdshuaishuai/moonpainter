@@ -110,6 +110,11 @@ globalThis.__MP_BUILD__ = {
 // 因为处理器要用 `window.MPST`（工具/颜色/笔宽）与 `window.__polyPreview`。
 await import('./demo.js');
 globalThis.window = globalThis;
+// 页面画预览会调 `window.__polyPreview(点串)`（`js_poly_preview` 的 FFI）。
+// 哑壳把它记下来——"处理器 → 引擎采样 → 交给画布"这条链才有可断言的事实。
+globalThis.window.__polyPreview = (pts) => {
+  globalThis.__MP_lastPolyPreview = pts;
+};
 
 const results = [];
 function check(name, cond, extra) {
@@ -695,6 +700,64 @@ check(
   status() || '(空)',
 );
 
+// ⑫b2 钢笔/路径（④ 人侧）：点=锚点、拖=控制柄（曲线）、点回首锚=闭合收口、
+// 回车=落定为开放路径。判据落在**引擎里那一层真的是 path、控制柄真的落进容器、
+// 画面真的变了**——不是"按钮点了不报错"。
+{
+  await globalThis.__tool('pen');
+  await globalThis.__poly_cancel(); // 上一轮的工具切换可能留下未闭合的点
+  const before = exec('list-layers').count;
+  const findPath = () => (exec('list-layers').layers || []).filter((l) => l.kind === 'path');
+  // 三个锚点：第二个点拖出控制柄（曲线那段就是它）
+  await globalThis.__poly_click('20,20');
+  globalThis.__MP_lastPolyPreview = '';
+  await globalThis.__poly_click('60,20');
+  await globalThis.__pen_handle('0,25'); // 拖动：给刚落的锚点拉控制柄（曲线）
+  check(
+    '钢笔：拖出控制柄后预览由**引擎采样**（采样点数远多于锚点数，预览与落定同一条采样规则）',
+    String(globalThis.__MP_lastPolyPreview || '').split(';').filter((x) => x).length > 3,
+    String(globalThis.__MP_lastPolyPreview || '(无预览)').slice(0, 90),
+  );
+  await globalThis.__poly_click('60,60');
+  await globalThis.__poly_finish(); // 回车/双击 = 开放路径
+  const after = exec('list-layers');
+  const paths = findPath();
+  check(
+    '钢笔：回车落定建出一层，且引擎认它是 path（不是矩形/多边形）',
+    after.count === before + 1 && paths.length === 1,
+    `层数 ${before} → ${after.count}，path 层 ${JSON.stringify(paths.map((p) => p.id))}`,
+  );
+  const q = layer(paths[0].id);
+  check(
+    '钢笔：控制柄真的落进容器（handles 回读得到，且不是全 0）',
+    Array.isArray(q.handles) && q.handles.some((h) => h[0] !== 0 || h[1] !== 0),
+    JSON.stringify(q.handles || null),
+  );
+  check(
+    '钢笔：开放路径 = 只描边（引擎报 closed=false：闭合与否由 fill 派生，命令面如实回报）',
+    q.closed === false,
+    `closed=${JSON.stringify(q.closed)}`,
+  );
+  // 闭合：点回第一个锚点 ⇒ 填色收口（同一个动作两条语义，判据分开咬）
+  await globalThis.__poly_click('120,120');
+  await globalThis.__poly_click('160,120');
+  await globalThis.__poly_click('160,160');
+  await globalThis.__poly_click('120,120'); // 点回首锚 = 闭合
+  const closed = findPath().filter((l) => l.id !== paths[0].id);
+  check(
+    '钢笔：点回第一个锚点 = 闭合收口（多出一层，且它 kind 仍是 path）',
+    closed.length === 1 && closed[0].kind === 'path',
+    JSON.stringify(closed.map((l) => [l.id, l.kind])),
+  );
+  const closedQ = layer(closed[0].id);
+  check(
+    '钢笔：闭合那层报 closed=true（收口 = 有面，判据与开放路径同一条）',
+    closedQ.closed === true,
+    `closed=${JSON.stringify(closedQ.closed)}`,
+  );
+  await globalThis.__tool('rect');
+}
+
 // ⑫c 步骤历史面板（③ 每步可见、可跳回）：面板 HTML 是**纯函数**算出来的，
 // 这里既查"面板列出来的步骤与引擎的 history 一致"，也查"点一行真的跳回去"。
 {
@@ -968,7 +1031,7 @@ check(
 // ⑯ 覆盖清单（机器对账用，格式由 `build_demo.sh#html-wiring` 解析）：
 // driver 走不到的处理器必须在这儿**写明原因**，否则"没覆盖"会静默变成"覆盖了"。
 /* coverage:begin
-driven: __selfcheck __dbg_lint __dbg_edits __dbg_census __dbg_probe __dbg_help __dbg_tools __dbg_schema __dbg_preview __mvsl_set __mvsl_show __mvsl_impact __mvsl_assert __mvsl_clear __param_list __param_set __param_del __cmd __build_badge __save __export __run __sel __vis __front __back __setx __sety __setw __seth __move_delta __rotate __flip __op __del __undo __redo __rename __tag_add __tag_del __reparent __ungroup_sel __text_at __text_add __text_set __text_font __mask_ready __mask_invert __mask_clear __adj_op __adj_val __af __stroke __new __set_canvas __crop_ready __crop_apply __crop_cancel __zoom __refresh __stats __optip __toggle_ai __tool __poly_click __poly_finish __poly_cancel __shape_ready __group_sel __pick_at __clone_src __goto
+driven: __selfcheck __dbg_lint __dbg_edits __dbg_census __dbg_probe __dbg_help __dbg_tools __dbg_schema __dbg_preview __mvsl_set __mvsl_show __mvsl_impact __mvsl_assert __mvsl_clear __param_list __param_set __param_del __cmd __build_badge __save __export __run __sel __vis __front __back __setx __sety __setw __seth __move_delta __rotate __flip __op __del __undo __redo __rename __tag_add __tag_del __reparent __ungroup_sel __text_at __text_add __text_set __text_font __mask_ready __mask_invert __mask_clear __adj_op __adj_val __af __stroke __new __set_canvas __crop_ready __crop_apply __crop_cancel __zoom __refresh __stats __optip __toggle_ai __tool __poly_click __poly_finish __poly_cancel __shape_ready __group_sel __pick_at __clone_src __goto __pen_handle
 browser-only: __drop=拒绝路径已被 driver 走过（没字节时明说）；成功路径要真的 File+Image 解码，壳里造一个等于把"读文件"假装测了; __file_sel=同上（driver 走的是"没选到文件"那条）; __mpd_sel=要真的 .mpd 文件字节，壳里没有 FileReader; __img_swap=换图必须先有一张真图进来
 coverage:end */
 

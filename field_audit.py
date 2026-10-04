@@ -46,6 +46,7 @@ KEY_FIELD = {
     "visible": "visible",
     "tag": "tags",
     "points": "points",
+    "handles": "handles",
     "text": "text",
     "font_size": "font_size",
     "b64": "asset_hash",  # add-image / set-image 的像素载荷

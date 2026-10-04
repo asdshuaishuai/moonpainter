@@ -350,7 +350,7 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #|   const pc = svg.querySelector('circle');
   #|   // **点拾取类工具只有这一份清单**：折线/多边形逐点建层、套索逐点圈选区。
   #|   // 三处（点击/双击/按键）都读它——抄第二遍就是"加了个工具而某个入口没跟上"。
-  #|   window.__MP_POLY_TOOLS = ['line', 'poly', 'lasso'];
+  #|   window.__MP_POLY_TOOLS = ['line', 'poly', 'lasso', 'pen'];
   #|   window.__polyPreview = (pts) => {
   #|     if (!pts) { svg.style.display = 'none'; return; }
   #|     const r = img.getBoundingClientRect();
@@ -370,6 +370,7 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #|   let drawing = false; let toolDown = 'move';
   #|   let lastPt = null; let lastSend = 0;
   #|   let cropStart = null; let moveStart = null; let maskStart = null; let shapeStart = null;
+  #|   let penDown = null;  // 钢笔这一笔的起点（画布坐标），松开时算控制柄位移
   #|   const toDoc = (e) => {
   #|     const r = img.getBoundingClientRect();
   #|     const sx = (img.naturalWidth || 1) / r.width, sy = (img.naturalHeight || 1) / r.height;
@@ -415,6 +416,10 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #|       ov.style.width = '0px'; ov.style.height = '0px';
   #|     } else if (window.__MP_POLY_TOOLS.includes(t)) {
   #|       globalThis.__poly_click(x + ',' + y);
+  #|       // 钢笔：拖拽 = 给**刚落的那个锚点**拉控制柄（曲线）。
+  #|       // 起止点都记在画布坐标里，松开时只报**位移**——前端不猜锚点，
+  #|       // 锚点归属由引擎侧 do_pen_handle 自己认（它知道刚落了几个点）。
+  #|       if (t === 'pen') penDown = [x, y];
   #|     }
   #|   });
   #|   document.addEventListener('mousemove', (e) => {
@@ -461,6 +466,14 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #|       if (w > 4 && h > 4) globalThis.__crop_ready(x0 + ',' + y0 + ',' + w + ',' + h);
   #|       else window.__hideCrop();
   #|       cropStart = null;
+  #|     }
+  #|     if (penDown && toolDown === 'pen') {
+  #|       const [x, y] = toDoc(e);
+  #|       const dx = x - penDown[0], dy = y - penDown[1];
+  #|       penDown = null;
+  #|       if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+  #|         globalThis.__pen_handle(dx + ',' + dy);
+  #|       }
   #|     }
   #|     if (maskStart) {
   #|       const [x, y] = toDoc(e);

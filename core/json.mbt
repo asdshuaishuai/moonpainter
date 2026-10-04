@@ -480,6 +480,7 @@ fn kind_str(k : ShapeKind) -> String {
     Text => "text"
     Adjust => "adjust"
     Raster => "raster"
+    Path => "path"
   }
 }
 
@@ -549,6 +550,12 @@ fn layer_json(l : Layer) -> String {
   sb.write_string(adjust_json(l.adjust))
   sb.write_string(",\"points\":")
   sb.write_string(points_json(l.points))
+  // 控制柄**只写非空**：非 Path 层逐位不变（老 golden 不动），Path 层全 0 控制柄
+  // 也能省掉一长串 `[0,0]`——"缺省 = 折线"这条语义必须读写两侧一致。
+  if l.handles.length() > 0 {
+    sb.write_string(",\"handles\":")
+    sb.write_string(points_json(l.handles))
+  }
   sb.write_string(",\"fill\":\{fill_json(l.fill)}")
   sb.write_string(",\"stroke\":{\"c\":\"\{@codec.color_to_hex(l.stroke.color)}\",\"w\":\{fmt_num(l.stroke.width)}}")
   sb.write_string(",\"dabs\":[")
@@ -685,6 +692,7 @@ fn kind_of(s : String) -> Result[ShapeKind, String] {
     "text" => Ok(Text)
     "adjust" => Ok(Adjust)
     "raster" => Ok(Raster)
+    "path" => Ok(Path)
     _ => Err("未知节点类型: \{s}")
   }
 }
@@ -813,7 +821,18 @@ fn points_of(v : JValue) -> Result[Array[(Double, Double)], String] {
 ///|
 /// 蒙版用：`points` 可以缺席（老容器里的蒙版没有这个字段），缺席 = 空。
 fn points_of_or_empty(v : JValue) -> Result[Array[(Double, Double)], String] {
-  match v.get("points") {
+  points_of_or_empty_key(v, "points")
+}
+
+///|
+///|
+/// 按**键名**取点串（`points`/`handles` 共用一处解析）：两个字段的格式完全一样
+/// （`[[x,y],…]`），各写一份解析就会出现"一个能读一个读不了"。
+fn points_of_or_empty_key(
+  v : JValue,
+  key : String,
+) -> Result[Array[(Double, Double)], String] {
+  match v.get(key) {
     Some(JArr(arr)) => points_parse(arr)
     _ => Ok([])
   }
@@ -967,6 +986,12 @@ fn layer_of(v : JValue) -> Result[Layer, String] {
     Ok(ps) => ps
     Err(e) => return Err(e)
   }
+  // 控制柄**缺省即空**（老容器没有这个字段，全 0 = 折线语义）——同 `dabs` 那套：
+  // 只对 Path 有意义的字段不写出来也能读回来。解析与 `points` 走同一处。
+  let handles = match points_of_or_empty_key(v, "handles") {
+    Ok(hs) => hs
+    Err(e) => return Err(e)
+  }
   let tags : Array[String] = []
   match v.get("tags") {
     Some(JArr(arr)) => for t in arr {
@@ -1044,6 +1069,7 @@ fn layer_of(v : JValue) -> Result[Layer, String] {
         mask,
         adjust,
         points,
+        handles,
         dabs,
         fill: fi,
         stroke: { color: sc, width: sw },

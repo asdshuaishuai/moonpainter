@@ -381,6 +381,15 @@ fn to_canvas_p(
 }
 
 ///|
+/// 路径**是不是闭合的**：唯一一处判据。`Fill` 没有 `Eq`（渐变/图案也是 `Fill`
+/// 的变体，逐字段比较要另立规则），所以这里用 `match` 而不是 `!=`——顺便也把
+/// "填充类型变了，闭合语义要不要跟着变"这个问题压缩成这一个函数：
+/// **只有 `NoFill` 是开放**（只描边），其余一切填充都闭合。
+fn path_closed(l : @core.Layer) -> Bool {
+  @core.fill_closed(l.fill)
+}
+
+///|
 /// 局部坐标系下的形状内点测试（fill）。
 fn inside_fill(l : @core.Layer, lx : Double, ly : Double) -> Bool {
   match l.kind {
@@ -394,6 +403,11 @@ fn inside_fill(l : @core.Layer, lx : Double, ly : Double) -> Bool {
       nx * nx + ny * ny <= 1.0
     }
     @core.ShapeKind::Polygon => in_polygon(l.points, lx, ly)
+    // 路径的**面**只在闭合时有意义：`fill=NoFill` = 开放路径（只描边），
+    // 这条"闭合与否"的语义只在这里与描边/`path_box` 三处读同一个判断——
+    // 不新增 `closed` 字段，是为了让"有没有面"和"填不填"不可能互相矛盾。
+    // 几何（采样/包含判定）全在 `@core.path_contains` 一处，`pick` 也读它。
+    @core.ShapeKind::Path => @core.path_contains(l.points, l.handles, path_closed(l), lx, ly)
     @core.ShapeKind::Line => false // 线段无填充面
     @core.ShapeKind::Image => lx >= 0.0 && lx < l.w && ly >= 0.0 && ly < l.h
     @core.ShapeKind::Group => false
@@ -487,6 +501,16 @@ fn inside_stroke(l : @core.Layer, lx : Double, ly : Double) -> Bool {  let width
     return false
   }
   match l.kind {
+    // 路径描边：沿**同一份采样**（`@core.path_nearest_dist`）算最近距离——
+    // 与填充用同一套控制柄语义、同一份弦长采样规则，不会"看着在这里、命中在那里"。
+    @core.ShapeKind::Path => @core.path_nearest_dist(
+      l.points,
+      l.handles,
+      path_closed(l),
+      lx,
+      ly,
+    ) <=
+      width / 2.0
     @core.ShapeKind::Line => {
       // 折线各段的距离测试
       let pts = l.points

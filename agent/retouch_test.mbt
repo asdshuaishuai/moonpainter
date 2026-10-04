@@ -527,9 +527,9 @@ test "顶点改得动：set-style points= 原地改，蒙版/标签/层序都不
   assert_true(run(s, "query-layer l1").contains("[[0,0],[0,40],[40,40]]"), msg="线段顶点要换掉")
   // ④ 非 polygon/line 上写 points 是死数据（写进 JSON、改指纹、画面不变）→ 入口拒
   let r = run(s, "set-style bg points=1,1;2,2;3,3")
-  assert_true(r.contains("只对polygon/line有意义"), msg="矩形要拒：\{r}")
+  assert_true(r.contains("只对polygon/line/path有意义"), msg="矩形要拒：\{r}")
   let e = run(s, "set-style bg points=0,0;1")
-  assert_true(e.contains("只对polygon/line有意义"), msg="种类检查要在形态检查之前（同一句话）：\{e}")
+  assert_true(e.contains("只对polygon/line/path有意义"), msg="种类检查要在形态检查之前（同一句话）：\{e}")
 }
 
 test "顶点数不足 = 什么都不画：入口拒 + lint 兜（判据的空集也要说话）" {

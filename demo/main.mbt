@@ -16,6 +16,11 @@ let g_paint : Ref[String] = Ref("")
 /// 空白键的 `points=` 只能建层时给——"逐点连击"是**人类**画多边形的唯一路子，
 /// 而前端此前只有单次拖拽的交互，于是折线/多边形整条能力只有 AI 够得到。
 let g_pts : Ref[Array[(Int, Int)]] = Ref([])
+
+///|
+/// **钢笔**的每个锚点一个 out 控制柄偏移（画布坐标的相对量）。in 控制柄取它的
+/// 镜像（对称 = PS 单击拖拽的默认手感）。与 `g_pts` 一一对应，两个状态一起清。
+let g_hnd : Ref[Array[(Int, Int)]] = Ref([])
 /// 「换图」模式：非空 = 下一次文件选择要把这张图**原地换掉**（值是要换的层 id）。
 /// 复用同一个 `<input type=file>`：多一个输入框就多一条"选完文件不知道走哪条路"的路。
 let g_swap : Ref[String] = Ref("")
@@ -289,6 +294,33 @@ fn parse_double_safe(s : String) -> Double {
   }
   let v = int_part + frac_part
   if neg { -v } else if ok { v } else { 0.0 }
+}
+
+///|
+/// 容错读一个浮点（"12"、"-3.5" 都收；不是数就 None）。预览用：引擎的
+/// `fmt_num` 会给小数，而 `strict_int` 接不住它。
+fn strict_double_opt(s : String) -> Double? {
+  let t = s.trim(char_set=" \t").to_owned()
+  if t.length() == 0 {
+    return None
+  }
+  let mut dots = 0
+  let mut i = 0
+  for ch in t.iter() {
+    let c = ch.to_int()
+    let is_digit = c >= 48 && c <= 57
+    let is_sign = (c == 45 || c == 43) && i == 0
+    if ch == '.' {
+      dots = dots + 1
+    } else if !is_digit && !is_sign {
+      return None
+    }
+    i = i + 1
+  }
+  if dots > 1 {
+    return None
+  }
+  Some(parse_double_safe(t))
 }
 
 ///|
@@ -628,6 +660,7 @@ fn layers_html(layers : Array[Json], sel : String) -> String {
       "group" => "📁"
       "adjust" => "◐"
       "raster" => "🖌"
+      "path" => "✒"
       _ => "□"
     }
     sb.write_string("<div class='li")
@@ -1442,15 +1475,24 @@ fn shape_ready(kind : String, n : Int) -> Bool {
 /// 状态栏提示：还差几个点。**空集也要说话**（"已点 0 个点"不是废话，是人
 /// 唯一能确认工具真的切换了的反馈）。
 fn poly_hint(kind : String, n : Int) -> String {
-  let need = if kind == "line" { 2 } else { 3 }
+  let need = if kind == "line" || kind == "pen" { 2 } else { 3 }
   let what = if kind == "line" {
     "折线"
   } else if kind == "lasso" {
     "套索"
+  } else if kind == "pen" {
+    "钢笔"
   } else {
     "多边形"
   }
   let how = if kind == "lasso" { "圈定" } else { "结束" }
+  if kind == "pen" {
+    return if n == 0 {
+      "✒ 钢笔：点一下落一个锚点，**按住拖动**拉出控制柄（曲线）；点回第一个锚点闭合收口，双击/回车落定为开放路径，Esc 放弃"
+    } else {
+      "✒ 钢笔：已落 \{n} 个锚点 —— 接着点，或双击/回车落定（点回第一个锚点 = 闭合收口）"
+    }
+  }
   if n >= need {
     "✏️ \{what}：已点 \{n} 个点 —— 双击画布或按回车\{how}（点越多边越贴合）"
   } else {
@@ -1551,8 +1593,21 @@ fn do_shape_ready(kind : String, box : String) -> Unit {
 fn do_poly_click(xy : String) -> Unit {
   match xy2(xy) {
     Some((x, y)) => {
+      // 钢笔：点第一个锚点附近 = **闭合路径并落定**（PS 的手感），其余是加锚点
+      if point_tool() == "pen" && g_pts.val.length() >= 2 {
+        let first = g_pts.val[0]
+        let dx = x - first.0
+        let dy = y - first.1
+        if dx * dx + dy * dy <= 64 {
+          do_pen_finish(true)
+          return
+        }
+      }
       g_pts.val = poly_add(g_pts.val, x, y)
-      js_poly_preview(pts_str(g_pts.val))
+      if g_hnd.val.length() < g_pts.val.length() {
+        g_hnd.val = g_hnd.val + [(0, 0)]
+      }
+      pen_preview()
       js_status_bar(poly_hint(point_tool(), g_pts.val.length()))
     }
     None => js_status_bar("⚠ 画布坐标没读出来（\{xy}）")
@@ -1560,10 +1615,67 @@ fn do_poly_click(xy : String) -> Unit {
 }
 
 ///|
+/// 钢笔拖拽结束：把刚落的那个锚点的 out 控制柄设成拖拽位移（**同一个锚点**，
+/// 不新增点）。位移太小（<3px）当没拖——手抖不该给一个看不见的小弯。
+fn do_pen_handle(dxy : String) -> Unit {
+  match xy2(dxy) {
+    Some((dx, dy)) => {
+      if point_tool() != "pen" || g_pts.val.length() == 0 {
+        return
+      }
+      if dx * dx + dy * dy < 9 {
+        return
+      }
+      let n = g_hnd.val.length()
+      if n == 0 {
+        return
+      }
+      // 切片给的是 `ArrayView`，拼不回 `Array`：显式重建（锚点数很小）
+      let rebuilt : Array[(Int, Int)] = []
+      let mut k = 0
+      while k < n - 1 {
+        rebuilt.push(g_hnd.val[k])
+        k = k + 1
+      }
+      rebuilt.push((dx, dy))
+      g_hnd.val = rebuilt
+      pen_preview()
+      js_status_bar(poly_hint("pen", g_pts.val.length()))
+    }
+    None => ()
+  }
+}
+
+///|
+/// 钢笔预览：**采样交给引擎**（`path-preview` 是只读命令，采样规则只有
+/// `@core.path_samples` 一处）。前端不许再算一份——预览与落定不一致是人一眼
+/// 就能看到的错，而两份采样必然有一份先烂。
+fn pen_preview() -> Unit {
+  let pts = g_pts.val
+  if pts.length() == 0 {
+    js_poly_preview("")
+    return
+  }
+  let mut line = "path-preview points=" + pen_pts_local_str()
+  let hs = pen_handles_local_str()
+  if hs != "" {
+    line = line + " handles=" + hs
+  }
+  let r = eng(line)
+  if eng_ok(r) {
+    // 预览画在**画布坐标**里：引擎给的采样是盒内局部坐标，加回盒子原点
+    let (x0, y0) = pen_box_origin()
+    js_poly_preview(pen_samples_to_canvas(json_get_str(r, "points"), x0, y0))
+  } else {
+    ui_engine_error(r)
+  }
+}
+
+///|
 /// 点拾取类工具（逐点点击的那三种）**只有这一份清单**：折线/多边形逐点建层、
 /// **套索**逐点圈任意形状选区。三处判断（工具切换、落点提示、结束分叉）都读它。
 fn is_point_tool(name : String) -> Bool {
-  name == "line" || name == "poly" || name == "lasso"
+  name == "line" || name == "poly" || name == "lasso" || name == "pen"
 }
 
 ///|
@@ -1585,6 +1697,142 @@ fn current_shape_tool() -> String {
   } else {
     "poly"
   }
+}
+
+///|
+/// 钢笔画布的**盒子原点**：锚点与控制柄围出的紧包围盒（盒子跟着内容走——
+/// 引擎那边 `set-style handles=` 也重算盒子，两边同一把尺子）。
+fn pen_box_origin() -> (Int, Int) {
+  let pts = g_pts.val
+  let hs = g_hnd.val
+  if pts.length() == 0 {
+    return (0, 0)
+  }
+  let mut x0 = pts[0].0
+  let mut y0 = pts[0].1
+  let mut x1 = pts[0].0
+  let mut y1 = pts[0].1
+  let mut i = 0
+  while i < pts.length() {
+    let p = pts[i]
+    if p.0 < x0 { x0 = p.0 }
+    if p.1 < y0 { y0 = p.1 }
+    if p.0 > x1 { x1 = p.0 }
+    if p.1 > y1 { y1 = p.1 }
+    if i < hs.length() {
+      let h = hs[i]
+      // 控制柄的实际位置 = 锚点 + 偏移（in 侧是镜像）——盒子要把它们算进去，
+      // 因为曲线可能鼓到锚点之外
+      let cx = p.0 + h.0
+      let cy = p.1 + h.1
+      if cx < x0 { x0 = cx }
+      if cy < y0 { y0 = cy }
+      if cx > x1 { x1 = cx }
+      if cy > y1 { y1 = cy }
+      let ix = p.0 - h.0
+      let iy = p.1 - h.1
+      if ix < x0 { x0 = ix }
+      if iy < y0 { y0 = iy }
+      if ix > x1 { x1 = ix }
+      if iy > y1 { y1 = iy }
+    }
+    i = i + 1
+  }
+  let _ = x1
+  let _ = y1
+  (x0, y0)
+}
+
+///|
+/// 锚点的**盒内局部坐标**串（`x,y;…`）。
+fn pen_pts_local_str() -> String {
+  let (x0, y0) = pen_box_origin()
+  let sb = StringBuilder::new()
+  for i, p in g_pts.val {
+    if i > 0 {
+      sb.write_string(";")
+    }
+    sb.write_string("\{p.0 - x0},\{p.1 - y0}")
+  }
+  sb.to_string()
+}
+
+///|
+/// 控制柄串（每个锚点 in,out 两个偏移，in 是 out 的镜像）：`dx,dy;dx,dy;…`。
+/// 全 0（一个都没拖过）时回空串——引擎那边"不给 handles = 折线"。
+fn pen_handles_local_str() -> String {
+  let hs = g_hnd.val
+  if hs.length() == 0 {
+    return ""
+  }
+  let mut any = false
+  for h in hs {
+    if h.0 != 0 || h.1 != 0 {
+      any = true
+    }
+  }
+  if !any {
+    return ""
+  }
+  let sb = StringBuilder::new()
+  for i, h in hs {
+    if i > 0 {
+      sb.write_string(";")
+    }
+    // in = 镜像（负偏移），out = 原样：对称钢笔的手感
+    sb.write_string("\{-h.0},\{-h.1};\{h.0},\{h.1}")
+  }
+  sb.to_string()
+}
+
+///|
+/// 引擎给的采样点串（局部坐标）→ 画布坐标的点串（预览要画在画布上）。
+fn pen_samples_to_canvas(local : String, x0 : Int, y0 : Int) -> String {
+  let sb = StringBuilder::new()
+  let mut first = true
+  for seg in local.split(";") {
+    let xy : Array[String] = []
+    for p in seg.split(",") {
+      xy.push(p.to_owned())
+    }
+    if xy.length() != 2 {
+      continue
+    }
+    // 引擎给的是浮点（`fmt_num` 可能吐 "-12.5"）：走容错解析；读不出的段跳过
+    // （预览画不全也不该整块消失，落定后的形状由引擎说了算）
+    let fx = strict_double_opt(xy[0])
+    let fy = strict_double_opt(xy[1])
+    match (fx, fy) {
+      (Some(vx), Some(vy)) => {
+        if first {
+          first = false
+        } else {
+          sb.write_string(";")
+        }
+        sb.write_string("\{(vx + x0.to_double()).to_int()},\{(vy + y0.to_double()).to_int()}")
+      }
+      _ => ()
+    }
+  }
+  sb.to_string()
+}
+
+///|
+/// **钢笔画线**：锚点/控制柄/盒原点 → 一条 `add-path`（纯函数，测试直接喂）。
+/// `closed` = 点回第一个锚点（填色收口）。
+fn pen_path_line(closed : Bool, color : String, stroke_w : String) -> String {
+  let (x0, y0) = pen_box_origin()
+  let mut line = "add-path x=\{x0} y=\{y0} points=\{pen_pts_local_str()}"
+  let hs = pen_handles_local_str()
+  if hs != "" {
+    line = line + " handles=" + hs
+  }
+  if closed {
+    line = line + " fill=" + color
+  } else {
+    line = line + " fill=none"
+  }
+  line + " stroke=" + color + " stroke_w=" + stroke_w
 }
 
 ///|
@@ -1655,6 +1903,10 @@ fn do_poly_finish() -> Unit {
     do_lasso_finish()
     return
   }
+  if point_tool() == "pen" {
+    do_pen_finish(false)
+    return
+  }
   let kind = current_shape_tool()
   let pts = g_pts.val
   if !shape_ready(kind, pts.length()) {
@@ -1671,12 +1923,38 @@ fn do_poly_finish() -> Unit {
 }
 
 ///|
+/// **钢笔落定**：`closed=true` 时填色收口（点回第一个锚点那条路径）。
+/// 不够两个锚点就说还差几个（引擎那边同一条下界，这里只是提前说）。
+fn do_pen_finish(closed : Bool) -> Unit {
+  let pts = g_pts.val
+  if pts.length() < 2 {
+    js_status_bar(poly_hint("pen", pts.length()))
+    return
+  }
+  let color = js_state_get("color")
+  let c = if color == "" { "#FF3366FF" } else { color + "FF" }
+  let sw = js_state_get("size")
+  let line = pen_path_line(closed, c, if sw == "" { "2" } else { sw })
+  let n = pts.length()
+  g_pts.val = []
+  g_hnd.val = []
+  js_poly_preview("")
+  if do_ui_cmd_full(line) {
+    let shape = if closed { "闭合" } else { "开放" }
+    js_status_bar(
+      "✒ 钢笔：\{n} 个锚点的\{shape}路径已落定（控制柄靠点击时**拖动**拉出，拖出来的曲线就是它的形状）",
+    )
+  }
+}
+
+///|
 /// 放弃未闭合的点（Esc / 切换工具）。**要说一声**：点了一半切走工具，
 /// 画面什么都不动而人以为"画上去了"是最坏的一种。
 fn do_poly_cancel() -> Unit {
   let n = g_pts.val.length()
   if n > 0 {
     g_pts.val = []
+    g_hnd.val = []
     js_poly_preview("")
     js_status_bar("✏️ 已放弃 \{n} 个未闭合的点（折线/多边形/套索要双击或回车结束）")
   }
@@ -2293,6 +2571,7 @@ pub fn app_html() -> String {
       #|<div class='t' data-tool='line' title='折线（逐点点击；双击或回车结束）' onclick='globalThis.__tool("line")'>╱</div>
       #|<div class='t' data-tool='poly' title='多边形图层（逐点点击 ≥3 点；双击/回车闭合，Esc 放弃）' onclick='globalThis.__tool("poly")'>⬠</div>
       #|<div class='t' data-tool='lasso' title='任意形状选区（套索：逐点点击 ≥3 点圈出一块，只改这块；选区 = 该层的蒙版。双击/回车圈定，Esc 放弃）' onclick='globalThis.__tool("lasso")'>🪢</div>
+      #|<div class='t' data-tool='pen' title='钢笔/路径（逐点点击落锚点；**按住拖动**拉控制柄成曲线；点回第一个锚点闭合收口，双击/回车落定为开放路径，Esc 放弃）' onclick='globalThis.__tool("pen")'>✒</div>
       #|<div class='ts'></div>
       #|<div class='t' title='放大' onclick='globalThis.__zoom("1.25")'>🔍+</div>
       #|<div class='t' title='缩小' onclick='globalThis.__zoom("0.8")'>🔍−</div>
@@ -2510,6 +2789,7 @@ pub fn register_globals() -> Unit {
         "line" => poly_hint("line", 0)
         "poly" => poly_hint("poly", 0)
         "lasso" => poly_hint("lasso", 0)
+        "pen" => poly_hint("pen", 0)
         _ => "🖐 移动：图层面板选中后拖动"
       },
     )
@@ -2562,6 +2842,7 @@ pub fn register_globals() -> Unit {
   js_reg1("__img_swap", fn(id : String) { do_img_swap(id) })
   js_reg2s("__shape_ready", fn(kind : String, box : String) { do_shape_ready(kind, box) })
   js_reg1("__poly_click", fn(xy : String) { do_poly_click(xy) })
+  js_reg1("__pen_handle", fn(dxy : String) { do_pen_handle(dxy) })
   // 徽标：**启动序列的一部分**，但也要能单独调——clickthrough 的负控要"元数据
   // 缺失时"再跑一次看它是否明说（`import` 只有一次，重跑只能靠这个入口）。
   js_reg0("__build_badge", fn() -> @js_async.Promise[Unit] {

@@ -263,10 +263,12 @@ pub fn exec(s : Session, line : String) -> String {
     "set-canvas" => cmd_set_canvas(s, tokens)
     "list-layers" => cmd_list_layers(s)
     "query-layer" => cmd_query_layer(s, tokens)
+    "path-preview" => cmd_path_preview(s, tokens)
     "add-rect" => cmd_add_shape(s, tokens, @core.ShapeKind::Rect, "add-rect")
     "add-ellipse" => cmd_add_shape(s, tokens, @core.ShapeKind::Ellipse, "add-ellipse")
     "add-polygon" => cmd_add_shape(s, tokens, @core.ShapeKind::Polygon, "add-polygon")
     "add-line" => cmd_add_shape(s, tokens, @core.ShapeKind::Line, "add-line")
+    "add-path" => cmd_add_shape(s, tokens, @core.ShapeKind::Path, "add-path")
     "add-image" => cmd_add_image(s, tokens)
     "set-image" => cmd_set_image(s, tokens)
     "set-style" => cmd_set_style(s, tokens)
@@ -528,7 +530,9 @@ fn layer_summary(l : @core.Layer) -> String {
   // polygon/line 的顶点**就是它的形状**（w/h 只是外接框），此前既不报也没有
   // 任何命令能改——调用方建完折线就再也读不回自己给了哪些顶点。
   if l.points.length() > 0 {
-    if l.kind is @core.ShapeKind::Polygon || l.kind is @core.ShapeKind::Line {
+    if l.kind is @core.ShapeKind::Polygon ||
+      l.kind is @core.ShapeKind::Line ||
+      l.kind is @core.ShapeKind::Path {
       sb.write_string(",\"points\":[")
       let mut pf = true
       for p in l.points {
@@ -540,6 +544,29 @@ fn layer_summary(l : @core.Layer) -> String {
         sb.write_string(
           "[\{@core.fmt_num(p.0)},\{@core.fmt_num(p.1)}]",
         )
+      }
+      sb.write_string("]")
+    }
+    // 控制柄**条数 + 数值**都报：渲染器读它、也能改它（`set-style handles=`），
+    // 只报"有几个"会让"改成功了吗"问不回来（同 radius 那条：报字段名不报值的
+    // 断言会被满足而其实没在守护）。全 0 也报——"缺省 = 折线"必须有回读路径。
+    // 路径**闭不闭合**必须报出来：它是 `fill` 的派生事实（`NoFill` = 开放），
+    // 而"填没填"在报告面只以颜色形式存在（`sample`/`census`），问不出"这条路径
+    // 收口了没有"。渲染器读它、人侧两条路径（点回首锚闭合 vs 回车开放）也由它
+    // 区分——不报出来，调用方只能靠自己记住当时怎么收的尾。
+    if l.kind is @core.ShapeKind::Path {
+      sb.write_string(",\"closed\":\{@core.fill_closed(l.fill)}")
+    }
+    if l.kind is @core.ShapeKind::Path && l.handles.length() > 0 {
+      sb.write_string(",\"handles\":[")
+      let mut hf = true
+      for h in l.handles {
+        if hf {
+          hf = false
+        } else {
+          sb.write_string(",")
+        }
+        sb.write_string("[\{@core.fmt_num(h.0)},\{@core.fmt_num(h.1)}]")
       }
       sb.write_string("]")
     }
@@ -633,6 +660,7 @@ fn kind_str(k : @core.ShapeKind) -> String {
     @core.ShapeKind::Text => "text"
     @core.ShapeKind::Adjust => "adjust"
     @core.ShapeKind::Raster => "raster"
+    @core.ShapeKind::Path => "path"
   }
 }
 
@@ -667,6 +695,63 @@ fn cmd_list_layers(s : Session) -> String {
     sb.write_string(layer_summary(l))
   }
   sb.write_string("],\"fingerprint\":\"\{@core.fingerprint(doc)}\"}")
+  sb.to_string()
+}
+
+///|
+/// `path-preview points=… [handles=…] [closed=true|false]`——把锚点/控制柄**采样成
+/// 折线点串**回报给界面画预览。
+///
+/// 为什么要有这条只读命令：人侧钢笔在落定之前总得画点什么，而"预览怎么采样"如果
+/// 在 demo 里再实现一遍，就成了同一个形状有两份采样规则（`pick` 与渲染分叉那类
+/// bug 的翻版，且**预览与落定不一致**是人一眼就能看到的那种）。所以采样只在
+/// `@core.path_samples` 一处，界面照引擎给的折线画。
+fn cmd_path_preview(s : Session, tokens : Array[String]) -> String {
+  let _ = s
+  match check_kv_args(tokens, 1, ["points", "handles", "closed"], "path-preview") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }
+  let m = kv_args(tokens, 1)
+  let pts = match m.get("points") {
+    Some(v) =>
+      match parse_points(v) {
+        Ok(p) => p
+        Err(e) => return err(e)
+      }
+    None => return err("用法：path-preview points=x,y;x,y;… [handles=dx,dy;…] [closed=true|false]")
+  }
+  let hs = match m.get("handles") {
+    Some(v) =>
+      match parse_points(v) {
+        Ok(h) => h
+        Err(e) => return err(e)
+      }
+    None => []
+  }
+  let ce = @core.handles_count_error(pts.length(), hs.length())
+  if ce != "" {
+    return err(ce)
+  }
+  let closed = match m.get("closed") {
+    None => false
+    Some("true") | Some("1") => true
+    Some("false") | Some("0") => false
+    Some(other) => return err("closed 应为 true|false，got \{other}")
+  }
+  let samples = @core.path_samples(pts, hs, closed)
+  let sb = StringBuilder()
+  sb.write_string("{\"ok\":true,\"op\":\"path-preview\",\"count\":\{samples.length()},\"points\":\"")
+  let mut f = true
+  for p in samples {
+    if f {
+      f = false
+    } else {
+      sb.write_string(";")
+    }
+    sb.write_string("\{@core.fmt_num(p.0)},\{@core.fmt_num(p.1)}")
+  }
+  sb.write_string("\"}")
   sb.to_string()
 }
 
@@ -927,13 +1012,20 @@ fn add_shape_keys(kind : @core.ShapeKind) -> Array[String] {
   if kind is @core.ShapeKind::Polygon || kind is @core.ShapeKind::Line {
     ks.push("points")
   }
+  if kind is @core.ShapeKind::Path {
+    ks.push("points")
+    // 控制柄：`handles=dx,dy;…` 与锚点**一一对应**（每个锚 in/out 两个偏移）。
+    // 键表从 `kind_only_fields` 算不出来（那是"字段 vs kind"的表，这里还要多一个
+    // 语法层），所以与 `points` 并列手写在这唯一一处，字典描述也从它生成。
+    ks.push("handles")
+  }
   ks
 }
 
 ///|
 fn set_style_keys() -> Array[String] {
   [
-    "fill", "lgrad", "stroke", "stroke_w", "opacity", "blend", "radius", "points", "rot", "visible",
+    "fill", "lgrad", "stroke", "stroke_w", "opacity", "blend", "radius", "points", "handles", "rot", "visible",
     "name", "tag",
   ]
 }

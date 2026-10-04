@@ -43,6 +43,9 @@ pub const MVSL_IR_VERSION : Int = 1
 ///   * 4 = **仿制图章**（`Dab.clone` + 源偏移）：老引擎读不到这三个字段，会把
 ///         克隆笔触当成**普通笔色**画上去 ⇒ 整笔变成一块死色（而"污点被盖住了"
 ///         还很像成功了）。
+///   * 5 = **贝塞尔路径**（`ShapeKind.Path` + `Layer.handles`）：老引擎不认这个
+///         kind，要么整层不画（路径凭空消失），要么按盒子画成一个矩形——
+///         两种都是静默错渲。
 pub const RENDER_CONTRACT_ROUGHEN : Int = 2
 
 ///|
@@ -52,9 +55,12 @@ pub const RENDER_CONTRACT_POLY_MASK : Int = 3
 pub const RENDER_CONTRACT_CLONE : Int = 4
 
 ///|
+pub const RENDER_CONTRACT_PATH : Int = 5
+
+///|
 /// 引擎支持的**最高**档（读入端：`render_contract > 它` 一律拒绝打开，
 /// 见 `mpd/mpd.mbt`）。
-pub const RENDER_CONTRACT_VERSION : Int = 4
+pub const RENDER_CONTRACT_VERSION : Int = 5
 
 ///|
 /// 选择子算法版本（kernel/window/环距约定都属于算法的一部分）。
