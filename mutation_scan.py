@@ -2490,6 +2490,15 @@ MUTS = [
         "killed",
     ),
     (
+        "R116",
+        "caps 漏报 blend（面板据此不画混合控件：人类侧改不动混合模式）",
+        "agent/ops.mbt",
+        """    ("blend", "blend"),
+    ("rotate", "rotation_deg"),""",
+        """    ("rotate", "rotation_deg"),""",
+        "killed",
+    ),
+    (
         "R115",
         "色阶层算不出 LUT（渲染时当成没有参数：整层什么都不做）",
         "render/scene.mbt",

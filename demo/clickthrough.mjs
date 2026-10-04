@@ -653,6 +653,28 @@ check(
     a6.curve_sample[4][1] === 0.75,
   `levels=${JSON.stringify(a3.levels)}→gamma ${a4.levels && a4.levels.gamma}｜points=${a5.points}→${a6.points}｜采样=${a6.curve_sample && a6.curve_sample.length} 中点=${a6.curve_sample && a6.curve_sample[4] && a6.curve_sample[4][1]}｜状态栏=${status()}`,
 );
+// ⑪b 混合模式（人侧下拉）：改成 multiply → 引擎回读；**有面层才有这个控件**，
+// 调整层没有面 ⇒ 面板画只读回显（`caps` 里没有 blend），DOM 里不该有下拉
+const blendLayer = layers().find((l) => l.kind === 'rect') || layers()[0];
+const capsBefore = layer(blendLayer.id).caps || [];
+await globalThis.__blend(blendLayer.id, 'multiply');
+const blendAfter = layer(blendLayer.id).blend;
+await globalThis.__blend(blendLayer.id, 'normal');
+const blendBack = layer(blendLayer.id).blend;
+// 有面的层选中时**面板里得有这个下拉**；调整层（没有面、caps 里没 blend）
+// 选中时**不该有**——正反两头都咬（只查"下拉能改"会漏掉"给不该有的层画控件"）
+await globalThis.__sel(blendLayer.id);
+const propsRect = String(globalThis.document.getElementById('pprops').innerHTML || '');
+await globalThis.__sel('adj1');
+const propsAdj = String(globalThis.document.getElementById('pprops').innerHTML || '');
+check(
+  '混合模式：人侧下拉改得动（引擎回读为准）；有面层有下拉、调整层只有只读回显',
+  capsBefore.includes('blend') && blendAfter === 'multiply' && blendBack === 'normal' &&
+    !(layer('adj1').caps || []).includes('blend') &&
+    propsRect.includes("__blend(\"") && propsRect.includes("<select") &&
+    !propsAdj.includes("__blend(\"") && propsAdj.includes('不参与合成模式'),
+  `caps=${capsBefore.join(',')} → ${blendAfter} → ${blendBack}｜adjust caps=${(layer('adj1').caps || []).join(',')}｜rect 有下拉=${propsRect.includes('__blend(')} adjust 有下拉=${propsAdj.includes('__blend(')}`,
+);
 check(
   '调整层：value 改得动、op 改得动（原地改而不是删了重加）；一键滤镜真的建出层',
   a1.value === 0.3 && a2.op === 'blur' && nAfter === nBefore + 1 &&
@@ -1112,7 +1134,7 @@ check(
 // ⑯ 覆盖清单（机器对账用，格式由 `build_demo.sh#html-wiring` 解析）：
 // driver 走不到的处理器必须在这儿**写明原因**，否则"没覆盖"会静默变成"覆盖了"。
 /* coverage:begin
-driven: __selfcheck __dbg_lint __dbg_edits __dbg_census __dbg_probe __dbg_help __dbg_tools __dbg_schema __dbg_preview __mvsl_set __mvsl_show __mvsl_impact __mvsl_assert __mvsl_clear __param_list __param_set __param_del __cmd __build_badge __save __export __run __sel __vis __front __back __setx __sety __setw __seth __move_delta __rotate __flip __op __del __undo __redo __rename __tag_add __tag_del __reparent __ungroup_sel __text_at __text_add __text_set __text_font __mask_ready __mask_invert __mask_clear __adj_op __adj_val __adj_key __af __stroke __new __set_canvas __crop_ready __crop_apply __crop_cancel __zoom __refresh __stats __optip __toggle_ai __tool __poly_click __poly_finish __poly_cancel __shape_ready __group_sel __pick_at __clone_src __goto __pen_handle __bool_op
+driven: __selfcheck __dbg_lint __dbg_edits __dbg_census __dbg_probe __dbg_help __dbg_tools __dbg_schema __dbg_preview __mvsl_set __mvsl_show __mvsl_impact __mvsl_assert __mvsl_clear __param_list __param_set __param_del __cmd __build_badge __save __export __run __sel __vis __front __back __setx __sety __setw __seth __move_delta __rotate __flip __op __del __undo __redo __rename __tag_add __tag_del __reparent __ungroup_sel __text_at __text_add __text_set __text_font __mask_ready __mask_invert __mask_clear __adj_op __adj_val __adj_key __blend __af __stroke __new __set_canvas __crop_ready __crop_apply __crop_cancel __zoom __refresh __stats __optip __toggle_ai __tool __poly_click __poly_finish __poly_cancel __shape_ready __group_sel __pick_at __clone_src __goto __pen_handle __bool_op
 browser-only: __drop=拒绝路径已被 driver 走过（没字节时明说）；成功路径要真的 File+Image 解码，壳里造一个等于把"读文件"假装测了; __file_sel=同上（driver 走的是"没选到文件"那条）; __mpd_sel=要真的 .mpd 文件字节，壳里没有 FileReader; __img_swap=换图必须先有一张真图进来
 coverage:end */
 

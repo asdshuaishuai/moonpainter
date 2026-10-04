@@ -212,6 +212,47 @@ test "属性面板：文字层给内容+字号，调整层给算子+数值（各
   assert_true(has_sub(ha, "不参与渲染"), msg="少画控件必须说明理由：\{ha}")
   // α 对所有 kind 都是能力（调整层：软强度 = 蒙版覆盖度 × α，PLAN 五十三）
   assert_true(has_sub(ha, "globalThis.__op(\"a1\""), msg="调整层的 α 是真的（算子生效多少）：\{ha}")
+  // 混合模式：**有面的层**画下拉（选项七种、当前值选中），没有 blend 能力的层
+  // 只画只读回显 + 理由（两头都咬：只查"有下拉"会漏掉"给不该有的层画控件"）
+  let hb = props_html(
+    parse_json_safe(
+      "{\"id\":\"b1\",\"name\":\"底色\",\"kind\":\"rect\",\"blend\":\"multiply\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"caps\":[\"move\",\"resize\",\"opacity\",\"blend\",\"rotate\",\"flip\",\"mask\"]}",
+    ),
+    roots,
+    "",
+    "",
+  )
+  assert_true(has_sub(hb, "globalThis.__blend(\"b1\",this.value)"), msg="有面层要有混合下拉：\{hb}")
+  assert_true(has_sub(hb, "<select"), msg="混合控件是个下拉：\{hb}")
+  for m in ["normal", "multiply", "screen", "overlay", "darken", "lighten", "difference"] {
+    assert_true(has_sub(hb, "value='" + m + "'"), msg="下拉缺选项 \{m}：\{hb}")
+  }
+  // 当前值要**选中**（`multiply` 是引擎报的当前值）——静默选中 normal 就是把
+  // "这层其实是 multiply"显示成 normal，那是最坏的一种谎
+  assert_true(has_sub(hb, "value='multiply' selected"), msg="当前混合模式要选中：\{hb}")
+  assert_true(lacks_sub(ha, "__blend(\"a1\""), msg="调整层没有面，不该有混合下拉：\{ha}")
+  assert_true(has_sub(ha, "不参与合成模式"), msg="少画下拉要说清理由：\{ha}")
+  let hg = props_html(
+    parse_json_safe(
+      "{\"id\":\"g1\",\"name\":\"组一\",\"kind\":\"group\",\"blend\":\"normal\",\"children\":[],\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"caps\":[\"move\",\"opacity\",\"rotate\",\"flip\",\"children\"]}",
+    ),
+    roots,
+    "",
+    "",
+  )
+  assert_true(lacks_sub(hg, "__blend(\"g1\""), msg="组直通合成、不读 blend，不该有下拉：\{hg}")
+  // 引擎报的值不在本页七种里（前端/引擎版本不匹配）⇒ 也要**显示**出来并标注，
+  // 不许静默回落到 normal
+  let hx = props_html(
+    parse_json_safe(
+      "{\"id\":\"x1\",\"name\":\"怪模式\",\"kind\":\"rect\",\"blend\":\"hueish\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"caps\":[\"move\",\"opacity\",\"blend\"]}",
+    ),
+    roots,
+    "",
+    "",
+  )
+  assert_true(has_sub(hx, "value='hueish' selected"), msg="引擎报的怪值必须照实显示并选中：\{hx}")
+  assert_true(has_sub(hx, "不在本页认识的名字里"), msg="怪值要标注出来（静默显示 normal 是谎）：\{hx}")
 }
 
 ///|

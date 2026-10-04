@@ -1383,6 +1383,10 @@ pub fn layer_caps(l : @core.Layer) -> Array[String] {
   // 见 `render.apply_adjust_layer`；此前 α 在 (0,1) 上**静默无效**，见 PLAN 五十三）
   caps.push("opacity")
   for p in [
+    // `blend` 紧跟 `opacity`（两者都是"这一层怎么叠到下面那张合成上"：
+    // 混合模式也是**合成属性**，读点矩阵里只有**有面的层**读它——组/文本/
+    // 笔触/调整层上写它是死数据，入口拒、lint 兜、面板据此画只读回显）
+    ("blend", "blend"),
     ("rotate", "rotation_deg"),
     ("flip", "flip_h"),
     ("mask", "mask"),

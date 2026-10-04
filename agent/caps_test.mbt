@@ -72,10 +72,12 @@ test "caps：逐 kind 的完整能力表（人类面板据此画控件）" {
   let _ = run(s, "add-adjust id=a1 op=brightness value=0.5")
   let _ = run(s, "add-image id=i1 x=200 y=10 w=40 h=20 b64=" + PNG_B64)
   // 有面的层：这几条都在（矩形的圆角、位图的资产另算）；
-  // `opacity` **所有 kind 都报**（调整层的 α 是"算子生效多少"，见 PLAN 五十三）
+  // `opacity` **所有 kind 都报**（调整层的 α 是"算子生效多少"，见 PLAN 五十三）；
+  // `blend` 只报给**有面的层**（读点矩阵：组/文本/笔触/调整层上写 blend 是
+  // 死数据 ⇒ 入口拒、`lint` 兜、人类面板画只读回显）
   for id in ["r1", "e1", "g1", "l1"] {
     assert_true(
-      caps_str(s, id) == "move,resize,opacity,rotate,flip,mask",
+      caps_str(s, id) == "move,resize,opacity,blend,rotate,flip,mask",
       msg="\{id} 的能力表：\{caps_str(s, id)}",
     )
   }
@@ -104,7 +106,7 @@ test "caps：逐 kind 的完整能力表（人类面板据此画控件）" {
   assert_true(caps_str(s, "a1") == "opacity,mask,adjust", msg="调整层：\{caps_str(s, "a1")}")
   // 位图：换图是一条能力（`set-image`）
   assert_true(
-    caps_str(s, "i1") == "move,resize,opacity,rotate,flip,mask,asset",
+    caps_str(s, "i1") == "move,resize,opacity,blend,rotate,flip,mask,asset",
     msg="位图的能力表：\{caps_str(s, "i1")}",
   )
   // 正控的反面：`list-layers` 也报同一张表（两处报同一件事，别只报一条路）
@@ -190,10 +192,15 @@ test "caps 与渲染器对照：说有必须有画面变化，说没有必须逐
     ("rotate", "rotate t 30"),
     ("flip", "flip t h"),
     ("opacity", "set-style t opacity=0.3"),
+    // `multiply` 压在**白底**上是恒等变换（PLAN 五十一那课已经把 blend 判成过
+    // "全都不读"），所以下面每条探针都垫一层灰底——判据的白底就是"探针退化"。
+    ("blend", "set-style t blend=multiply"),
   ]
   for p in probes {
     let label = p.0
-    let mk = p.1
+    // 垫一层灰底：见上面 `blend` 那条（白底上 multiply 恒等）
+    let mk : Array[String] = ["add-rect id=bgc x=0 y=0 w=320 h=240 fill=#808080FF"]
+    mk.append(p.1)
     let s = scene("caps-diff")
     for line in mk {
       let _ = run(s, line)

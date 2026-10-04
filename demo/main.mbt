@@ -895,6 +895,43 @@ fn txt_input(ph : String, val : String, handler : String, id : String) -> String
 }
 
 ///|
+/// 七种混合模式（`core.BlendMode` 的**人话顺序**：normal 打头 = 缺省）。
+/// 前端这张表是为 `<select>` 的选项服务的；它**不是**"哪个 kind 支持混合"的
+/// 判据——那个由引擎的 `caps` 说了算（见 `props_html` 里的 `can("blend")`）。
+fn blend_modes() -> Array[String] {
+  ["normal", "multiply", "screen", "overlay", "darken", "lighten", "difference"]
+}
+
+///|
+/// 混合模式下拉：`cur` 是引擎报的当前值（`query-layer` 的 `blend`）。
+/// 它在选项里就选中它；不在（理论上不该发生——引擎报的必是这七个之一，可
+/// 前端与引擎版本不匹配时什么都可能）就**额外插一个**并标出来：静默选中
+/// "normal" 会把"这层其实是 multiply"显示成 normal，那是最坏的一种谎。
+fn blend_select(cur : String, id : String) -> String {
+  let modes = blend_modes()
+  let sb = StringBuilder()
+  sb.write_string("<span class='pk'>混合</span><select class='psel' onchange='globalThis.__blend(\"")
+  sb.write_string(html_attr(id))
+  sb.write_string("\",this.value)'>")
+  if !modes.contains(cur) {
+    sb.write_string("<option value='" + html_attr(cur) + "' selected>")
+    sb.write_string(html_attr(cur))
+    sb.write_string("（引擎报的，不在本页认识的名字里）</option>")
+  }
+  for m in modes {
+    sb.write_string("<option value='" + m + "'")
+    if m == cur {
+      sb.write_string(" selected")
+    }
+    sb.write_string(">")
+    sb.write_string(m)
+    sb.write_string("</option>")
+  }
+  sb.write_string("</select>")
+  sb.to_string()
+}
+
+///|
 /// 在 `list-layers` 的嵌套树里找某层的**父组 id**：根级层 → `Some("")`，
 /// 找不到 → `None`。`query-layer` 不报父级，而"加入/移出组"必须知道它现在挂在
 /// 谁身上——属性面板的「父级」选择器要用这个（人类侧唯一能回读层级的路径）。
@@ -1136,6 +1173,16 @@ fn props_html(
       sb.write_string(
         "<span class='pk'>W/H</span><span class='pv' title='这个 kind 的 w/h 不参与渲染（文本按字号画、笔触的窗口是画布尺寸、组画的是子层、调整层作用于其下合成）：改它画面不会变，盒子与墨不符时 lint 会报'>" +
         html_attr(gw) + "×" + html_attr(gh) + "（不参与渲染，故不可改）</span>",
+      )
+    }
+    if can("blend") {
+      // 混合模式是**合成属性**（同 opacity），读点矩阵里只有**有面的层**读它；
+      // 画不画问 caps，别在这里抄一份 kind 名单（PLAN 五十一）。
+      sb.write_string(blend_select(gbl, gid))
+    } else {
+      sb.write_string(
+        "<span class='pk'>混合</span><span class='pv' title='这个 kind 不读 blend（它的合成不走混合模式：组直通、文本/笔触/调整层没有自己的面）：写了是死数据，入口会拒'>" +
+        html_attr(gbl) + "（不参与合成模式）</span>",
       )
     }
     if can("rotate") {
@@ -2272,6 +2319,18 @@ fn do_adj_key(id : String, key : String, v : String) -> Unit {
 }
 
 ///|
+/// 改混合模式（人侧下拉）。**只改这一格**（`set-style <id> blend=`）——
+/// 与 AI 侧 `set_style` 是同一命令面；模式名走白名单（值来自 HTML 的
+/// `<option value=...>`，与键名同理：DOM 里写的不能当可信输入）。
+fn do_blend(id : String, mode : String) -> Unit {
+  if !blend_modes().contains(mode) {
+    js_status_bar("⚠ 不认识的混合模式：\{mode}")
+    return
+  }
+  let _ = do_ui_cmd("set-style " + id + " blend=" + mode)
+}
+
+///|
 /// 打标签：这是人类把"哪几层是一组"告诉 AI 的通道——MVSL 的
 /// `layer=@<标签>` 按标签选层，标签本身不影响渲染。
 fn do_tag_add(id : String, t : String) -> Unit {
@@ -2666,6 +2725,7 @@ fn inject_css() -> Unit {
     #|.pact button:hover{background:#3a3a5e;color:#dde}
     #|.osl{display:flex;align-items:center;gap:6px;margin-top:6px;font-size:11px}
     #|.curve{background:#0d1020;border:1px solid #2a2a44;border-radius:4px;margin-top:4px}
+    #|.psel{background:#1a1a32;color:#cde;border:1px solid #2a2a4e;border-radius:4px;font-size:11px;padding:2px 4px}
     #|.osl input{flex:1;accent-color:#3d63ff}
     #|.topbar .badge{margin-left:auto;color:#7f9;font-size:11px;padding:2px 8px;border:1px solid #2c3a4e;border-radius:10px;white-space:nowrap;user-select:text;cursor:help}
     #|.dbg{display:flex;flex-direction:column;gap:6px;padding:6px 8px 14px}
@@ -3063,6 +3123,7 @@ pub fn register_globals() -> Unit {
   js_reg2s("__text_set", fn(id : String, v : String) { do_text_set(id, v) })
   js_reg2s("__text_font", fn(id : String, v : String) { do_text_font(id, v) })
   js_reg2s("__adj_op", fn(id : String, v : String) { do_adj_op(id, v) })
+  js_reg2s("__blend", fn(id : String, v : String) { do_blend(id, v) })
   js_reg3s("__adj_key", fn(id : String, k : String, v : String) { do_adj_key(id, k, v) })
   js_reg2s("__adj_val", fn(id : String, v : String) { do_adj(id, "value", v) })
   js_reg2s("__tag_add", fn(id : String, v : String) { do_tag_add(id, v) })
