@@ -46,6 +46,8 @@ pub const MVSL_IR_VERSION : Int = 1
 ///   * 5 = **贝塞尔路径**（`ShapeKind.Path` + `Layer.handles`）：老引擎不认这个
 ///         kind，要么整层不画（路径凭空消失），要么按盒子画成一个矩形——
 ///         两种都是静默错渲。
+///   * 6 = **色阶/曲线**（调整层的 `levels`/`curve` 参数）：老引擎读不出这两个
+///         字段，整层被丢掉或按空操作施加 ⇒ 静默错渲。
 pub const RENDER_CONTRACT_ROUGHEN : Int = 2
 
 ///|
@@ -58,9 +60,16 @@ pub const RENDER_CONTRACT_CLONE : Int = 4
 pub const RENDER_CONTRACT_PATH : Int = 5
 
 ///|
+/// 6 = **色阶/曲线**（`Adjust.op = Levels/Curves` + `Adjust.levels/curve`）：
+///     老引擎的 `adjust_of` 读不出这两个字段 —— 要么把整层丢掉（作用范围
+///     凭空少一层），要么按 `value=0` 施加一个空操作 ⇒ 画面与"我调过色阶了"
+///     对不上，而回包一切正常。
+pub const RENDER_CONTRACT_ADJUST_PARAMS : Int = 6
+
+///|
 /// 引擎支持的**最高**档（读入端：`render_contract > 它` 一律拒绝打开，
 /// 见 `mpd/mpd.mbt`）。
-pub const RENDER_CONTRACT_VERSION : Int = 5
+pub const RENDER_CONTRACT_VERSION : Int = 6
 
 ///|
 /// 选择子算法版本（kernel/window/环距约定都属于算法的一部分）。

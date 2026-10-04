@@ -831,6 +831,63 @@ fn num_input(label : String, val : String, handler : String, id : String) -> Str
 }
 
 ///|
+/// 曲线的**预览**：只画引擎 `query-layer` 报出来的 `curve_sample`（9 个采样点），
+/// 前端**不自己插值**——自己插出来的线一旦与渲染不一致，"预览骗人"比没有预览更坏
+/// （渲染走的是 `@render.curve_map`，那是同一张表的另一个出口）。
+/// 坐标换算：x 0..1 从左到右、y 0..1 从下到上（屏幕 y 要取反）。
+fn curve_svg(adj : Json) -> String {
+  let pts : Array[(Double, Double)] = match json_get(adj, "curve_sample") {
+    Some(Json::Array(a)) =>
+      a.map(fn(p) {
+        match p {
+          Json::Array(xy) =>
+            if xy.length() >= 2 {
+              match (xy[0], xy[1]) {
+                (Json::Number(x, ..), Json::Number(y, ..)) => (x, y)
+                _ => (0.0, 0.0)
+              }
+            } else {
+              (0.0, 0.0)
+            }
+          _ => (0.0, 0.0)
+        }
+      })
+    _ => []
+  }
+  if pts.length() < 2 {
+    return ""
+  }
+  let sb = StringBuilder()
+  sb.write_string(
+    "<svg class='curve' width='132' height='96' viewBox='0 0 120 90' title='曲线预览：引擎采样的 9 点折线'>",
+  )
+  sb.write_string("<line x1='0' y1='90' x2='120' y2='0' stroke='#3a3f47' stroke-dasharray='3,3'/>")
+  sb.write_string("<polyline fill='none' stroke='#5ec8ff' stroke-width='2' points='")
+  for p in pts {
+    sb.write_string("\{d2s(p.0 * 120.0)},\{d2s((1.0 - p.1) * 90.0)} ")
+  }
+  sb.write_string("'/></svg>")
+  sb.to_string()
+}
+
+///|
+/// 带**键名**的数值输入框：`handler(id, key, value)`。色阶的五个格子共用它——
+/// 五格各写一遍 HTML 就是"加第六个参数时漏改一格"的温床。
+fn num_input_key(label : String, val : String, handler : String, id : String, key : String) -> String {
+  "<span class='pk'>" + label + "</span><input class='pnum' type='number' value='" +
+  html_attr(val) + "' onchange='globalThis." + handler + "(\"" + id + "\",\"" + key +
+  "\",this.value)'/>"
+}
+
+///|
+/// 带**键名**的文本输入框（曲线的点表：`points=x,y;x,y;…`）。
+fn txt_input_key(ph : String, val : String, handler : String, id : String, key : String) -> String {
+  "<input class='pin' value='" + html_attr(val) + "' placeholder='" + html_attr(ph) +
+  "' onchange='globalThis." + handler + "(\"" + id + "\",\"" + key +
+  "\",this.value)'/>"
+}
+
+///|
 /// 文本输入框（层名/文字内容/算子/标签）。`val` 为空时显示占位提示。
 fn txt_input(ph : String, val : String, handler : String, id : String) -> String {
   "<input class='pin' value='" + html_attr(val) + "' placeholder='" + html_attr(ph) +
@@ -1119,7 +1176,40 @@ fn props_html(
   if can("adjust") {
     sb.write_string("<div class='pedit'>")
     sb.write_string(txt_input("算子", adj_op, "__adj_op", gid))
-    sb.write_string(num_input("数值", adj_val, "__adj_val", gid))
+    // **编辑器由引擎报出来的参数面决定**（`adjust.levels` / `adjust.points` 在不在），
+    // 前端**不抄算子名单**：抄一份就必然有一处先烂（哪一种算子吃哪些参数只有
+    // core 的判据说了算）。
+    let adj_obj = match json_get(l, "adjust") {
+      Some(a) => a
+      None => parse_json_safe("null")
+    }
+    match json_get(adj_obj, "levels") {
+      Some(lvv) => {
+        // 色阶五格：输入黑白点 / gamma / 输出黑白点
+        for pair in [
+          ("输入黑", "in_lo"),
+          ("输入白", "in_hi"),
+          ("gamma", "gamma"),
+          ("输出黑", "out_lo"),
+          ("输出白", "out_hi"),
+        ] {
+          sb.write_string(
+            num_input_key(pair.0, json_num_str(lvv, pair.1), "__adj_key", gid, pair.1),
+          )
+        }
+      }
+      None =>
+        match json_get(adj_obj, "points") {
+          Some(pv) => {
+            // 曲线：点表文本（**可原样回灌**：query-layer 报的就是 set-adjust 收的形态）
+            sb.write_string(
+              txt_input_key("x,y;x,y;…", json_get_str(adj_obj, "points"), "__adj_key", gid, "points"),
+            )
+            sb.write_string(curve_svg(adj_obj))
+          }
+          None => sb.write_string(num_input("数值", adj_val, "__adj_val", gid))
+        }
+    }
     sb.write_string("</div>")
   }
   sb.write_string("<div class='pedit'>")
@@ -2153,6 +2243,35 @@ fn do_adj(id : String, which : String, v : String) -> Unit {
 }
 
 ///|
+/// 换算子（人侧）。色阶/曲线**没有 value**，而引擎拒绝"换成 levels 却一个参数都
+/// 不给"（那是一个什么都不干的层）。人侧的折中是：换过去时**显式**铺一套中性值
+/// （0/1/1/0/1 与 `0,0;1,1`）——它们是看得见、改得动的数字，而不是偷偷给一个
+/// "好看"的默认效果（一键美化不在这个产品里）；`lint` 会把中性层报成"白装"，
+/// 提醒人拖一格。
+fn do_adj_op(id : String, op : String) -> Unit {
+  let neutral = if op == "levels" {
+    " in_lo=0 in_hi=1 gamma=1 out_lo=0 out_hi=1"
+  } else if op == "curves" {
+    " points=0,0;1,1"
+  } else {
+    ""
+  }
+  let _ = do_ui_cmd("set-adjust " + id + " op=" + op + neutral)
+}
+
+///|
+/// 改调整层的**任意一个参数**（色阶五格 / 曲线点表 / value 共用这一条）。
+/// 键名白名单在**入口一处**拒（键名是从 HTML 属性拼进命令行的，多一个空格
+/// 就能塞进第二个参数——不能指望 DOM 里写的都对）。
+fn do_adj_key(id : String, key : String, v : String) -> Unit {
+  if !["in_lo", "in_hi", "gamma", "out_lo", "out_hi", "points", "value"].contains(key) {
+    js_status_bar("⚠ 不认识的调整参数：\{key}")
+    return
+  }
+  let _ = do_ui_cmd("set-adjust " + id + " " + key + "=" + v)
+}
+
+///|
 /// 打标签：这是人类把"哪几层是一组"告诉 AI 的通道——MVSL 的
 /// `layer=@<标签>` 按标签选层，标签本身不影响渲染。
 fn do_tag_add(id : String, t : String) -> Unit {
@@ -2546,6 +2665,7 @@ fn inject_css() -> Unit {
     #|.pact button{flex:1;background:#2a2a4e;color:#89a;border:0;border-radius:4px;padding:4px;font-size:11px;cursor:pointer}
     #|.pact button:hover{background:#3a3a5e;color:#dde}
     #|.osl{display:flex;align-items:center;gap:6px;margin-top:6px;font-size:11px}
+    #|.curve{background:#0d1020;border:1px solid #2a2a44;border-radius:4px;margin-top:4px}
     #|.osl input{flex:1;accent-color:#3d63ff}
     #|.topbar .badge{margin-left:auto;color:#7f9;font-size:11px;padding:2px 8px;border:1px solid #2c3a4e;border-radius:10px;white-space:nowrap;user-select:text;cursor:help}
     #|.dbg{display:flex;flex-direction:column;gap:6px;padding:6px 8px 14px}
@@ -2942,7 +3062,8 @@ pub fn register_globals() -> Unit {
   js_reg2s("__flip", fn(id : String, axis : String) { do_flip(id, axis) })
   js_reg2s("__text_set", fn(id : String, v : String) { do_text_set(id, v) })
   js_reg2s("__text_font", fn(id : String, v : String) { do_text_font(id, v) })
-  js_reg2s("__adj_op", fn(id : String, v : String) { do_adj(id, "op", v) })
+  js_reg2s("__adj_op", fn(id : String, v : String) { do_adj_op(id, v) })
+  js_reg3s("__adj_key", fn(id : String, k : String, v : String) { do_adj_key(id, k, v) })
   js_reg2s("__adj_val", fn(id : String, v : String) { do_adj(id, "value", v) })
   js_reg2s("__tag_add", fn(id : String, v : String) { do_tag_add(id, v) })
   js_reg2s("__tag_del", fn(id : String, v : String) { do_tag_del(id, v) })

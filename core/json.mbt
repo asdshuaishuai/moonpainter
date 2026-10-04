@@ -523,12 +523,54 @@ fn mask_json(m : LayerMask?) -> String {
 }
 
 ///|
+///|
+/// 色阶参数的写出端：字段名与读入端（`adjust_of`）逐字对应。
+fn levels_json(lv : Levels) -> String {
+  let sb = StringBuilder()
+  sb.write_string("{\"in_lo\":\{fmt_num(lv.in_lo)},\"in_hi\":\{fmt_num(lv.in_hi)}")
+  sb.write_string(",\"gamma\":\{fmt_num(lv.gamma)}")
+  sb.write_string(",\"out_lo\":\{fmt_num(lv.out_lo)},\"out_hi\":\{fmt_num(lv.out_hi)}}")
+  sb.to_string()
+}
+
+///|
+/// 曲线的点表：`[[x,y],…]`。**空表不写字段**（缺省 = 没有曲线）——于是老文档
+/// 的字节流一个字节都不变（canonical 往返的前提）。
+fn curve_json(pts : Array[(Double, Double)]) -> String {
+  let sb = StringBuilder()
+  sb.write_string("[")
+  let mut i = 0
+  for p in pts {
+    if i > 0 {
+      sb.write_string(",")
+    }
+    sb.write_string("[\{fmt_num(p.0)},\{fmt_num(p.1)}]")
+    i = i + 1
+  }
+  sb.write_string("]")
+  sb.to_string()
+}
+
 fn adjust_json(a : Adjust?) -> String {
   match a {
     None => "null"
     Some(adj) => {
       let op = adjust_op_name(adj.op)
-      "{\"op\":\"\{op}\",\"value\":\{fmt_num(adj.value)}}"
+      let sb = StringBuilder()
+      sb.write_string("{\"op\":\"\{op}\",\"value\":\{fmt_num(adj.value)}")
+      match adj.levels {
+        Some(lv) => {
+          sb.write_string(",\"levels\":")
+          sb.write_string(levels_json(lv))
+        }
+        None => ()
+      }
+      if adj.curve.length() > 0 {
+        sb.write_string(",\"curve\":")
+        sb.write_string(curve_json(adj.curve))
+      }
+      sb.write_string("}")
+      sb.to_string()
     }
   }
 }
@@ -891,21 +933,106 @@ fn num_f(v : JValue, key : String) -> Double {
 }
 
 ///|
-fn adjust_of(v : JValue) -> Adjust? {
-  match v.get("adjust") {
-    Some(av) =>
-      match str_field(av, "op") {
-        Some(op) => {
-          let value = num_f(av, "value")
-          // 逆映射走 core 的**单一实现**（此前这里与 agent 各手写 11 条臂）
-          match adjust_op_from_name(op) {
-            Some(o) => Some({ op: o, value })
-            None => None
-          }
+///|
+/// 读调整层参数（**失败得响**：不认识的算子、缺参数、参数越界都在这里报，
+/// 而不是把整块 `adjust` 悄悄丢掉——丢掉会让"我调过色阶"与画面不一致，
+/// 而回包一切正常）。
+///
+/// 三处与老版本不同，都是刻意的：
+/// ①未知算子名 ⇒ `Err`（老引擎遇到本引擎新加的 `levels` 会在这里报"不认"，
+///   配合 `required_render_contract` 的 6 档 ⇒ 拒绝打开而不是静默不施加）；
+/// ②`levels`/`curve` 字段存在时必须**完整**（少一个数就报，不是按 0 收下）；
+/// ③参数组合经 `adjust_param_error`（与命令入口**同一句话**）。
+fn adjust_of(v : JValue) -> Result[Adjust?, String] {
+  let raw = match v.get("adjust") {
+    Some(av) => av
+    None => return Ok(None)
+  }
+  if raw is JNull {
+    return Ok(None)
+  }
+  let opname = match str_field(raw, "op") {
+    Some(o) => o
+    None =>
+      return Err("调整层缺 op（可选：" + all_adjust_ops().map(adjust_op_name).join(" ") + "）")
+  }
+  let op = match adjust_op_from_name(opname) {
+    Some(o) => o
+    None =>
+      return Err(
+        "调整算子未知：\{opname}（本引擎认的是：" +
+        all_adjust_ops().map(adjust_op_name).join(" ") +
+        "；这一层是别的版本写的 ⇒ 拒绝打开，别静默丢掉它的作用）",
+      )
+  }
+  let value = num_f(raw, "value")
+  // 色阶：字段在就必须 5 个数都在
+  let levels = match raw.get("levels") {
+    Some(lv) =>
+      if lv is JNull {
+        None
+      } else {
+        let in_lo = match num_of(lv, "in_lo") {
+          Ok(x) => x
+          Err(e) => return Err("色阶参数不完整：\{e}")
         }
-        _ => None
+        let in_hi = match num_of(lv, "in_hi") {
+          Ok(x) => x
+          Err(e) => return Err("色阶参数不完整：\{e}")
+        }
+        let gamma = match num_of(lv, "gamma") {
+          Ok(x) => x
+          Err(e) => return Err("色阶参数不完整：\{e}")
+        }
+        let out_lo = match num_of(lv, "out_lo") {
+          Ok(x) => x
+          Err(e) => return Err("色阶参数不完整：\{e}")
+        }
+        let out_hi = match num_of(lv, "out_hi") {
+          Ok(x) => x
+          Err(e) => return Err("色阶参数不完整：\{e}")
+        }
+        Some({ in_lo, in_hi, gamma, out_lo, out_hi })
       }
     None => None
+  }
+  // 曲线：字段在就必须是 [[x,y],…] 且每项都在 0..1
+  let curve : Array[(Double, Double)] = []
+  match raw.get("curve") {
+    Some(cv) =>
+      match cv {
+        JArr(items) => {
+          let mut i = 0
+          for it in items {
+            match it {
+              JArr(pair) => {
+                if pair.length() != 2 {
+                  return Err("曲线的第 \{i + 1} 个点不是 [x,y]（收到 \{pair.length()} 个数）")
+                }
+                let x = match pair[0] {
+                  JNum(d) => d
+                  _ => return Err("曲线的第 \{i + 1} 个点的 x 不是数字")
+                }
+                let y = match pair[1] {
+                  JNum(d) => d
+                  _ => return Err("曲线的第 \{i + 1} 个点的 y 不是数字")
+                }
+                curve.push((x, y))
+              }
+              _ => return Err("曲线的第 \{i + 1} 个点不是 [x,y]")
+            }
+            i = i + 1
+          }
+        }
+        JNull => ()
+        _ => return Err("curve 必须是 [[x,y],…] 的点表")
+      }
+    None => ()
+  }
+  let adj : Adjust = { op, value, levels, curve }
+  match adjust_param_error(adj) {
+    Some(e) => Err(e)
+    None => Ok(Some(adj))
   }
 }
 
@@ -965,7 +1092,10 @@ fn layer_of(v : JValue) -> Result[Layer, String] {
     Ok(m) => m
     Err(e) => return Err(e)
   }
-  let adjust = adjust_of(v)
+  let adjust = match adjust_of(v) {
+    Ok(a) => a
+    Err(e) => return Err(e)
+  }
   let fill = match v.get("fill") {
     Some(f) => fill_of(f)
     None => return Err("缺 fill")

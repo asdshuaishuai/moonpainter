@@ -32,7 +32,7 @@ fn adjust_layer(op : @core.AdjustOp, value : Double) -> @core.Layer {
   {
     ..@core.default_layer("a1", "a1", 0.0, 0.0, 16.0, 16.0),
     kind: @core.ShapeKind::Adjust,
-    adjust: Some(@core.Adjust::{ op: op, value: value }),
+    adjust: Some(@core.make_adjust(op, value)),
   }
 }
 
@@ -86,7 +86,7 @@ test "调整层蒙版：没有蒙版时逐位等于原来的整幅算子（既�
     want.pixels[i] = base_color
     i = i + 1
   }
-  apply_adjust(Some(@core.Adjust::{ op: @core.AdjustOp::Invert, value: 1.0 }), want)
+  apply_adjust(Some(@core.make_adjust(@core.AdjustOp::Invert, 1.0)), want)
   let mut k = 0
   while k < 256 {
     assert_eq(got.pixels[k], want.pixels[k], msg="无蒙版路径第 \{k} 像素变了")
@@ -257,7 +257,7 @@ test "调整层蒙版：邻域算子（blur）逐像素 == lerp(原像素, 整�
     blur_only.pixels[i] = base_img.pixels[i]
     i = i + 1
   }
-  apply_adjust(Some(@core.Adjust::{ op: @core.AdjustOp::Blur, value: 1.0 }), blur_only)
+  apply_adjust(Some(@core.make_adjust(@core.AdjustOp::Blur, 1.0)), blur_only)
   // 白线被模糊"抹开"了 ⇒ 期望值与原图像确有差异（否则这条断言是空的）
   let mut spread = 0
   let mut j = 0

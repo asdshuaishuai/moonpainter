@@ -171,6 +171,40 @@ test "属性面板：文字层给内容+字号，调整层给算子+数值（各
   assert_true(has_sub(ha, "value='brightness'"), msg=ha)
   assert_true(has_sub(ha, "value='0.25'"), msg=ha)
   assert_true(lacks_sub(ha, "__text_set"), msg=ha)
+  // 数值类算子画的是**单个数值框**：色阶的五个格子一个都不许出现（编辑器由引擎
+  // 报出来的参数面决定，前端不抄算子名单）
+  assert_true(lacks_sub(ha, "__adj_key"), msg="亮度层不该有色阶/曲线控件：\{ha}")
+  // 色阶层：五格各自带**自己的键名**（漏一格 = 那个参数在人侧改不动）
+  let hl = props_html(
+    parse_json_safe(
+      "{\"id\":\"a2\",\"name\":\"色阶\",\"kind\":\"adjust\",\"adjust\":{\"op\":\"levels\",\"value\":0,\"levels\":{\"in_lo\":0.1,\"in_hi\":0.9,\"gamma\":1.2,\"out_lo\":0,\"out_hi\":1}},\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"opacity\",\"mask\",\"adjust\"]}",
+    ),
+    roots,
+    "",
+    "",
+  )
+  for k in ["in_lo", "in_hi", "gamma", "out_lo", "out_hi"] {
+    assert_true(
+      has_sub(hl, "globalThis.__adj_key(\"a2\",\"" + k + "\",this.value)"),
+      msg="色阶缺 \{k} 那一格：\{hl}",
+    )
+  }
+  assert_true(has_sub(hl, "value='1.2'"), msg="色阶要把当前值填进格子：\{hl}")
+  assert_true(lacks_sub(hl, "__adj_val"), msg="色阶层不该画单个数值框：\{hl}")
+  // 曲线层：点表文本框（**可原样回灌**）+ 引擎采样的预览折线
+  let hc = props_html(
+    parse_json_safe(
+      "{\"id\":\"a3\",\"name\":\"曲线\",\"kind\":\"adjust\",\"adjust\":{\"op\":\"curves\",\"value\":0,\"points\":\"0,0;0.5,0.75;1,1\",\"curve_sample\":[[0,0],[0.5,0.75],[1,1]]},\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"opacity\",\"mask\",\"adjust\"]}",
+    ),
+    roots,
+    "",
+    "",
+  )
+  assert_true(has_sub(hc, "globalThis.__adj_key(\"a3\",\"points\",this.value)"), msg=hc)
+  assert_true(has_sub(hc, "value='0,0;0.5,0.75;1,1'"), msg="点表要填进文本框：\{hc}")
+  assert_true(has_sub(hc, "<polyline"), msg="曲线要有预览折线：\{hc}")
+  assert_true(has_sub(hc, "60,22.5"), msg="预览点要按引擎采样换成屏幕坐标（0.5⇒x=60、0.75⇒y=(1-0.75)*90=22.5）：\{hc}")
+  assert_true(lacks_sub(hc, "__adj_val"), msg="曲线层不该画单个数值框：\{hc}")
   // 调整层作用于**其下的合成**，它的 x/y 与盒子都不读（实测 move/resize
   // 回 ok、指纹变、画面逐位不变）⇒ X/Y 与 W/H 都不该是输入框，而要印出理由
   assert_true(lacks_sub(ha, "__setx"), msg="调整层不该有 X 输入框：\{ha}")

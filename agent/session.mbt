@@ -492,6 +492,40 @@ fn cmd_set_canvas(s : Session, tokens : Array[String]) -> String {
 }
 
 ///|
+/// 调整参数的报告片段（**一处实现**：层报告与 `add-adjust`/`set-adjust` 的回显
+/// 共用它）。色阶报 5 个数、曲线报**可回灌的点表文本** + 引擎采样出来的预览点。
+///
+/// 曲线的预览点必须由**引擎**算（`@render.curve_sample` 与渲染共用 `curve_map`）：
+/// 前端自己插值就会画出一条与画面不符的线，"预览骗人"比没有预览更坏。
+/// 数值一律 `fmt_num` —— 回灌文本要与 `parse_pairs` 读得进来的一致。
+fn adjust_json(adj : @core.Adjust) -> String {
+  let sb = StringBuilder()
+  sb.write_string("{\"op\":\"\{@core.adjust_op_name(adj.op)}\",\"value\":\{@core.fmt_num(adj.value)}")
+  match adj.levels {
+    Some(lv) =>
+      sb.write_string(
+        ",\"levels\":{\"in_lo\":\{@core.fmt_num(lv.in_lo)},\"in_hi\":\{@core.fmt_num(lv.in_hi)},\"gamma\":\{@core.fmt_num(lv.gamma)},\"out_lo\":\{@core.fmt_num(lv.out_lo)},\"out_hi\":\{@core.fmt_num(lv.out_hi)}}",
+      )
+    None => ()
+  }
+  if adj.curve.length() > 0 {
+    sb.write_string(",\"points\":\"\{@core.curve_points_text(adj.curve)}\"")
+    sb.write_string(",\"curve_sample\":[")
+    let mut first = true
+    for p in @render.curve_sample(adj.curve, 9) {
+      if first {
+        first = false
+      } else {
+        sb.write_string(",")
+      }
+      sb.write_string("[\{@core.fmt_num(p.0)},\{@core.fmt_num(p.1)}]")
+    }
+    sb.write_string("]")
+  }
+  sb.write_string("}")
+  sb.to_string()
+}
+
 fn layer_summary(l : @core.Layer) -> String {
   let sb = StringBuilder()
   sb.write_string("{\"id\":\"\{l.id}\",\"name\":\"\{@core.json_escape(l.name)}\"")
@@ -619,10 +653,10 @@ fn layer_summary(l : @core.Layer) -> String {
   // 调整层在 list/query 里长得一模一样，调用方无法回读"我装的是哪个算子、
   // 调了多少"。（与 radius/flip 同一条：能设不能读。）
   match l.adjust {
-    Some(adj) =>
-      sb.write_string(
-        ",\"adjust\":{\"op\":\"\{@core.adjust_op_name(adj.op)}\",\"value\":\{@core.fmt_num(adj.value)}}",
-      )
+    Some(adj) => {
+      sb.write_string(",\"adjust\":")
+      sb.write_string(adjust_json(adj))
+    }
     None => ()
   }
   match l.mask {
@@ -961,8 +995,28 @@ fn add_text_keys() -> Array[String] {
 ///|
 /// `add-adjust` 认的全部键（与 `cmd_add_adjust` 的校验一一对应）。
 /// 工具字典的描述从它生成——**别再手写第二份**。
-fn add_adjust_keys() -> Array[String] {
-  ["op", "value", "id", "name"]
+pub fn add_adjust_keys() -> Array[String] {
+  ["op", "value", "in_lo", "in_hi", "gamma", "out_lo", "out_hi", "points", "id", "name"]
+}
+
+///|
+/// `set-adjust` 认的全部键：与 `add-adjust` 同，**除了 `id=`/`name=`**
+/// （它是原地改，不建层，给这两个键没有意义）。
+///
+/// ⚠️ 这里**故意写成字面量**、不写成 `add_adjust_keys().filter(…)`：
+/// `param_audit.py` 是从 `check_kv_args` 的第三个实参读键表的，读不出字面量
+/// 就判失败（静默跳过 = 这门禁有洞）。字面量带来的漂移风险由一条测试堵住
+/// （`adjust_params_test.mbt` 断言两份清单只差 id/name）——"一处实现"的替代
+/// 不是"再抄一份没人管"，而是"两份 + 一条会红的等式"。
+pub fn set_adjust_keys() -> Array[String] {
+  ["op", "value", "in_lo", "in_hi", "gamma", "out_lo", "out_hi", "points"]
+}
+
+///|
+/// 色阶的 5 个键（`add-adjust`/`set-adjust` 共用的**唯一清单**：解析器的
+/// 缺省填充、字典用法串、`set-adjust` 的部分更新都从这里出）。
+fn level_keys() -> Array[String] {
+  ["in_lo", "in_hi", "gamma", "out_lo", "out_hi"]
 }
 
 ///|
@@ -1233,16 +1287,17 @@ fn cmd_flip(s : Session, tokens : Array[String]) -> String {
 /// 后果是 `add-adjust op=invert value=0.5` 回 ok 而 0.5 被静默丢掉；
 /// `value=99` 也被收下（brightness 会 clamp 成纯白，而 `value=1.0` 像素
 /// 完全一样、指纹不同——两张"不同"的文档渲染逐位相同，没有任何信号）。
-fn adjust_spec(op : @core.AdjustOp) -> (Bool, Double, Double) {
+///|
+/// `value` 的取值范围（**只对"读 value"的算子有意义**——读不读由 core 的
+/// `adjust_uses_value` 一处说了算，别在这里再判一遍）。
+fn adjust_bounds(op : @core.AdjustOp) -> (Double, Double) {
   match op {
-    @core.AdjustOp::Invert => (false, 0.0, 0.0)
-    @core.AdjustOp::Grayscale => (false, 0.0, 0.0)
-    @core.AdjustOp::Blur => (true, 0.0, 1.0)
-    @core.AdjustOp::Sharpen => (true, 0.0, 1.0)
-    @core.AdjustOp::Smooth => (true, 0.0, 1.0)
-    @core.AdjustOp::Whiten => (true, 0.0, 1.0)
-    @core.AdjustOp::Vignette => (true, 0.0, 1.0)
-    _ => (true, -1.0, 1.0)
+    @core.AdjustOp::Blur => (0.0, 1.0)
+    @core.AdjustOp::Sharpen => (0.0, 1.0)
+    @core.AdjustOp::Smooth => (0.0, 1.0)
+    @core.AdjustOp::Whiten => (0.0, 1.0)
+    @core.AdjustOp::Vignette => (0.0, 1.0)
+    _ => (-1.0, 1.0)
   }
 }
 
@@ -1251,11 +1306,17 @@ fn adjust_spec(op : @core.AdjustOp) -> (Bool, Double, Double) {
 /// 带上取值范围，让调用方一眼看出该给多少。
 fn adjust_op_list() -> String {
   @core.all_adjust_ops().map(fn(o) {
-    let (has, lo, hi) = adjust_spec(o)
     let name = @core.adjust_op_name(o)
-    if has {
+    if @core.adjust_uses_value(o) {
+      let (lo, hi) = adjust_bounds(o)
       "\{name}=[\{@core.fmt_num(lo)}..\{@core.fmt_num(hi)}]"
+    } else if o is @core.AdjustOp::Levels {
+      // 参数面从**键清单**生成（`level_keys`），范围写在解析处一处
+      "levels(" + level_keys().map(fn(k) { "\{k}=0..1" }).join(" ") + ")"
+    } else if o is @core.AdjustOp::Curves {
+      "curves(points=x,y;x,y;…；x/y ∈ 0..1、x 严格递增、2..32 点)"
     } else {
+      // 老口径：没有可调数值的算子要**明说**（LLM 才不会给它塞 value=）
       "\{name}（无数值）"
     }
   }).join(" ")
@@ -1278,6 +1339,56 @@ pub fn adjust_op_doc() -> String {
 /// ②`value` 越界（`value=99` 只被 clamp，画面与 `value=1.0` 逐位相同）；
 /// ③给"没有可调数值"的算子（invert/grayscale）传 `value=`——渲染器不读它，
 /// 回包却是 ok，调用方分不出"改成功了"与"参数被丢了"。
+///|
+/// 色阶的一个键：给了就解析（**给了但不是数要报**），没给用中性值。
+/// 缺省填充写在这里一处——命令面、`set-adjust` 的部分更新都读它。
+fn level_arg(m : Map[String, String], key : String, dflt : Double) -> Result[Double, String] {
+  match m.get(key) {
+    Some(t) =>
+      match to_d(t) {
+        Some(v) => Ok(v)
+        None => Err("\{key}=\{t} 不是数字")
+      }
+    None => Ok(dflt)
+  }
+}
+
+///|
+/// **参数字族互斥**的判据：色阶五键只对 `op=levels` 有意义、`points=` 只对
+/// `op=curves` 有意义，其余算子给了就拒（"收了也会被丢掉"的那种静默失败）。
+///
+/// 句子**从 core 借**（`adjust_param_error`）：命令面看的是"给没给这个键"，
+/// 容器读入端看的是"结构里有没有这个字段"，两者说的是同一件事，话就该是同一句。
+fn foreign_param_error(m : Map[String, String], op : @core.AdjustOp) -> String? {
+  let base = @core.make_adjust(op, 0.0)
+  // op=levels 时它自己那族是合法的：构造候选时得把色阶填上，否则 core 会先报
+  // "需要 5 个色阶参数"（那句话在问的是缺项，不是互斥）
+  let cand = if op is @core.AdjustOp::Levels {
+    { ..base, levels: Some(@core.levels_identity()) }
+  } else {
+    base
+  }
+  let mut has_lv = false
+  for k in level_keys() {
+    if m.get(k) is Some(_) {
+      has_lv = true
+    }
+  }
+  if has_lv {
+    match @core.adjust_param_error({ ..cand, levels: Some(@core.levels_identity()) }) {
+      Some(e) => return Some(e)
+      None => ()
+    }
+  }
+  if m.get("points") is Some(_) {
+    match @core.adjust_param_error({ ..cand, curve: [(0.0, 0.0), (1.0, 1.0)] }) {
+      Some(e) => return Some(e)
+      None => ()
+    }
+  }
+  None
+}
+
 fn parse_adjust(m : Map[String, String]) -> Result[@core.Adjust, String] {
   let opname = match m.get("op") {
     Some(v) => v
@@ -1287,19 +1398,91 @@ fn parse_adjust(m : Map[String, String]) -> Result[@core.Adjust, String] {
     Some(o) => o
     None => return Err("未知调整算子 \{opname}（可选：" + adjust_op_list() + "）")
   }
-  let (has_value, lo, hi) = adjust_spec(op)
-  let raw = m.get("value")
-  if !has_value {
-    match raw {
+  // ①用不上的参数一律拒（"收了也会被丢掉"的那种静默失败）
+  let uses_value = @core.adjust_uses_value(op)
+  let raw_value = m.get("value")
+  if !uses_value {
+    match raw_value {
       Some(_) =>
         return Err(
           "算子 \{opname} 不接受 value=（它没有可调数值，渲染器不读 value；给了也会被丢掉，所以入口直接拒绝）",
         )
       None => ()
     }
-    return Ok({ op, value: 0.0 })
   }
-  let text = match raw {
+  // ①'参数字族互斥：色阶五键 / points= 各归各的算子（句子从 core 借）
+  match foreign_param_error(m, op) {
+    Some(e) => return Err(e)
+    None => ()
+  }
+  // ②色阶 / 曲线：各自的参数面
+  // ⚠️ 顺序即语义：这两族**没有 value**，先拦"不给 value 就直接建层"的那条
+  // 快路（实测把 `!uses_value` 的提前返回放在这两族之前，`op=levels` 会拿着
+  // 五个参数一路走到快路里、回 ok、建出一个**没有任何参数**的中性层：容器里
+  // 只剩 op+value，画面逐位不变，而 lint 报"需要 5 个色阶参数"）。
+  if op is @core.AdjustOp::Levels {
+    let ident = @core.levels_identity()
+    let mut given = 0
+    for k in level_keys() {
+      if m.get(k) is Some(_) {
+        given = given + 1
+      }
+    }
+    let in_lo = match level_arg(m, "in_lo", ident.in_lo) {
+      Ok(v) => v
+      Err(e) => return Err(e)
+    }
+    let in_hi = match level_arg(m, "in_hi", ident.in_hi) {
+      Ok(v) => v
+      Err(e) => return Err(e)
+    }
+    let gamma = match level_arg(m, "gamma", ident.gamma) {
+      Ok(v) => v
+      Err(e) => return Err(e)
+    }
+    let out_lo = match level_arg(m, "out_lo", ident.out_lo) {
+      Ok(v) => v
+      Err(e) => return Err(e)
+    }
+    let out_hi = match level_arg(m, "out_hi", ident.out_hi) {
+      Ok(v) => v
+      Err(e) => return Err(e)
+    }
+    if given == 0 {
+      return Err(
+        "算子 levels 至少要给一个色阶参数（" + level_keys().map(fn(k) { "\{k}=" }).join("") +
+        "）——一个都不给就是一个什么都不干的层（中性值 0/1/1/0/1）",
+      )
+    }
+    let lv : @core.Levels = { in_lo, in_hi, gamma, out_lo, out_hi }
+    match @core.levels_error(lv) {
+      Some(e) => return Err(e)
+      None => ()
+    }
+    return Ok({ ..@core.make_adjust(op, 0.0), levels: Some(lv) })
+  }
+  if op is @core.AdjustOp::Curves {
+    let text = match m.get("points") {
+      Some(v) => v
+      None => return Err("算子 curves 需要 points=x,y;x,y;…（x/y ∈ 0..1、x 严格递增、2..32 点）")
+    }
+    let pts = match parse_pairs(text, "曲线的控制点", "点") {
+      Ok(p) => p
+      Err(e) => return Err(e)
+    }
+    match @core.curve_error(pts) {
+      Some(e) => return Err(e)
+      None => ()
+    }
+    return Ok({ ..@core.make_adjust(op, 0.0), curve: pts })
+  }
+  // 无值算子（invert/grayscale）：到这儿就结束（下面是"必须给 value"的路径）
+  if !uses_value {
+    return Ok(@core.make_adjust(op, 0.0))
+  }
+  // ③数值类算子（原来的口径不变：必须给，且要在范围内）
+  let (lo, hi) = adjust_bounds(op)
+  let text = match raw_value {
     Some(v) => v
     None =>
       return Err(
@@ -1315,9 +1498,8 @@ fn parse_adjust(m : Map[String, String]) -> Result[@core.Adjust, String] {
       "value=\{text} 超出 \{opname} 的范围 [\{@core.fmt_num(lo)}..\{@core.fmt_num(hi)}]",
     )
   }
-  Ok({ op, value })
+  Ok(@core.make_adjust(op, value))
 }
-
 ///|
 /// 文本层的**占位盒**（ASCII 点阵字形）：宽 = 6/7 字宽 × 字数，高 = 字号。
 ///
@@ -1522,7 +1704,9 @@ fn cmd_add_adjust(s : Session, tokens : Array[String]) -> String {
   let l2 = { ..l, kind: @core.ShapeKind::Adjust, fill: @core.Fill::NoFill, adjust: Some(adj) }
   snapshot(s, doc, "add adjust \{id}")
   doc.layers.push(l2)
-  "{\"ok\":true,\"op\":\"add-adjust\",\"id\":\"\{id}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+  "{\"ok\":true,\"op\":\"add-adjust\",\"id\":\"\{id}\",\"adjust\":" +
+  adjust_json(adj) +
+  ",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
 }
 
 ///|
@@ -1553,30 +1737,89 @@ fn cmd_set_adjust(s : Session, tokens : Array[String]) -> String {
   }
   // 先查键：`set-adjust l2 vallue=1` 拼错时 kv_args 给出空表，此前会报
   // "至少要给 op= 或 value="——那句错话在"拼错了"时是**误导**。
-  match check_kv_args(tokens, 2, ["op", "value"], "set-adjust") {
+  match check_kv_args(tokens, 2, set_adjust_keys(), "set-adjust") {
     Ok(_) => ()
     Err(e) => return err(e)
   }
   let m = kv_args(tokens, 2)
   if m.length() == 0 {
-    return err("set-adjust 至少要给 op= 或 value=（都没给就什么都没改）")
+    return err(
+      "set-adjust 至少要给一个参数（op= / value= / 色阶五键 / points=——都没给就什么都没改）",
+    )
   }
   // 只给了 value 就沿用原算子（反之亦然）。注意：**新算子没有可调数值时不能
   // 凭空塞 value=**（老写法无条件塞 `cur.value`），否则 `set-adjust l1 op=invert`
   // 会被自己的拒绝规则打回——而用户根本没给 value。
+  //
+  // 色阶的**部分更新**在这里做（给 in_lo=0.1 就只改它，其余沿用当前值）：
+  // "把 gamma 再抬一点"是最常用的动作，逼调用方把 5 个数都抄一遍才是坑。
+  // 曲线反过来：**整表替换**（点表没有"第 3 个点的 y"这种身份，逐点合并没有意义）。
+  // **合并规则只有一句话：m 里的键原样赢，缺的按"当前层"补默认。**
+  // ⚠️ 此前只搬了 op/value，`set-adjust cv points=…` 于是把新点表丢在 m 里没搬
+  // 进 merged ⇒ `query-layer` 回读还是旧点表（命令回 ok，画面一点没变）。
   let merged : Map[String, String] = Map([])
   let opname = m.get("op").unwrap_or(@core.adjust_op_name(cur.op))
   merged.set("op", opname)
-  match m.get("value") {
-    Some(v) => merged.set("value", v)
-    None =>
-      match @core.adjust_op_from_name(opname) {
-        Some(o) =>
-          if (adjust_spec(o)).0 {
-            merged.set("value", @core.fmt_num(cur.value))
-          }
+  for k in add_adjust_keys() {
+    if k != "id" && k != "name" {
+      match m.get(k) {
+        Some(v) => merged.set(k, v)
         None => ()
       }
+    }
+  }
+  let target_op = @core.adjust_op_from_name(opname)
+  // 数值类算子：只给 op 时沿用原 value
+  if !merged.contains("value") {
+    match target_op {
+      Some(o) =>
+        if @core.adjust_uses_value(o) {
+          merged.set("value", @core.fmt_num(cur.value))
+        }
+      None => ()
+    }
+  }
+  // 色阶：沿用当前 5 个数（不是色阶层就用中性值），m 里给了的已经覆盖在上一步
+  if target_op is Some(@core.AdjustOp::Levels) {
+    let base = if cur.op is @core.AdjustOp::Levels {
+      match cur.levels {
+        Some(lv) => lv
+        None => @core.levels_identity()
+      }
+    } else {
+      @core.levels_identity()
+    }
+    let keys = level_keys()
+    let vals = [base.in_lo, base.in_hi, base.gamma, base.out_lo, base.out_hi]
+    let mut i = 0
+    for k in keys {
+      if !merged.contains(k) {
+        merged.set(k, @core.fmt_num(vals[i]))
+      }
+      i = i + 1
+    }
+    // 换算子到 levels 又一个色阶参数都不给 ⇒ 中性（什么都不干）⇒ 拒绝
+    if !(cur.op is @core.AdjustOp::Levels) {
+      let mut touched = false
+      for k in keys {
+        if m.get(k) is Some(_) {
+          touched = true
+        }
+      }
+      if !touched {
+        return err(
+          "set-adjust 把算子换成 levels 时至少要给一个色阶参数（" +
+          keys.map(fn(k) { "\{k}=" }).join("") + "）",
+        )
+      }
+    }
+  }
+  // 曲线：不给 points 且本来就是曲线层 ⇒ 沿用当前点表；换算子到 curves 又不给
+  // 点表就由 parse_adjust 报"需要 points="（整表替换：点表没有逐点身份）
+  if target_op is Some(@core.AdjustOp::Curves) &&
+    !merged.contains("points") &&
+    cur.op is @core.AdjustOp::Curves {
+    merged.set("points", @core.curve_points_text(cur.curve))
   }
   let adj = match parse_adjust(merged) {
     Ok(a) => a
@@ -1584,7 +1827,9 @@ fn cmd_set_adjust(s : Session, tokens : Array[String]) -> String {
   }
   snapshot(s, doc, "set-adjust \{id}")
   let _ = update_layer(doc.layers, id, fn(l) { { ..l, adjust: Some(adj) } })
-  "{\"ok\":true,\"op\":\"set-adjust\",\"id\":\"\{id}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+  "{\"ok\":true,\"op\":\"set-adjust\",\"id\":\"\{id}\",\"adjust\":" +
+  adjust_json(adj) +
+  ",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
 }
 
 ///|

@@ -59,3 +59,44 @@ test "正控：默认臂那一族（add-rect 等）走的是同一个 cmd 变量
   // 工具数不为空（否则第一条测试是在空集上巡逻）
   assert_true(paint_tool_defs().length() >= 50, msg="工具面不该只剩这么几个")
 }
+
+///|
+test "调整层两条工具行：参数键表**一处**，没给的键一个都不许拼（尤其 value）" {
+  // 此前 `apply_filter` 无条件拼 `value=0.5`：`op=levels` 会被引擎拒
+  // （"不接受 value="）——而模型并不知道自己多发了一个键。曲线同理。
+  assert_eq(
+    tool_line("apply_filter", parse_json_safe("{\"op\":\"levels\"}")),
+    "add-adjust op=levels",
+    msg="没给任何参数时不许凭空塞 value=",
+  )
+  assert_eq(
+    tool_line("apply_filter", parse_json_safe("{\"op\":\"levels\",\"gamma\":2,\"in_lo\":0.2}")),
+    "add-adjust op=levels in_lo=0.2 gamma=2",
+    msg="给了的键按键表顺序原样拼",
+  )
+  assert_eq(
+    tool_line(
+      "apply_filter",
+      parse_json_safe("{\"op\":\"curves\",\"points\":\"0,0;0.5,0.75;1,1\"}"),
+    ),
+    "add-adjust op=curves points=0,0;0.5,0.75;1,1",
+    msg="曲线的点表要原样发过去（分号/逗号都是引擎的语法）",
+  )
+  // 数值类算子的老路径不许被这次改动弄坏
+  assert_eq(
+    tool_line("apply_filter", parse_json_safe("{\"op\":\"blur\",\"value\":0.4}")),
+    "add-adjust op=blur value=0.4",
+    msg="数值类算子照旧",
+  )
+  // set_adjust：只给 gamma 就只发 gamma（其余由引擎沿用当前值）
+  assert_eq(
+    tool_line("set_adjust", parse_json_safe("{\"id\":\"a1\",\"gamma\":1.4}")),
+    "set-adjust a1 gamma=1.4",
+    msg="色阶只改一格时不许把别的键也发过去",
+  )
+  assert_eq(
+    tool_line("set_adjust", parse_json_safe("{\"id\":\"a1\",\"op\":\"levels\",\"value\":0.5}")),
+    "set-adjust a1 op=levels value=0.5",
+    msg="两族混发是引擎的事（它会拒），工具行只负责原样转达",
+  )
+}

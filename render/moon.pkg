@@ -8,6 +8,9 @@ import {
   "moonpainter/core",
   "moonpainter/codec",
   "moonpainter/pixel",
+  // 色阶的 gamma 要真实幂函数（`Double::pow` 已弃用，用标准库的 `@math.pow`；
+  // 自写级数在这个量级上没有好处，而标准库是纯 MoonBit、两个 target 都支持）
+  "moonbitlang/core/math",
 }
 
 import {

@@ -272,7 +272,7 @@ test "lint 兜住调整层的三种「装了不干活」（命令面拦两种，
   doc.layers.push({
     ..dl,
     kind: @core.ShapeKind::Adjust,
-    adjust: Some({ op: @core.AdjustOp::Brightness, value: 99.0 }),
+    adjust: Some(@core.make_adjust(@core.AdjustOp::Brightness, 99.0)),
   })
   let text = (@agent.lint_doc(doc)).join(" | ")
   assert_true(text.contains("超出"), msg="手改的越界值要报：\{text}")
@@ -282,7 +282,7 @@ test "lint 兜住调整层的三种「装了不干活」（命令面拦两种，
   doc2.layers.push({
     ..dl2,
     kind: @core.ShapeKind::Adjust,
-    adjust: Some({ op: @core.AdjustOp::Invert, value: 0.5 }),
+    adjust: Some(@core.make_adjust(@core.AdjustOp::Invert, 0.5)),
   })
   let text2 = (@agent.lint_doc(doc2)).join(" | ")
   assert_true(text2.contains("不接受数值"), msg="手改的用不上的 value 要报：\{text2}")

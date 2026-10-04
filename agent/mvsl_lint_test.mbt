@@ -318,7 +318,7 @@ test "lint：变换/混合/蒙版的读点矩阵（表里每一格都要报，�
       ..b,
       id: "a1",
       kind: @core.ShapeKind::Adjust,
-      adjust: Some(@core.Adjust::{ op: @core.AdjustOp::Invert, value: 1.0 }),
+      adjust: Some(@core.make_adjust(@core.AdjustOp::Invert, 1.0)),
       // `rot`/`flip_h`/`flip_v` 三格的**唯一**非读方：其它 kind 全都补上了
       // （几何/位图一直读、组与笔触 PLAN 五十六/六十、文本 PLAN 六十一）
       rotation_deg: 45.0,
@@ -435,7 +435,7 @@ test "lint：变换/混合/蒙版的读点矩阵（表里每一格都要报，�
     ..b,
     id: "a2",
     kind: @core.ShapeKind::Adjust,
-    adjust: Some(@core.Adjust::{ op: @core.AdjustOp::Invert, value: 1.0 }),
+    adjust: Some(@core.make_adjust(@core.AdjustOp::Invert, 1.0)),
     mask: Some(probe_mask),
   })
   let okj = @agent.lint_doc(ok).join(" | ")
@@ -610,7 +610,7 @@ test "lint：8 个 kind 专属字段逐格覆盖 —— 错的 kind 上带着死
     // 基准层是 rect，而圆角对 rect 是**合法**的——只有这一格要换 kind
     (fn(l : @core.Layer) { { ..l, kind: @core.ShapeKind::Ellipse, corner_radius: 7.0 } }, "radius=7"),
     (fn(l : @core.Layer) { { ..l, points: [(0.0, 0.0), (1.0, 1.0)] } }, "2 个顶点"),
-    (fn(l : @core.Layer) { { ..l, adjust: Some(@core.Adjust::{ op: @core.AdjustOp::Brightness, value: 0.5 }) } }, "adjust 字段"),
+    (fn(l : @core.Layer) { { ..l, adjust: Some(@core.make_adjust(@core.AdjustOp::Brightness, 0.5)) } }, "adjust 字段"),
     (fn(l : @core.Layer) { { ..l, asset_hash: "deadbeef" } }, "asset 引用"),
     (fn(l : @core.Layer) { { ..l, dabs: [@core.Dab::{ x: 1.0, y: 1.0, r: 2.0, color: 0xFF0000FF, erase: false, clone: false, sdx: 0.0, sdy: 0.0 }] } }, "1 个笔触"),
     (fn(l : @core.Layer) { { ..l, children: [@core.default_layer("kid", "k", 0.0, 0.0, 4.0, 4.0)] } }, "1 个子层"),
@@ -653,7 +653,7 @@ test "lint：8 个 kind 专属字段逐格覆盖 —— 错的 kind 上带着死
       ..b,
       id: "a1",
       kind: @core.ShapeKind::Adjust,
-      adjust: Some(@core.Adjust::{ op: @core.AdjustOp::Brightness, value: 0.5 }),
+      adjust: Some(@core.make_adjust(@core.AdjustOp::Brightness, 0.5)),
     },
   )
   okdoc.layers.push({ ..b, id: "i1", kind: @core.ShapeKind::Image, asset_hash: "h1" })

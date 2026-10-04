@@ -135,7 +135,11 @@ pub fn list_tools() -> Array[AgentTool] {
     "add-adjust op=<算子> [value=<数>]：调整层（PSD 语义，作用于其下全部可见层）。算子：" + adjust_op_doc() + "。可选：" + add_adjust_keys().map(fn(k) { "[\{k}=]" }).join(""),
     "meta",
   )
-  add("set-adjust", "set-adjust <id> [op=<算子>] [value=<数>]：原地改调整层的算子/数值（**层序不变**——删了重加会把它推到栈顶，作用范围跟着变）。算子与范围同 add-adjust：" + adjust_op_doc(), "meta")
+  add(
+    "set-adjust",
+    "set-adjust <id> [op=<算子>] [value=<数>]：原地改调整层的算子/数值（**层序不变**——删了重加会把它推到栈顶，作用范围跟着变）。算子与范围同 add-adjust：" + adjust_op_doc() + "。可选：" + set_adjust_keys().map(fn(k) { "[\{k}=]" }).join(""),
+    "meta",
+  )
   add("add-mask", "add-mask <id> " + mask_key_doc() + "：蒙版坐标是**画布坐标**（x/y/w/h 用像素，不随图层 move/rotate 走）", "meta")
   add(
     "set-mask",

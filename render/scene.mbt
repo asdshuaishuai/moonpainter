@@ -1573,12 +1573,161 @@ fn apply_adjust_layer(
 }
 
 ///|
+/// **色阶的 256 项查找表**（`Levels` 的语义只有这一处实现，与 `core` 的文档
+/// 注释逐字对应）：
+///   `v' = clamp01((v - in_lo) / (in_hi - in_lo))`；`v'' = v'^(1/gamma)`；
+///   `out = out_lo + v'' * (out_hi - out_lo)`
+/// 三个通道用同一张表（色阶是逐通道同一条曲线），α 不动。
+fn levels_lut(lv : @core.Levels) -> Array[Int] {
+  let out : Array[Int] = []
+  let span = lv.in_hi - lv.in_lo
+  let mut i = 0
+  while i < 256 {
+    let v = i.to_double() / 255.0
+    let t0 = (v - lv.in_lo) / span
+    let t = if t0 < 0.0 { 0.0 } else if t0 > 1.0 { 1.0 } else { t0 }
+    let g = @math.pow(t, 1.0 / lv.gamma)
+    let o = lv.out_lo + g * (lv.out_hi - lv.out_lo)
+    out.push(clamp8((o * 255.0 + 0.5).to_int()))
+    i = i + 1
+  }
+  out
+}
+
+///|
+/// **单调三次（PCHIP / Fritsch–Carlson）**曲线求值：控制点表 → `x` 处的 `y`。
+///
+/// 为什么不用普通三次样条：样条会**过冲**——把某个亮度拉高，邻近亮度会被压出
+/// 一个坑（画面里就是"调完曲线反而脏了"）。单调插值保证"控制点单调则输出单调"。
+/// 区间外用端点值**钳住**（与 PS 的"曲线不到边"一致）。
+pub fn curve_map(pts : Array[(Double, Double)], x : Double) -> Double {
+  let n = pts.length()
+  if n == 0 {
+    return x
+  }
+  if n == 1 {
+    return pts[0].1
+  }
+  if x <= pts[0].0 {
+    return pts[0].1
+  }
+  if x >= pts[n - 1].0 {
+    return pts[n - 1].1
+  }
+  // 段斜率 d_i 与节点斜率 m_i
+  let h : Array[Double] = []
+  let d : Array[Double] = []
+  let mut i = 0
+  while i + 1 < n {
+    let hi = pts[i + 1].0 - pts[i].0
+    h.push(hi)
+    d.push((pts[i + 1].1 - pts[i].1) / hi)
+    i = i + 1
+  }
+  let m : Array[Double] = []
+  m.push(d[0])
+  let mut k = 1
+  while k + 1 < n {
+    let d0 = d[k - 1]
+    let d1 = d[k]
+    if d0 * d1 <= 0.0 {
+      // 极值点：斜率取 0（这正是"不过冲"的来源）
+      m.push(0.0)
+    } else {
+      let w1 = 2.0 * h[k] + h[k - 1]
+      let w2 = h[k] + 2.0 * h[k - 1]
+      m.push((w1 + w2) / (w1 / d0 + w2 / d1))
+    }
+    k = k + 1
+  }
+  m.push(d[n - 2])
+  // 找到 x 落在哪一段
+  let mut seg = 0
+  while seg + 2 < n && x > pts[seg + 1].0 {
+    seg = seg + 1
+  }
+  let hs = h[seg]
+  let t = (x - pts[seg].0) / hs
+  let t2 = t * t
+  let t3 = t2 * t
+  let h00 = 2.0 * t3 - 3.0 * t2 + 1.0
+  let h10 = t3 - 2.0 * t2 + t
+  let h01 = -2.0 * t3 + 3.0 * t2
+  let h11 = t3 - t2
+  let y = h00 * pts[seg].1 + h10 * hs * m[seg] + h01 * pts[seg + 1].1 + h11 * hs * m[seg + 1]
+  if y < 0.0 {
+    0.0
+  } else if y > 1.0 {
+    1.0
+  } else {
+    y
+  }
+}
+
+///|
+/// 曲线的 256 项查找表（与色阶同规：三通道一张表、α 不动）。
+fn curve_lut(pts : Array[(Double, Double)]) -> Array[Int] {
+  let out : Array[Int] = []
+  let mut i = 0
+  while i < 256 {
+    let y = curve_map(pts, i.to_double() / 255.0)
+    out.push(clamp8((y * 255.0 + 0.5).to_int()))
+    i = i + 1
+  }
+  out
+}
+
+///|
+/// 逐像素查表类算子的 LUT（整幅只算一次）。缓冲区变换类（模糊/锐化/磨皮/暗角）
+/// 返回 `None`——它们在自己的分支里做。
+fn adjust_map(adj : @core.Adjust) -> Array[Int]? {
+  match adj.op {
+    @core.AdjustOp::Levels =>
+      match adj.levels {
+        Some(lv) => Some(levels_lut(lv))
+        None => None
+      }
+    @core.AdjustOp::Curves => if adj.curve.length() >= 2 {
+      Some(curve_lut(adj.curve))
+    } else {
+      None
+    }
+    _ => None
+  }
+}
+
+///|
+/// **曲线采样**（面板画预览用）：在 `x = i/(n-1)` 处取引擎算出的 y。
+/// 预览与渲染**共用** `curve_map` 一处——前端自己插值就会画出一条与画面不符的线。
+pub fn curve_sample(pts : Array[(Double, Double)], n : Int) -> Array[(Double, Double)] {
+  let out : Array[(Double, Double)] = []
+  if n <= 0 {
+    return out
+  }
+  let mut i = 0
+  while i < n {
+    let x = if n == 1 { 0.0 } else { i.to_double() / (n - 1).to_double() }
+    out.push((x, curve_map(pts, x)))
+    i = i + 1
+  }
+  out
+}
+
+///|
 /// 单个像素的点位算子结果（纯函数）：整幅路径与上面那条蒙版路径共用**这一处**，
 /// 所以两条路的数值不可能分叉。
-fn adjust_pixel(adj : @core.Adjust, p : Int) -> Int {
+fn adjust_pixel(adj : @core.Adjust, lut : Array[Int]?, p : Int) -> Int {
   let r = (p >> 16) & 0xFF
   let g = (p >> 8) & 0xFF
   let b = p & 0xFF
+  // 查表类（色阶/曲线）：三通道同一张表
+  match lut {
+    Some(t) =>
+      if t.length() == 256 {
+        return (p & 0xFF000000) + (t[r] << 16) + (t[g] << 8) + t[b]
+      }
+    None => ()
+  }
   let pair : (Int, Int, Int) = match adj.op {
     @core.AdjustOp::Invert => (255 - r, 255 - g, 255 - b)
     @core.AdjustOp::Grayscale => {
@@ -1626,10 +1775,13 @@ fn adjust_pixel(adj : @core.Adjust, p : Int) -> Int {
 
 ///|
 fn apply_adjust_pixel(adj : @core.Adjust, buf : @codec.RgbaBuf) -> Unit {
+  // LUT **在循环外算一次**（色阶/曲线是查表类；256 项里每一项都过一遍幂函数/
+  // 三次插值，逐像素重算等于把整幅的开销乘 256）
+  let lut = adjust_map(adj)
   let total = buf.width * buf.height
   let mut i = 0
   while i < total {
-    buf.pixels[i] = adjust_pixel(adj, buf.pixels[i])
+    buf.pixels[i] = adjust_pixel(adj, lut, buf.pixels[i])
     i = i + 1
   }
 }

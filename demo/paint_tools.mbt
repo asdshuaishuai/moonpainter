@@ -137,6 +137,19 @@ fn tool_cmd(name : String) -> String? {
 }
 
 ///|
+/// 调整层的**参数键清单**（`apply_filter` 与 `set_adjust` 两条工具行共用一处）：
+/// 顺序即拼出来的参数顺序。`op` 不在这里——它是位置敏感的第一个键，两条行各自拼。
+///
+/// ⚠️ 与引擎的 `add_adjust_keys` 是**两份**：demo 包按纪律不许 import 引擎包
+/// （只走 wasm ABI），所以这份清单**没有**静态对账。写错了会**响**——引擎的
+/// `check_kv_args` 不认识这个键，回包直接报"不认识的参数"并给出合法清单，
+/// 模型当轮就能改（这正是"入口拒绝"那条纪律要的效果：不静默）。
+/// 拼出来的**整行**由 `paint_tools_wbtest.mbt` 逐字钉住（含"没给的键一个都不拼"）。
+fn adjust_arg_keys() -> Array[String] {
+  ["value", "in_lo", "in_hi", "gamma", "out_lo", "out_hi", "points"]
+}
+
+///|
 /// 工具面自检：返回**注册了却接不上引擎命令行**的工具名（空 = 健康）。
 ///
 /// 这是 `undo` 那个 bug 的根治手段——把"工具定义"与"命令分发"的一致性
@@ -470,19 +483,31 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
     ),
     make_tool(
       "apply_filter",
-      "叠加调整层（非破坏，可撤销）：blur模糊/sharpen锐化/smooth磨皮/whiten美白/warm暖色(-负=冷)/vignette暗角/grayscale黑白/invert反色/brightness/contrast/saturation",
+      "叠加调整层（非破坏，可撤销）：blur模糊/sharpen锐化/smooth磨皮/whiten美白/warm暖色(-负=冷)/vignette暗角/grayscale黑白/invert反色/brightness/contrast/saturation；levels色阶(给 in_lo/in_hi/gamma/out_lo/out_hi，0..1，gamma 1=不动)、curves曲线(给 points=x,y;x,y;…，x/y 0..1 且 x 严格递增)",
       [
         ("op", "string:req:算子名"),
-        ("value", "number:req:强度 -1..1（0..1 为单向操作）"),
+        ("value", "number:强度（value 类算子必给；levels/curves 不用它）"),
+        ("in_lo", "number:色阶输入黑点 0..1（缺省 0）"),
+        ("in_hi", "number:色阶输入白点 0..1（缺省 1）"),
+        ("gamma", "number:色阶中间调 gamma 0.01..100（缺省 1=不动）"),
+        ("out_lo", "number:色阶输出黑点 0..1（缺省 0）"),
+        ("out_hi", "number:色阶输出白点 0..1（缺省 1）"),
+        ("points", "string:曲线控制点 x,y;x,y;…（2..32 点）"),
       ],
     ),
     make_tool(
       "set_adjust",
-      "改一个已有调整层的算子/数值（**原地改，层序不变**）。要微调刚才那个滤镜时用它——删了重加会把调整层推到栈顶，作用范围跟着变。",
+      "改一个已有调整层的算子/参数（**原地改，层序不变**）。要微调刚才那个滤镜时用它——删了重加会把调整层推到栈顶，作用范围跟着变。色阶可以**只改一个数**（如只给 gamma=1.4），其余沿用当前值；曲线是整表替换（points=）。",
       [
         ("id", "string:req:调整层 id（list_layers 里 kind=adjust 的那个）"),
         ("op", "string:算子名（不给则沿用原算子）"),
         ("value", "number:新强度 -1..1（不给则沿用原值）"),
+        ("in_lo", "number:色阶输入黑点（不给则沿用当前值）"),
+        ("in_hi", "number:色阶输入白点（不给则沿用当前值）"),
+        ("gamma", "number:色阶中间调 gamma（不给则沿用当前值）"),
+        ("out_lo", "number:色阶输出黑点（不给则沿用当前值）"),
+        ("out_hi", "number:色阶输出白点（不给则沿用当前值）"),
+        ("points", "string:曲线控制点整表替换 x,y;x,y;…"),
       ],
     ),
     make_tool(
@@ -823,20 +848,30 @@ pub fn tool_line(name : String, args : Json) -> String {
       let r = opt_of(args, "r", "8")
       "clone layer=\{lid} pts=\{pts} r=\{r} src=\{arg_of(args, "src")}"
     }
-    "apply_filter" =>
-      "add-adjust op=\{arg_of(args, "op")} value=\{opt_of(args, "value", "0.5")}"
+    "apply_filter" => {
+      // value 此前无条件给 0.5：色阶/曲线**没有 value**，那样拼出来的命令行会被
+      // 引擎拒（"不接受 value="）。现在只拼**给了的**键（键表一处，见
+      // `adjust_arg_keys`）。
+      let op = arg_of(args, "op")
+      let tail = args_to_tail(args, adjust_arg_keys())
+      if tail == "" {
+        "add-adjust op=\{op}"
+      } else {
+        "add-adjust op=\{op} \{tail}"
+      }
+    }
     "set_adjust" => {
-      // `arg_of` 对缺键返回空串；op/value 都不可能是合法的空串，
-      // 所以"空=没给"（没给就让引擎沿用原值）。
+      // `arg_of` 对缺键返回空串；这些参数都不可能是合法的空串，所以"空 = 没给"
+      // （没给就让引擎沿用原值）。参数键表与 `apply_filter` **共用一处**。
       let id = arg_of(args, "id")
       let op = arg_of(args, "op")
-      let val = arg_of(args, "value")
       let mut cmd = "set-adjust \{id}"
       if op != "" {
         cmd = cmd + " op=\{op}"
       }
-      if val != "" {
-        cmd = cmd + " value=\{val}"
+      let tail = args_to_tail(args, adjust_arg_keys())
+      if tail != "" {
+        cmd = cmd + " \{tail}"
       }
       cmd
     }

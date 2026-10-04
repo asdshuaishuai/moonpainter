@@ -387,12 +387,14 @@ MUTS = [
         r"""  let cur = match target.adjust {
     Some(a) => a
     None =>
-      return err(""",
+      return err(
+        "层 \{id} 是 \{kind_str(target.kind)} 不是调整层（改画面用 set-style；要加调整层用 add-adjust）",
+      )
+  }""",
         r"""  let cur = match target.adjust {
     Some(a) => a
-    None => { op: @core.AdjustOp::Brightness, value: 0.0 }
-  }
-  let _unreachable = if false { return err(""",
+    None => @core.make_adjust(@core.AdjustOp::Brightness, 0.0)
+  }""",
         "killed",
     ),
     (
@@ -403,16 +405,14 @@ MUTS = [
         r"""  match (None : @core.Adjust?) {""",
         "killed",
     ),
-    (
+(
         "R31",
-        "set-adjust 不沿用原值（只给 op 时把 value 清零）",
+        "set-adjust 不沿用原值（只给 op 时把 value 清零：改算子顺手把强度抹了）",
         "agent/session.mbt",
-        r"""          if (adjust_spec(o)).0 {
-            merged.set("value", @core.fmt_num(cur.value))
-          }""",
-        r"""          if (adjust_spec(o)).0 {
-            merged.set("value", "0")
-          }""",
+        """        if @core.adjust_uses_value(o) {
+          merged.set("value", @core.fmt_num(cur.value))""",
+        """        if @core.adjust_uses_value(o) {
+          merged.set("value", "0")""",
         "killed",
     ),
     (
@@ -1212,12 +1212,12 @@ MUTS = [
         """  if value < lo - 1000000.0 || value > hi + 1000000.0 {""",
         "killed",
     ),
-    (
+(
         "Q4",
-        "无值算子（invert/grayscale）又收下用不上的 value=（静默丢掉）",
+        "无值算子（invert/grayscale/levels/curves）又收下用不上的 value=（静默丢掉）",
         "agent/session.mbt",
-        """  let raw = m.get("value")""",
-        """  let raw : String? = if has_value { m.get("value") } else { None }""",
+        """  let raw_value = m.get("value")""",
+        """  let raw_value : String? = if uses_value { m.get("value") } else { None }""",
         "killed",
     ),
     (
@@ -2316,6 +2316,190 @@ MUTS = [
         """      ..@core.default_layer(lid, base_name, a.x, a.y, a.w, a.h),""",
         "killed",
     ),
+    # R96 起：色阶/曲线（PLAN 七十）——参数面、像素映射、中性判据，以及
+    # "老引擎读不出就静默丢一层"那条版本闸。
+    (
+        "R96",
+        "色阶丢掉 gamma（提亮/压暗中间调失效：gamma 只在报告里好看）",
+        "render/scene.mbt",
+        """    let g = @math.pow(t, 1.0 / lv.gamma)""",
+        """    let g = @math.pow(t, 1.0)""",
+        "killed",
+    ),
+    (
+        "R97",
+        "色阶不做区间内钳制（黑白点之外的值外推：暗部溢出/亮部拉爆）",
+        "render/scene.mbt",
+        """    let t0 = (v - lv.in_lo) / span
+    let t = if t0 < 0.0 { 0.0 } else if t0 > 1.0 { 1.0 } else { t0 }""",
+        """    let t0 = (v - lv.in_lo) / span
+    let t = t0""",
+        "killed",
+    ),
+    (
+        "R98",
+        "色阶丢掉输出黑白点（out_lo/out_hi 白填：输出重映射失效）",
+        "render/scene.mbt",
+        """    let o = lv.out_lo + g * (lv.out_hi - lv.out_lo)""",
+        """    let o = g""",
+        "killed",
+    ),
+    (
+        "R99",
+        "曲线内部斜率一律取 0（切线取平：段内形状变成另一条曲线）",
+        "render/scene.mbt",
+        """      m.push((w1 + w2) / (w1 / d0 + w2 / d1))""",
+        """      m.push(0.0)""",
+        "killed",
+    ),
+    (
+        "R100",
+        "曲线退化成折线（PCHIP 的切线被丢掉：段内形状全变）",
+        "render/scene.mbt",
+        """  let y = h00 * pts[seg].1 + h10 * hs * m[seg] + h01 * pts[seg + 1].1 + h11 * hs * m[seg + 1]""",
+        """  let y = pts[seg].1 + t * (pts[seg + 1].1 - pts[seg].1)""",
+        "killed",
+    ),
+    (
+        "R101",
+        "色阶不检查输入黑白点顺序（in_lo ≥ in_hi 被收下：整幅反相却报了 levels）",
+        "core/document.mbt",
+        """  if !(lv.in_lo < lv.in_hi) {""",
+        """  if false {""",
+        "killed",
+    ),
+    (
+        "R102",
+        "色阶 gamma 范围不检查（gamma=0 被收下：1/0 变成 inf，整幅爆白）",
+        "core/document.mbt",
+        """  if !(lv.gamma >= 0.01 && lv.gamma <= 100.0) {""",
+        """  if false {""",
+        "killed",
+    ),
+    (
+        "R103",
+        "曲线控制点越界不检查（容器里塞 x=1.5 也照收）",
+        "core/document.mbt",
+        """    if !(p.0 >= 0.0 && p.0 <= 1.0) || !(p.1 >= 0.0 && p.1 <= 1.0) {""",
+        """    if false {""",
+        "killed",
+    ),
+    (
+        "R104",
+        "空/单点点表被当成「中性曲线」（空集上的全称命题恒真）",
+        "core/document.mbt",
+        """  if pts.length() < 2 {
+    return false
+  }""",
+        """  if false {
+    return false
+  }""",
+        "killed",
+    ),
+    (
+        "R105",
+        "中性色阶判据过宽（动过的色阶被当成没动：lint 不再报白装）",
+        "core/document.mbt",
+        """  (lv.in_lo - d.in_lo).abs() <= 1.0e-9 &&""",
+        """  (lv.in_lo - d.in_lo).abs() <= 1.0 &&""",
+        "killed",
+    ),
+    (
+        "R106",
+        "曲线中性判据过宽（拉过的曲线被当成对角线）",
+        "core/document.mbt",
+        """    if (p.1 - p.0).abs() > 1.0e-9 {""",
+        """    if (p.1 - p.0).abs() > 100.0 {""",
+        "killed",
+    ),
+    (
+        "R107",
+        "色阶/曲线也要求 value（与它们的参数面自相矛盾：op=levels 报「需要 value=」）",
+        "core/document.mbt",
+        """    Invert | Grayscale | Levels | Curves => false""",
+        """    Invert | Grayscale => false""",
+        "killed",
+    ),
+    (
+        "R108",
+        "色阶/曲线层不升渲染契约档（老引擎读不出 levels/curve ⇒ 静默丢一层/当空操作）",
+        "core/document.mbt",
+        """        if (adj.levels is Some(_) || adj.curve.length() > 0) &&
+          rc < RENDER_CONTRACT_ADJUST_PARAMS {""",
+        """        if false && (adj.levels is Some(_) || adj.curve.length() > 0) &&
+          rc < RENDER_CONTRACT_ADJUST_PARAMS {""",
+        "killed",
+    ),
+    (
+        "R109",
+        "容器里缺一个色阶参数时静默按中性值读（老引擎的静默降级又回来了）",
+        "core/json.mbt",
+        r"""        let gamma = match num_of(lv, "gamma") {
+          Ok(x) => x
+          Err(e) => return Err("色阶参数不完整：\{e}")
+        }""",
+        r"""        let gamma = match num_of(lv, "gamma") {
+          Ok(x) => x
+          Err(e) => {
+            let _ = e
+            1.0
+          }
+        }""",
+        "killed",
+    ),
+    (
+        "R110",
+        "容器里的值算子带着色阶参数时不再拒绝（被静默收下又丢掉）",
+        "core/document.mbt",
+        r"""      if adj.levels is Some(_) {
+        Some("算子 \{name} 不吃色阶参数（in_lo=… 只对 op=levels 有意义）")""",
+        r"""      if false {
+        Some("算子 \{name} 不吃色阶参数（in_lo=… 只对 op=levels 有意义）")""",
+        "killed",
+    ),
+    (
+        "R111",
+        "命令面不再检查参数键的族属（op=brightness in_lo=0.2 被收下又丢掉）",
+        "agent/session.mbt",
+        """  if has_lv {""",
+        """  if has_lv && false {""",
+        "killed",
+    ),
+    (
+        "R112",
+        "命令面不再拒绝「给曲线算子发色阶参数」（points 与色阶五键的互斥丢了）",
+        "agent/session.mbt",
+        """  if m.get("points") is Some(_) {""",
+        """  if false {""",
+        "killed",
+    ),
+    (
+        "R113",
+        "set-adjust 丢掉 points=（回 ok 而点表没换：曲线改不动）",
+        "agent/session.mbt",
+        """    if k != "id" && k != "name" {""",
+        """    if k != "id" && k != "name" && k != "points" {""",
+        "killed",
+    ),
+    (
+        "R114",
+        "lint 不再报「中性色阶」（装了却什么都不干的层没人说话）",
+        "agent/ops.mbt",
+        """                  if @core.levels_is_identity(lv) {""",
+        """                  if @core.levels_is_identity(lv) && false {""",
+        "killed",
+    ),
+    (
+        "R115",
+        "色阶层算不出 LUT（渲染时当成没有参数：整层什么都不做）",
+        "render/scene.mbt",
+        """        Some(lv) => Some(levels_lut(lv))""",
+        """        Some(lv) => {
+          let _ = lv
+          None
+        }""",
+        "killed",
+    ),
     (
         "R85",
         "路径的渲染契约不升档（老引擎不认 path ⇒ 静默不画）",
@@ -2776,64 +2960,21 @@ MUTS = [
         "    best",
         "killed",
     ),
-    (
+(
         "R69",
-        "契约档早退（只看先遇到的那层：毛边(2)+套索(3) 并存时报 2，老引擎照样打开）",
+        "契约档只看第一层（毛边(2)+套索(3) 并存时报 2，老引擎照样打开）",
         "core/document.mbt",
-        """  let mut rc = 1
-  for l in doc.layers {
+        """  for l in doc.layers {
+    // 贝塞尔路径：老引擎不认这个 kind（整层不画）⇒ 必须升档
+    if l.kind is ShapeKind::Path && rc < RENDER_CONTRACT_PATH {
+      rc = RENDER_CONTRACT_PATH
+    }""",
+        """  for l in doc.layers {
     // 贝塞尔路径：老引擎不认这个 kind（整层不画）⇒ 必须升档
     if l.kind is ShapeKind::Path && rc < RENDER_CONTRACT_PATH {
       rc = RENDER_CONTRACT_PATH
     }
-    // 克隆笔触：老引擎会把它画成普通笔色（整笔一块死色）⇒ 必须升档
-    for d in l.dabs {
-      if d.clone && rc < RENDER_CONTRACT_CLONE {
-        rc = RENDER_CONTRACT_CLONE
-      }
-    }
-    match l.mask {
-      Some(m) => {
-        match m.kind {
-          ShapeKind::Polygon => if rc < RENDER_CONTRACT_POLY_MASK {
-            rc = RENDER_CONTRACT_POLY_MASK
-          }
-          _ => ()
-        }
-        if m.roughen > 0.0 && rc < RENDER_CONTRACT_ROUGHEN {
-          rc = RENDER_CONTRACT_ROUGHEN
-        }
-      }
-      None => ()
-    }
-  }
-  rc""",
-        """  let mut rc = 1
-  for l in doc.layers {
-    // 贝塞尔路径：老引擎不认这个 kind（整层不画）⇒ 必须升档
-    if l.kind is ShapeKind::Path && rc < RENDER_CONTRACT_PATH {
-      rc = RENDER_CONTRACT_PATH
-    }
-    // 克隆笔触：老引擎会把它画成普通笔色（整笔一块死色）⇒ 必须升档
-    for d in l.dabs {
-      if d.clone && rc < RENDER_CONTRACT_CLONE {
-        rc = RENDER_CONTRACT_CLONE
-      }
-    }
-    match l.mask {
-      Some(m) => {
-        match m.kind {
-          ShapeKind::Polygon => return RENDER_CONTRACT_POLY_MASK
-          _ => ()
-        }
-        if m.roughen > 0.0 {
-          return RENDER_CONTRACT_ROUGHEN
-        }
-      }
-      None => ()
-    }
-  }
-  1""",
+    break""",
         "killed",
     ),
     ]

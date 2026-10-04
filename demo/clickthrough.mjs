@@ -633,6 +633,26 @@ const nBefore = layers().length;
 // `__af` 从 MPST.strength 读强度（`js_set_tool` 的默认值是 0.5）——上面已给 0.35
 await globalThis.__af('brightness', '+');
 const nAfter = layers().length;
+// 色阶：换算子时人侧铺一套**中性值**（引擎拒绝"换成 levels 却一个参数都不给"
+// 的换算子——那是一个什么都不干的层），随后五格里改一格
+await globalThis.__adj_op('adj1', 'levels');
+const a3 = layer('adj1').adjust || {};
+await globalThis.__adj_key('adj1', 'gamma', '2');
+const a4 = layer('adj1').adjust || {};
+// 曲线：点表**整表替换** + 预览是引擎采样的 9 点（前端不自己插值）
+await globalThis.__adj_op('adj1', 'curves');
+const a5 = layer('adj1').adjust || {};
+await globalThis.__adj_key('adj1', 'points', '0,0;0.5,0.75;1,1');
+const a6 = layer('adj1').adjust || {};
+check(
+  '色阶/曲线：换算子铺中性值 → 改一格原地生效 → 曲线上整表替换（引擎回读为准）',
+  a3.levels && a3.levels.gamma === 1 && a3.levels.in_lo === 0 && a3.levels.out_hi === 1 &&
+    a4.levels && a4.levels.gamma === 2 && a4.levels.in_hi === 1 &&
+    a5.points === '0,0;1,1' && a6.points === '0,0;0.5,0.75;1,1' &&
+    Array.isArray(a6.curve_sample) && a6.curve_sample.length === 9 &&
+    a6.curve_sample[4][1] === 0.75,
+  `levels=${JSON.stringify(a3.levels)}→gamma ${a4.levels && a4.levels.gamma}｜points=${a5.points}→${a6.points}｜采样=${a6.curve_sample && a6.curve_sample.length} 中点=${a6.curve_sample && a6.curve_sample[4] && a6.curve_sample[4][1]}｜状态栏=${status()}`,
+);
 check(
   '调整层：value 改得动、op 改得动（原地改而不是删了重加）；一键滤镜真的建出层',
   a1.value === 0.3 && a2.op === 'blur' && nAfter === nBefore + 1 &&
@@ -1092,7 +1112,7 @@ check(
 // ⑯ 覆盖清单（机器对账用，格式由 `build_demo.sh#html-wiring` 解析）：
 // driver 走不到的处理器必须在这儿**写明原因**，否则"没覆盖"会静默变成"覆盖了"。
 /* coverage:begin
-driven: __selfcheck __dbg_lint __dbg_edits __dbg_census __dbg_probe __dbg_help __dbg_tools __dbg_schema __dbg_preview __mvsl_set __mvsl_show __mvsl_impact __mvsl_assert __mvsl_clear __param_list __param_set __param_del __cmd __build_badge __save __export __run __sel __vis __front __back __setx __sety __setw __seth __move_delta __rotate __flip __op __del __undo __redo __rename __tag_add __tag_del __reparent __ungroup_sel __text_at __text_add __text_set __text_font __mask_ready __mask_invert __mask_clear __adj_op __adj_val __af __stroke __new __set_canvas __crop_ready __crop_apply __crop_cancel __zoom __refresh __stats __optip __toggle_ai __tool __poly_click __poly_finish __poly_cancel __shape_ready __group_sel __pick_at __clone_src __goto __pen_handle __bool_op
+driven: __selfcheck __dbg_lint __dbg_edits __dbg_census __dbg_probe __dbg_help __dbg_tools __dbg_schema __dbg_preview __mvsl_set __mvsl_show __mvsl_impact __mvsl_assert __mvsl_clear __param_list __param_set __param_del __cmd __build_badge __save __export __run __sel __vis __front __back __setx __sety __setw __seth __move_delta __rotate __flip __op __del __undo __redo __rename __tag_add __tag_del __reparent __ungroup_sel __text_at __text_add __text_set __text_font __mask_ready __mask_invert __mask_clear __adj_op __adj_val __adj_key __af __stroke __new __set_canvas __crop_ready __crop_apply __crop_cancel __zoom __refresh __stats __optip __toggle_ai __tool __poly_click __poly_finish __poly_cancel __shape_ready __group_sel __pick_at __clone_src __goto __pen_handle __bool_op
 browser-only: __drop=拒绝路径已被 driver 走过（没字节时明说）；成功路径要真的 File+Image 解码，壳里造一个等于把"读文件"假装测了; __file_sel=同上（driver 走的是"没选到文件"那条）; __mpd_sel=要真的 .mpd 文件字节，壳里没有 FileReader; __img_swap=换图必须先有一张真图进来
 coverage:end */
 

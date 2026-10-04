@@ -235,6 +235,17 @@ pub fn required_render_contract(doc : Document) -> Int {
     if l.kind is ShapeKind::Path && rc < RENDER_CONTRACT_PATH {
       rc = RENDER_CONTRACT_PATH
     }
+    // 色阶/曲线（调整层的新参数）：老引擎的 `adjust_of` 读不出这两个字段，
+    // 会把 `op=levels` 整层**丢掉**（作用范围凭空少一层）或按 value=0 施加一个
+    // 空操作 ⇒ 静默错渲，必须升档。
+    match l.adjust {
+      Some(adj) =>
+        if (adj.levels is Some(_) || adj.curve.length() > 0) &&
+          rc < RENDER_CONTRACT_ADJUST_PARAMS {
+          rc = RENDER_CONTRACT_ADJUST_PARAMS
+        }
+      None => ()
+    }
     // 克隆笔触：老引擎会把它画成普通笔色（整笔一块死色）⇒ 必须升档
     for d in l.dabs {
       if d.clone && rc < RENDER_CONTRACT_CLONE {
@@ -273,6 +284,8 @@ pub(all) enum AdjustOp {
   Whiten // 美白：value 0..1，暖色调像素加权提亮
   Warm // 色温：value -1..1，正=暖（R+/B-）负=冷
   Vignette // 暗角：value 0..1，径向渐暗
+  Levels // 色阶：5 个参数（输入黑白点/gamma/输出黑白点），**不吃 value**
+  Curves // 曲线：控制点表（每点 x,y ∈ 0..1，x 严格递增），**不吃 value**
 }
 
 ///|
@@ -341,6 +354,8 @@ pub fn adjust_op_name(op : AdjustOp) -> String {
     Whiten => "whiten"
     Warm => "warm"
     Vignette => "vignette"
+    Levels => "levels"
+    Curves => "curves"
   }
 }
 
@@ -364,6 +379,8 @@ pub fn adjust_op_from_name(name : String) -> AdjustOp? {
     "whiten" => Some(Whiten)
     "warm" => Some(Warm)
     "vignette" => Some(Vignette)
+    "levels" => Some(Levels)
+    "curves" => Some(Curves)
     _ => None
   }
 }
@@ -384,6 +401,8 @@ pub fn all_adjust_ops() -> Array[AdjustOp] {
     Whiten,
     Warm,
     Vignette,
+    Levels,
+    Curves,
   ]
 }
 
@@ -405,9 +424,183 @@ pub(all) struct Dab {
 }
 
 ///|
+///|
+/// **色阶（Levels）**：输入黑/白点、中间调 gamma、输出黑/白点。
+/// 映射只有一处（`render.levels_lut` 与它逐字对应）：
+///   `v' = clamp01((v - in_lo) / (in_hi - in_lo))`
+///   `v'' = v' ^ (1/gamma)`
+///   `out = out_lo + v'' * (out_hi - out_lo)`
+/// 逐 RGB 通道同样处理，**α 不动**（PS 的"复合通道"口径：色阶不改透明度）。
+pub(all) struct Levels {
+  in_lo : Double
+  in_hi : Double
+  gamma : Double
+  out_lo : Double
+  out_hi : Double
+}
+
+///|
+/// 色阶的**中性值**（= 什么都不改）。命令面缺省、`lint` 判"装了却什么都不干"、
+/// 文档里的默认值都读它——写第二份"0/1/1/0/1"就必然有一处先烂。
+pub fn levels_identity() -> Levels {
+  { in_lo: 0.0, in_hi: 1.0, gamma: 1.0, out_lo: 0.0, out_hi: 1.0 }
+}
+
+///|
+/// 色阶参数合法性（**一处判据**：命令入口、`set-adjust`、`lint` 共用同一句话）。
+/// NaN 也在这里被抓住：判据写成 `!(x >= lo && x <= hi)` 而不是 `x < lo || x > hi`
+/// （NaN 与任何数比较都是 false，后一种写法会把它放过去）。
+pub fn levels_error(lv : Levels) -> String? {
+  let in_range = fn(v : Double) -> Bool { v >= 0.0 && v <= 1.0 }
+  if !in_range(lv.in_lo) || !in_range(lv.in_hi) {
+    return Some("色阶的输入黑白点必须都在 0..1（in_lo < in_hi）")
+  }
+  if !(lv.in_lo < lv.in_hi) {
+    return Some("色阶要求 in_lo < in_hi（输入黑点必须低于白点；想反相请用 invert）")
+  }
+  if !(lv.gamma >= 0.01 && lv.gamma <= 100.0) {
+    return Some("色阶 gamma 必须在 0.01..100（1 = 不动；>1 压暗中间调，<1 提亮）")
+  }
+  if !in_range(lv.out_lo) || !in_range(lv.out_hi) {
+    return Some("色阶的输出黑白点必须都在 0..1")
+  }
+  if !(lv.out_lo <= lv.out_hi) {
+    return Some("色阶要求 out_lo <= out_hi（想反相请用 invert）")
+  }
+  None
+}
+
+///|
+/// 色阶是不是**中性**（做了但什么都不改 ⇒ `lint` 要报）。
+pub fn levels_is_identity(lv : Levels) -> Bool {
+  let d = levels_identity()
+  (lv.in_lo - d.in_lo).abs() <= 1.0e-9 &&
+  (lv.in_hi - d.in_hi).abs() <= 1.0e-9 &&
+  (lv.gamma - d.gamma).abs() <= 1.0e-9 &&
+  (lv.out_lo - d.out_lo).abs() <= 1.0e-9 &&
+  (lv.out_hi - d.out_hi).abs() <= 1.0e-9
+}
+
+///|
+/// **曲线（Curves）**的控制点表：每点 `(x, y)`，x/y ∈ 0..1、x **严格递增**、
+/// 至少 2 点、至多 32 点。两端不要求落在 (0,0)/(1,1)——区间外按端点值**钳住**
+/// （与 PS 的"曲线不到边"一致）。中点用**单调三次（PCHIP）**插值：不过冲，
+/// 于是"把某个亮度拉高"不会在邻近亮度上压出一个坑。
+pub fn curve_error(pts : Array[(Double, Double)]) -> String? {
+  if pts.length() < 2 {
+    return Some("曲线至少要 2 个控制点（points=x,y;x,y；例如 0,0;0.5,0.6;1,1）")
+  }
+  if pts.length() > 32 {
+    return Some("曲线最多 32 个控制点（点太多时手拖不住，也没有对应的 UI）")
+  }
+  let mut i = 0
+  for p in pts {
+    if !(p.0 >= 0.0 && p.0 <= 1.0) || !(p.1 >= 0.0 && p.1 <= 1.0) {
+      return Some("曲线的每个点都要在 0..1 见方里（第 \{i + 1} 个点是 \{p.0},\{p.1}）")
+    }
+    if i > 0 && !(p.0 > pts[i - 1].0) {
+      return Some("曲线的 x 必须严格递增（第 \{i + 1} 个点的 x 没有大于前一个）")
+    }
+    i = i + 1
+  }
+  None
+}
+
+///|
+/// 曲线点表的**文本形态**（`x,y;x,y;…`）：命令面回显、`set-adjust` 的沿用、
+/// 报告面共用**一处**格式（两处各拼一遍就必然有一处先烂）。
+pub fn curve_points_text(pts : Array[(Double, Double)]) -> String {
+  let sb = StringBuilder()
+  let mut i = 0
+  for p in pts {
+    if i > 0 {
+      sb.write_string(";")
+    }
+    sb.write_string("\{fmt_num(p.0)},\{fmt_num(p.1)}")
+    i = i + 1
+  }
+  sb.to_string()
+}
+
+///|
+/// 曲线是不是**中性**（所有点都落在对角线上 ⇒ 什么都不改）。
+pub fn curve_is_identity(pts : Array[(Double, Double)]) -> Bool {
+  // 空表/单点**不算中性**：那不是"什么都不改的曲线"，那是"没有曲线"（参数不
+  // 合法，由 `curve_error` 说话）。空集上的全称命题恒真，照字面写会让一张空表
+  // 被报成"控制点全在对角线上"——判据的空集也要说话。
+  if pts.length() < 2 {
+    return false
+  }
+  let mut out = true
+  for p in pts {
+    if (p.1 - p.0).abs() > 1.0e-9 {
+      out = false
+    }
+  }
+  out
+}
+
+///|
+/// 调整层（`op` 决定读哪几个参数）。
+///
+/// 参数面**不是**只有 `value`：色阶要 5 个数、曲线要一张点表。`levels`/`curve`
+/// 是**可选**字段（缺省时 canonical JSON 里整个字段都不写 ⇒ 老文档字节不变），
+/// 而"哪个算子读哪些参数"由 `adjust_param_error` 一处说了算（入口与 `lint`
+/// 共用同一句话，见 `agent` 的 `parse_adjust`）。
 pub(all) struct Adjust {
   op : AdjustOp
   value : Double
+  levels : Levels?
+  curve : Array[(Double, Double)]
+}
+
+///|
+/// 造一个调整参数（其余字段缺省）。加参数时**只改这一处**：8 个构造点都读它。
+pub fn make_adjust(op : AdjustOp, value : Double) -> Adjust {
+  { op, value, levels: None, curve: [] }
+}
+
+///|
+/// 这个算子**读不读** `value`（"用不上的 value 要拒"那条的唯一判据）。
+pub fn adjust_uses_value(op : AdjustOp) -> Bool {
+  match op {
+    Invert | Grayscale | Levels | Curves => false
+    _ => true
+  }
+}
+
+///|
+/// 参数组合合法性（**一处判据**）：哪个算子读哪些参数、缺了要说什么。
+///
+/// 这里管的是"形状"（该有的有没有、不该有的有没有），取值范围由各参数的
+/// 判据（`levels_error`/`curve_error`）与 `agent` 的范围表说。
+pub fn adjust_param_error(adj : Adjust) -> String? {
+  let name = adjust_op_name(adj.op)
+  match adj.op {
+    Levels =>
+      match adj.levels {
+        Some(lv) =>
+          if adj.curve.length() > 0 {
+            Some("算子 \{name} 读 levels=，不读 points=（曲线的控制点请用 op=curves）")
+          } else {
+            levels_error(lv)
+          }
+        None => Some("算子 \{name} 需要 5 个色阶参数（in_lo= in_hi= gamma= out_lo= out_hi=）")
+      }
+    Curves =>
+      match adj.levels {
+        Some(_) => Some("算子 \{name} 读 points=，不读色阶参数（in_lo=… 请用 op=levels）")
+        None => curve_error(adj.curve)
+      }
+    _ =>
+      if adj.levels is Some(_) {
+        Some("算子 \{name} 不吃色阶参数（in_lo=… 只对 op=levels 有意义）")
+      } else if adj.curve.length() > 0 {
+        Some("算子 \{name} 不吃 points=（曲线控制点只对 op=curves 有意义）")
+      } else {
+        None
+      }
+  }
 }
 
 ///|

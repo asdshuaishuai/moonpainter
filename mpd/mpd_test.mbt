@@ -131,6 +131,82 @@ test "manifest 的 counts 如实报告（layers/assets/params 不许互换或写
 }
 
 ///|
+test "色阶/曲线层必须声明第 6 档，亮度层照旧第 1 档（负控）" {
+  // 老引擎的 `adjust_of` 读不出 `levels`/`curve`：整层被丢掉或按空操作施加，
+  // 而回包一切正常 ⇒ 必须由**文档内容**抬档（`required_render_contract`）。
+  // ⚠️ 一律写引擎上限等于让版本闸失去分辨力——老引擎将打不开任何新容器，
+  // 所以负控（亮度层仍是 1 档）与正控同样重要。
+  let m = sample_mpd()
+  let doc = m.doc
+  let l0 = doc.layers[0]
+  doc.layers[0] = {
+    ..l0,
+    kind: @core.ShapeKind::Adjust,
+    adjust: Some(@core.make_adjust(@core.AdjustOp::Brightness, 0.3)),
+  }
+  let p1 = match @mpd.pack(m) {
+    Ok(b) => b
+    Err(e) => abort("pack 失败: \{e}")
+  }
+  let man1 = @codec.Zip::open(p1).read_text("manifest.json")
+  assert_true(
+    man1.contains("\"render_contract\":1"),
+    msg="亮度层不该抬档：\{man1}",
+  )
+  // 色阶（五个参数都在）⇒ 第 6 档
+  let lv : @core.Levels = {
+    in_lo: 0.2,
+    in_hi: 0.8,
+    gamma: 1.2,
+    out_lo: 0.0,
+    out_hi: 1.0,
+  }
+  doc.layers[0] = {
+    ..l0,
+    kind: @core.ShapeKind::Adjust,
+    adjust: Some({ ..@core.make_adjust(@core.AdjustOp::Levels, 0.0), levels: Some(lv) }),
+  }
+  let p2 = match @mpd.pack(m) {
+    Ok(b) => b
+    Err(e) => abort("pack 失败: \{e}")
+  }
+  let man2 = @codec.Zip::open(p2).read_text("manifest.json")
+  let want = "\"render_contract\":" + @core.RENDER_CONTRACT_ADJUST_PARAMS.to_string()
+  assert_true(man2.contains(want), msg="色阶层必须声明第 6 档（\{want}）：\{man2}")
+  // 曲线同理，且参数要随容器往返
+  let pts : Array[(Double, Double)] = [(0.0, 0.0), (0.5, 0.7), (1.0, 1.0)]
+  doc.layers[0] = {
+    ..l0,
+    kind: @core.ShapeKind::Adjust,
+    adjust: Some({ ..@core.make_adjust(@core.AdjustOp::Curves, 0.0), curve: pts }),
+  }
+  let p3 = match @mpd.pack(m) {
+    Ok(b) => b
+    Err(e) => abort("pack 失败: \{e}")
+  }
+  let man3 = @codec.Zip::open(p3).read_text("manifest.json")
+  assert_true(man3.contains(want), msg="曲线层必须声明第 6 档：\{man3}")
+  match @mpd.unpack(p3) {
+    Ok(back) =>
+      match back.doc.layers[0].adjust {
+        Some(a) => {
+          assert_eq(a.curve.length(), 3, msg="曲线点表必须随容器往返")
+          assert_eq(a.curve[1].1, 0.7, msg="控制点的 y 必须逐值往返")
+        }
+        None => abort("调整字段在容器往返里丢了")
+      }
+    Err(e) => abort("第 6 档容器应当能打开：\{e}")
+  }
+  // 第 6 档高于"老引擎"的支持范围时必须**拒绝打开**：用 `repack_with` 把声明
+  // 改成 99（模拟未来版本/老引擎视角），闸必须真的在比大小。
+  let tampered = repack_with(m, [("manifest.json", man3.replace_all(old=want, new="\"render_contract\":99"))])
+  match @mpd.unpack(tampered) {
+    Ok(_) => abort("声明 99 的容器必须拒绝打开（不静默错渲）")
+    Err(_) => ()
+  }
+}
+
+///|
 test "manifest 的 render_contract 按文档**实际用到的能力**声明（不是引擎上限）" {
   // 这个字段是**版本闸**：读到高于自身支持的版本一律拒绝打开（测试在下面
   // 用 99 模拟旧引擎）。写入端若一律写引擎上限，闸就失去分辨力——老引擎

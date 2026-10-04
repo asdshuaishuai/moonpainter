@@ -336,7 +336,7 @@ test "pick：只报「真的在那里画了东西」的层（与 paint_layer 同
   let d6 = @core.new_document("u-pick-reg", 100, 100)
   d6.layers.push(@core.default_layer("l1", "a", 0.0, 0.0, 40.0, 40.0))
   d6.layers.push(
-    { ..@core.default_layer("adj", "A", 0.0, 0.0, 100.0, 100.0), kind: @core.ShapeKind::Adjust, adjust: Some(@core.Adjust::{ op: @core.AdjustOp::Brightness, value: 0.2 }) },
+    { ..@core.default_layer("adj", "A", 0.0, 0.0, 100.0, 100.0), kind: @core.ShapeKind::Adjust, adjust: Some(@core.make_adjust(@core.AdjustOp::Brightness, 0.2)) },
   )
   assert_eq(@render.pick(d6, 10.0, 10.0), Some("l1"), msg="调整层无面，不该挡住下面的层")
   assert_true(@render.pick(d6, 90.0, 90.0) is None)

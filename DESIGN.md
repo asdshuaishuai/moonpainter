@@ -334,12 +334,43 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
   ④用到**仿制图章（克隆笔触）**的容器声明 `render_contract:4`：老引擎的 dab 只有
   `x/y/r/color/erase`，读不到 `clone/sdx/sdy` ⇒ 会把整笔克隆**当普通笔色**画上去
   （一块死色），而"污点被盖住了"看着还挺像成功，属静默错渲。
-  `required_render_contract` 取**所有层里的最高档**（毛边=2、多边形=3、克隆=4），
+  ⑤用到**色阶/曲线参数**（`op=levels`/`op=curves` 带 `levels`/`curve`）的容器声明
+  `render_contract:6`：老引擎的 `adjust_of` 读不出这两个字段，会把整层**丢掉**
+  （作用范围凭空少一层）或按 `value=0` 施加一个空操作，属静默错渲。
+  `required_render_contract` 取**所有层里的最高档**（毛边=2、多边形=3、克隆=4、
+  贝塞尔路径=5、色阶/曲线=6），
   不是"遇到第一档就 return"；**P5 调整层**做了**叠加式像素算子**（`add-adjust` 的
-  11 个算子；每个算子的可调数值**有取值范围**——brightness/contrast/saturation/
-  warm 是 -1..1，blur/sharpen/smooth/whiten/vignette 是 0..1，invert/grayscale
-  **没有数值**（渲染器不读 value，给了入口直接拒绝）；范围与清单是
-  `agent/session.mbt` 的 `adjust_spec` **一张表**，字典描述与错误提示都从它生成）。
+  13 个算子；每个算子的可调数值**有取值范围**——brightness/contrast/saturation/
+  warm 是 -1..1，blur/sharpen/smooth/whiten/vignette 是 0..1，invert/grayscale/
+  levels/curves **没有数值**（渲染器不读 value，给了入口直接拒绝）；范围是
+  `agent/session.mbt` 的 `adjust_bounds`、"读不读 value"是
+  `core.adjust_uses_value`、**哪个算子读哪些参数**是 `core.adjust_param_error`
+  （各自一处，字典描述与错误提示都从它们生成）。
+
+  **色阶/曲线（PLAN 七十）**：与上面那些"一个数字"的算子不同，这两族要**成组参数**。
+  纪律与实测：
+  ①`levels` 是五个数（`in_lo`/`in_hi`/`gamma`/`out_lo`/`out_hi`，各 0..1、gamma
+  0.01..100），`curve` 是 2..32 个控制点（x 严格递增）；两者在 `Adjust` 里是
+  **可选字段**（缺省 ⇒ canonical JSON 里整个字段都不写 ⇒ 老文档字节不变）；
+  ②**缺的参数按中性值补，并把生效后的值回显**：`query-layer` 报五个数 + `points`
+  文本 + `curve_sample`（**引擎算的 9 个采样点**）——报"字段名"不报值等于没报，
+  而预览若由前端自己插值，就会画出一条与渲染不符的线（渲染走 `render.curve_map`，
+  预览走同一个函数）；
+  ③**部分更新的粒度按语义定**：色阶**逐键**（`set-adjust <id> gamma=1.4` 只改这一格，
+  其余沿用当前值——"再抬一点 gamma"是最常用的动作），曲线**整表替换**（点表里
+  "第 3 个点"没有身份，逐点合并没有意义）；换算子到 levels/curves 而一个参数都不给
+  **入口拒绝**（那就是建一个什么都不干的层），人侧因此**显式铺一套中性值**再让人拖；
+  ④**算子的参数面必须互斥**：给 `op=brightness` 发 `in_lo=` 会被拒（"不吃色阶参数"），
+  给 `op=curves` 发色阶五键同理。这句话**只有一处**（`core.adjust_param_error`），
+  命令面（`agent/session.mbt` 的 `foreign_param_error` 把候选结构交给它问）与
+  容器读入端（`core/json.mbt` 的 `adjust_of`）共用——两边各写一句就会先烂一句；
+  ⑤**色阶按 RGB 逐通道**施加、三通道共用一张 256 项 LUT（整幅只算一次）、
+  **α 不动**；曲线用**单调三次（PCHIP / Fritsch–Carlson）**：控制点单调则输出单调、
+  **不过冲**（普通三次样条会把邻近亮度压出坑，"调完曲线反而脏了"），两端不要求
+  落在 (0,0)/(1,1)、区间外按端点值钳住（同 PS 的"曲线不到边"）；
+  ⑥`lint` 报**中性**色阶/中性曲线为"装了却什么都不干"（五个数都是身份值、控制点
+  全在对角线）——这是"入口拒绝 vs lint 兜住"的分工：中性层是合法文档（PS 的对话框
+  打开时也是中性的），只是没干活。
   **仿制图章（`clone`，去污点）的口径**（三处实现在 `render/scene.mbt` +
   `agent/session.mbt`，判据在 `render/clone_test.mbt`）：
   ①**取样源 = 本层之下那张合成缓冲**（画布坐标，含不透明白底）——不是"某个固定图层"，

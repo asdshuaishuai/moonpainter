@@ -417,6 +417,31 @@ pub fn selfcheck_cases() -> Array[SCase] {
       evidence: fn(rs) { sc_pre(sc_sha(rs[2])) + " → " + sc_pre(sc_sha(rs[4])) },
     },
     {
+      name: "色阶：gamma 真的改画面，中性色阶逐位不变",
+      steps: [
+        sc_s("new 20 20 uuid=sc-levels"),
+        sc_s("add-rect id=bg x=0 y=0 w=20 h=20 fill=#808080FF name=BG"),
+        sc_s("render 20"),
+        sc_s("add-adjust id=a1 op=levels gamma=2"),
+        sc_s("render 20"),
+        sc_s("add-adjust id=a2 op=levels in_lo=0 in_hi=1 gamma=1 out_lo=0 out_hi=1"),
+        sc_s("render 20"),
+      ],
+      // ①gamma=2 必须改画面；②再叠一层**中性**色阶必须逐位不变
+      // （恒等 LUT 就是 0..255，所以"什么都不干"是真的什么都不干）
+      check: fn(rs) {
+        sc_sha(rs[2]) != sc_sha(rs[4]) && sc_sha(rs[4]) == sc_sha(rs[6])
+      },
+      want: "gamma=2 后画面必须变；再叠中性色阶必须逐位不变",
+      evidence: fn(rs) {
+        sc_pre(sc_sha(rs[2])) +
+        " → " +
+        sc_pre(sc_sha(rs[4])) +
+        " → " +
+        sc_pre(sc_sha(rs[6]))
+      },
+    },
+    {
       name: "撤销/重做：画面真的退回去又回来",
       steps: [
         sc_s("new 20 20 uuid=sc-undo"),

@@ -393,8 +393,13 @@ pub fn parse_points_for(
 }
 
 ///|
-/// points 解析："x,y;x,y;…"（局部坐标）。
-pub fn parse_points(s : String) -> Result[Array[(Double, Double)], String] {
+/// 点表解析："x,y;x,y;…"（**一处实现**：多边形/线段顶点、路径锚点、曲线的
+/// 控制点都是同一个形态，只有报错里的称呼不同——`what` 就是那个称呼）。
+pub fn parse_pairs(
+  s : String,
+  prefix : String,
+  unit : String,
+) -> Result[Array[(Double, Double)], String] {
   let out : Array[(Double, Double)] = []
   for seg in s.split(";") {
     let xy : Array[String] = []
@@ -402,22 +407,28 @@ pub fn parse_points(s : String) -> Result[Array[(Double, Double)], String] {
       xy.push(p.to_owned())
     }
     if xy.length() != 2 {
-      return Err("points 顶点 \{seg} 应为 x,y 形态")
+      return Err("\{prefix} \{seg} 应为 x,y 形态")
     }
     let x = match to_d(xy[0]) {
       Some(v) => v
-      None => return Err("points 顶点 \{xy[0]} 不是数字")
+      None => return Err("\{prefix} \{xy[0]} 不是数字")
     }
     let y = match to_d(xy[1]) {
       Some(v) => v
-      None => return Err("points 顶点 \{xy[1]} 不是数字")
+      None => return Err("\{prefix} \{xy[1]} 不是数字")
     }
     out.push((x, y))
   }
   if out.length() < 2 {
-    return Err("points 至少 2 个顶点")
+    return Err("\{prefix} 至少 2 个\{unit}")
   }
   Ok(out)
+}
+
+///|
+/// points 解析（局部坐标）：多边形的顶点、线段的端点、路径的锚点都走它。
+pub fn parse_points(s : String) -> Result[Array[(Double, Double)], String] {
+  parse_pairs(s, "points 顶点", "顶点")
 }
 
 ///|
@@ -1658,22 +1669,54 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
     if l.kind is @core.ShapeKind::Adjust {
       match l.adjust {
         Some(a) => {
-          let (has_value, lo, hi) = adjust_spec(a.op)
+          let has_value = @core.adjust_uses_value(a.op)
           let name = @core.adjust_op_name(a.op)
-          if !has_value {
+          // "装了什么参数、是不是白装"由 core 的 `adjust_param_error` 一处判
+          // （与容器读入端同一句话）；这里只说 lint 的那两句人话。
+          // 合法性优先：参数本身就不合法时只说那一句（"五个数都是中性值"这类
+          // 判断必须建立在"五个数都在"之上，否则同一条违规会报出两句自相矛盾的话）
+          let param_ok = match @core.adjust_param_error(a) {
+            Some(e) => {
+              v.push("P2 style 调整层 \{l.id} 的参数不合法：\{e}")
+              false
+            }
+            None => true
+          }
+          if !param_ok {
+            // 参数都不合法 ⇒ 下面那些"装了却什么都不干"的话一句都不说
+          } else if !has_value {
             if a.value != 0.0 {
               v.push(
                 "P2 noop 调整层 \{l.id} 的 \{name} 不接受数值（渲染器不读 value），却存着 value=\{@core.fmt_num(a.value)}（纯粹改变指纹）",
               )
+            } else if a.op is @core.AdjustOp::Levels {
+              match a.levels {
+                Some(lv) =>
+                  if @core.levels_is_identity(lv) {
+                    v.push(
+                      "P2 noop 调整层 \{l.id} 是色阶但五个参数都是中性值（画面逐位不变；给个非中性参数或删掉这层）",
+                    )
+                  }
+                None => ()
+              }
+            } else if a.op is @core.AdjustOp::Curves {
+              if @core.curve_is_identity(a.curve) {
+                v.push(
+                  "P2 noop 调整层 \{l.id} 是曲线但控制点全在对角线上（画面逐位不变；给个非中性参数或删掉这层）",
+                )
+              }
             }
-          } else if a.value < lo || a.value > hi {
-            v.push(
-              "P2 style 调整层 \{l.id} 的 value=\{@core.fmt_num(a.value)} 超出 \{name} 的范围 [\{@core.fmt_num(lo)}..\{@core.fmt_num(hi)}]",
-            )
-          } else if a.value == 0.0 {
-            v.push(
-              "P2 noop 调整层 \{l.id} 是 \{name} 但 value=0（画面逐位不变；要么给个非零数值，要么删掉这层）",
-            )
+          } else {
+            let (lo, hi) = adjust_bounds(a.op)
+            if a.value < lo || a.value > hi {
+              v.push(
+                "P2 style 调整层 \{l.id} 的 value=\{@core.fmt_num(a.value)} 超出 \{name} 的范围 [\{@core.fmt_num(lo)}..\{@core.fmt_num(hi)}]",
+              )
+            } else if a.value == 0.0 {
+              v.push(
+                "P2 noop 调整层 \{l.id} 是 \{name} 但 value=0（画面逐位不变；要么给个非零数值，要么删掉这层）",
+              )
+            }
           }
         }
         None => ()

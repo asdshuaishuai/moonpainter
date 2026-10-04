@@ -52,6 +52,13 @@ KEY_FIELD = {
     "b64": "asset_hash",  # add-image / set-image 的像素载荷
     "op": "adjust",  # add-adjust / set-adjust 的算子
     "value": "adjust",
+    # 色阶/曲线参数（levels/curve 都是 `adjust` 这个字段的内容：
+    # `points` 在调整层上写的是 `adjust.curve`，在图形层上是 `points` 字段）
+    "in_lo": "adjust",
+    "in_hi": "adjust",
+    "gamma": "adjust",
+    "out_lo": "adjust",
+    "out_hi": "adjust",
     # 蒙版参数（mask_keys）：改的是 `mask` 这个字段本身
     "kind": "mask",
     "feather": "mask",
