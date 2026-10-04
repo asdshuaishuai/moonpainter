@@ -9,6 +9,13 @@
 /// "AI 替人做那些一步一步的手工操作"，所以每条操作都要能被看见、被改、被撤。
 
 let g_sel : Ref[String] = Ref("")
+// 「上一个选中的层」：布尔运算要**两个**操作数，而画布上只能选中一个。
+// 用一个三格的小状态机在 `refresh_props` 这一处更新（选中处有十几处，
+// 每处都记一遍必然漏）：seen = 上次刷新时看到的选中，prev = 它之前那个。
+// ⚠️ 三格不是两格：`refresh_props` 会被没有改选中的动作反复调用（改数值、
+// 撤销……），只有"看得见的选中真的换了"才允许滚动。
+let g_sel_seen : Ref[String] = Ref("")
+let g_sel_prev : Ref[String] = Ref("")
 let g_ready : Ref[Bool] = Ref(false)
 /// 当前画笔层 id（首个 brush 使用时惰性创建/绑定）
 let g_paint : Ref[String] = Ref("")
@@ -963,7 +970,12 @@ fn move_gesture_refusal(l : Json) -> String {
 /// 原先它长在 `refresh_props` 里、只有浏览器点开某个图层才生成，测试拿不到——
 /// 与 `layers_html` 同一次提取：能测的那半要测得到（`build_demo.sh#html-wiring`
 /// 那种源码级 grep 只能证明"写过"，证明不了"拼出来的 HTML 里有"）。
-fn props_html(l : Json, roots : Array[Json]) -> String {
+fn props_html(
+  l : Json,
+  roots : Array[Json],
+  prev_id : String,
+  prev_name : String,
+) -> String {
   let sb = StringBuilder()
   let gid = json_get_str(l, "id")
   let gname = json_get_str(l, "name")
@@ -1209,11 +1221,42 @@ fn props_html(l : Json, roots : Array[Json]) -> String {
     sb.write_string("</select>")
   }
   sb.write_string("</div>")
+  // 布尔运算（④ Stage B）：A = 选中的层，B = **上一个**选中的层。
+  // 为什么用"上一个"而不是两个下拉：画布上最自然的动作序列就是
+  // 「点 B → 点 A → 点并集」；PS/AI 里靠 Shift 多选，这里用最近两次选中代替。
+  // 引擎的拒绝原话会摆到状态栏（`do_ui_cmd`），所以"没有面""在组里"
+  // 这些都不需要在面板里再判一遍——判两处必然先烂。
+  sb.write_string("<div class='row'><span class='k'>布尔</span>")
+  if prev_id == "" || prev_id == gid {
+    sb.write_string("<span class='ns'>再选一个形状（先点 B 再点 A）就能并/差/交/异或</span>")
+  } else {
+    sb.write_string("<span class='ns'>A=")
+    sb.write_string(gname)
+    sb.write_string(" B=")
+    sb.write_string(prev_name)
+    sb.write_string("</span>")
+    for pair in [("union", "并 ∪"), ("subtract", "差 A−B"), ("intersect", "交 ∩"), ("xor", "异或 ⊕")] {
+      sb.write_string("<button class='ghost' onclick='globalThis.__bool_op(\"")
+      sb.write_string(pair.0)
+      sb.write_string("\",\"")
+      sb.write_string(gid)
+      sb.write_string("\",\"")
+      sb.write_string(prev_id)
+      sb.write_string("\")'>")
+      sb.write_string(pair.1)
+      sb.write_string("</button>")
+    }
+  }
+  sb.write_string("</div>")
   sb.to_string()
 }
 
 fn refresh_props() -> Unit {
   let id = g_sel.val
+  if g_sel_seen.val != id {
+    g_sel_prev.val = g_sel_seen.val
+    g_sel_seen.val = id
+  }
   if id == "" {
     js_update_props("<div class='ns'>点击图层查看属性</div>")
     return
@@ -1232,7 +1275,16 @@ fn refresh_props() -> Unit {
     Some(Json::Array(a)) => a
     _ => []
   }
-  js_update_props(props_html(l, roots))
+  // 上一个选中的层叫什么（面板上要写清 A 是哪个、B 是哪个，别让人猜）
+  let prev_name = if g_sel_prev.val == "" {
+    ""
+  } else {
+    match json_get(eng("query-layer \{g_sel_prev.val}"), "layer") {
+      Some(x) => json_get_str(x, "name")
+      None => ""
+    }
+  }
+  js_update_props(props_html(l, roots, g_sel_prev.val, prev_name))
 }
 
 ///|
@@ -1313,6 +1365,30 @@ fn do_reorder(id : String, where_ : String) -> Unit {
 /// 引擎的四条分组命令（`group`/`ungroup`/`group-add`/`group-remove`）此前只有
 /// AI 与命令行走得到，前端一个分组动作都没有——README 因此写过一句假的
 /// "人类前端可直接用"；这一轮把它变成真的。
+///|
+/// 人类侧「布尔运算」：`__bool_op(op, a, b)` → 引擎 `bool-op`。
+/// 成功后**选中结果层**（结果替换了两个操作数，继续选中它们已经没有意义）——
+/// 结果 id 从回包里读（层 id 由引擎发号，前端不许猜）。
+fn do_bool_op(op : String, a_id : String, b_id : String) -> Unit {
+  let j = eng("bool-op op=\{op} a=\{a_id} b=\{b_id}")
+  if !eng_ok(j) {
+    ui_engine_error(j)
+    return
+  }
+  let rid = eng_s(j, "id")
+  if rid != "" {
+    g_sel.val = rid
+  }
+  // 当 B 用的那个层已经被结果替换掉了：不清掉它，面板会拿一个不存在的层当 B
+  g_sel_prev.val = ""
+  eng_render(800)
+  refresh_ui()
+  js_status_bar(
+    "布尔 \{op}：\{eng_s(j, "islands")} 块 / \{eng_s(j, "holes")} 个洞——两个操作数已被结果替换",
+  )
+}
+
+///|
 fn do_group_sel(id : String) -> Unit {
   let j = eng("list-layers")
   let layers = match json_get(j, "layers") {
@@ -2835,6 +2911,7 @@ pub fn register_globals() -> Unit {
   js_reg2s("__mask_ready", fn(kind : String, rect : String) { do_mask_ready(kind, rect) })
   js_reg1("__mask_invert", fn(id : String) { do_mask_invert(id) })
   js_reg1("__mask_clear", fn(id : String) { do_mask_clear(id) })
+  js_reg3s("__bool_op", fn(op : String, a : String, b : String) { do_bool_op(op, a, b) })
   js_reg1("__group_sel", fn(id : String) { do_group_sel(id) })
   js_reg1("__ungroup_sel", fn(id : String) { do_ungroup_sel(id) })
   js_reg2s("__reparent", fn(id : String, target : String) { do_reparent(id, target) })

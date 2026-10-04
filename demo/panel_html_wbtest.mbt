@@ -44,7 +44,7 @@ test "属性面板：组给「解组」、非组给「编组」+「父级」下�
   let g = parse_json_safe(
     "{\"id\":\"g1\",\"name\":\"组一\",\"kind\":\"group\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"opacity\",\"children\"]}",
   )
-  let hg = props_html(g, roots)
+  let hg = props_html(g, roots, "", "")
   assert_true(has_sub(hg, "globalThis.__ungroup_sel(\"g1\")"), msg=hg)
   assert_true(lacks_sub(hg, "__group_sel"), msg="组不该再有「编组」按钮：\{hg}")
   assert_true(lacks_sub(hg, "__reparent"), msg="组没有父级下拉（不支持嵌套编组）：\{hg}")
@@ -56,7 +56,7 @@ test "属性面板：组给「解组」、非组给「编组」+「父级」下�
   let r = parse_json_safe(
     "{\"id\":\"l1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"resize\",\"opacity\",\"rotate\",\"flip\",\"mask\"]}",
   )
-  let hr = props_html(r, roots)
+  let hr = props_html(r, roots, "", "")
   assert_true(has_sub(hr, "globalThis.__group_sel(\"l1\")"), msg=hr)
   assert_true(has_sub(hr, "globalThis.__reparent(\"l1\",this.value)"), msg=hr)
   assert_true(has_sub(hr, "<option value='' selected>根级</option>"), msg=hr)
@@ -73,7 +73,7 @@ test "属性面板：父级下拉如实回显当前所在组，嵌套时也显�
   let c = parse_json_safe(
     "{\"id\":\"c1\",\"name\":\"c1\",\"kind\":\"rect\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\"}",
   )
-  let hc = props_html(c, roots)
+  let hc = props_html(c, roots, "", "")
   assert_true(has_sub(hc, "<option value='g1' selected>g1 · 组一</option>"), msg=hc)
   assert_true(lacks_sub(hc, "<option value='' selected>"), msg="在组里就不该还把「根级」标成选中：\{hc}")
   // 嵌套层（手改容器造的）：父级不在根级组清单里，也要显示出来并标"嵌套"
@@ -87,7 +87,7 @@ test "属性面板：父级下拉如实回显当前所在组，嵌套时也显�
   let n = parse_json_safe(
     "{\"id\":\"n1\",\"name\":\"n1\",\"kind\":\"rect\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\"}",
   )
-  let hn = props_html(n, nroots)
+  let hn = props_html(n, nroots, "", "")
   assert_true(has_sub(hn, "<option value='g2' selected>g2（嵌套）</option>"), msg=hn)
 }
 
@@ -120,7 +120,7 @@ test "属性面板：可改的属性都有入口（改名/坐标/尺寸/旋转/�
   let r = parse_json_safe(
     "{\"id\":\"l1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":10,\"y\":20,\"w\":30,\"h\":40,\"rot\":15,\"flip_h\":true,\"flip_v\":false,\"opacity\":1,\"blend\":\"normal\",\"tags\":[\"hero\",\"主体\"],\"caps\":[\"move\",\"resize\",\"opacity\",\"rotate\",\"flip\",\"mask\"]}",
   )
-  let h = props_html(r, roots)
+  let h = props_html(r, roots, "", "")
   for name in [
     "__rename", "__setx", "__sety", "__setw", "__seth", "__rotate", "__flip", "__tag_add",
   ] {
@@ -148,7 +148,7 @@ test "属性面板：文字层给内容+字号，调整层给算子+数值（各
   let t = parse_json_safe(
     "{\"id\":\"t1\",\"name\":\"标题\",\"kind\":\"text\",\"x\":0,\"y\":0,\"w\":40,\"h\":16,\"text\":\"你好\",\"font_size\":16,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"opacity\",\"mask\",\"text\",\"font_size\"]}",
   )
-  let ht = props_html(t, roots)
+  let ht = props_html(t, roots, "", "")
   assert_true(has_sub(ht, "globalThis.__text_set(\"t1\",this.value)"), msg=ht)
   assert_true(has_sub(ht, "globalThis.__text_font(\"t1\",this.value)"), msg=ht)
   assert_true(has_sub(ht, "value='你好'"), msg="文字内容没回显：\{ht}")
@@ -165,7 +165,7 @@ test "属性面板：文字层给内容+字号，调整层给算子+数值（各
   let a = parse_json_safe(
     "{\"id\":\"a1\",\"name\":\"调亮\",\"kind\":\"adjust\",\"adjust\":{\"op\":\"brightness\",\"value\":0.25},\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"opacity\",\"mask\",\"adjust\"]}",
   )
-  let ha = props_html(a, roots)
+  let ha = props_html(a, roots, "", "")
   assert_true(has_sub(ha, "globalThis.__adj_op(\"a1\",this.value)"), msg=ha)
   assert_true(has_sub(ha, "globalThis.__adj_val(\"a1\",this.value)"), msg=ha)
   assert_true(has_sub(ha, "value='brightness'"), msg=ha)
@@ -189,7 +189,7 @@ test "HTML 转义：用户输入里的引号/尖括号不能把属性撑破" {
   let evil = parse_json_safe(
     "{\"id\":\"l1\",\"name\":\"a'b<c>&d\",\"kind\":\"rect\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"tags\":[\"x'y\"]}",
   )
-  let h = props_html(evil, roots)
+  let h = props_html(evil, roots, "", "")
   // 正文里的 `<c>` 不转义会被浏览器当成标签（名字后半截消失）
   assert_true(lacks_sub(h, "<c>"), msg="尖括号没转义：\{h}")
   assert_true(lacks_sub(h, "'d"), msg="单引号没转义（属性会被提前闭合）：\{h}")
@@ -236,12 +236,12 @@ test "换图：文件选择走「原地换掉」还是「导入新层」由状�
   let img = parse_json_safe(
     "{\"id\":\"i1\",\"name\":\"照片\",\"kind\":\"image\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"asset\":\"deadbeef\",\"caps\":[\"move\",\"resize\",\"opacity\",\"rotate\",\"flip\",\"mask\",\"asset\"]}",
   )
-  let hi = props_html(img, roots)
+  let hi = props_html(img, roots, "", "")
   assert_true(has_sub(hi, "globalThis.__img_swap(\"i1\");document.getElementById(\"file-in\").click()"), msg=hi)
   let rect = parse_json_safe(
     "{\"id\":\"l1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"resize\",\"opacity\",\"rotate\",\"flip\",\"mask\"]}",
   )
-  assert_true(lacks_sub(props_html(rect, roots), "__img_swap"), msg="矩形上不该有「换图」")
+  assert_true(lacks_sub(props_html(rect, roots, "", ""), "__img_swap"), msg="矩形上不该有「换图」")
 }
 
 ///|
@@ -250,7 +250,7 @@ test "属性面板：笔触层不发 W/H 输入框（改了画面不动 = 静默
   let r = parse_json_safe(
     "{\"id\":\"p1\",\"name\":\"笔触\",\"kind\":\"raster\",\"x\":0,\"y\":0,\"w\":320,\"h\":240,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"opacity\",\"mask\"]}",
   )
-  let h = props_html(r, roots)
+  let h = props_html(r, roots, "", "")
   // 反控：不发那两个「改了不生效」的控件
   assert_true(lacks_sub(h, "__setw("), msg="笔触层不该有 W 输入框：\{h}")
   assert_true(lacks_sub(h, "__seth("), msg="笔触层不该有 H 输入框：\{h}")
@@ -264,7 +264,7 @@ test "属性面板：笔触层不发 W/H 输入框（改了画面不动 = 静默
   let rr = parse_json_safe(
     "{\"id\":\"r1\",\"name\":\"矩形\",\"kind\":\"rect\",\"x\":1,\"y\":2,\"w\":30,\"h\":40,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"resize\",\"opacity\",\"rotate\",\"flip\",\"mask\"]}",
   )
-  let hr = props_html(rr, roots)
+  let hr = props_html(rr, roots, "", "")
   assert_true(has_sub(hr, "globalThis.__setw("), msg=hr)
   assert_true(has_sub(hr, "globalThis.__seth("), msg=hr)
 }
@@ -278,7 +278,7 @@ test "属性面板：引擎没报 caps 时一个能力控件都不画，并说�
   let r = parse_json_safe(
     "{\"id\":\"z1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":10,\"y\":20,\"w\":30,\"h\":40,\"opacity\":1,\"blend\":\"normal\"}",
   )
-  let h = props_html(r, roots)
+  let h = props_html(r, roots, "", "")
   for name in [
     "__setx", "__sety", "__setw", "__seth", "__rotate", "__flip", "__mask_invert", "__op",
   ] {
@@ -334,13 +334,36 @@ test "属性面板：旧引擎的 caps 里没有 opacity ⇒ 不画 α 滑杆、
   let l = parse_json_safe(
     "{\"id\":\"a1\",\"name\":\"调亮\",\"kind\":\"adjust\",\"adjust\":{\"op\":\"brightness\",\"value\":0.25},\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"mask\",\"adjust\"]}",
   )
-  let h = props_html(l, panel_layers())
+  let h = props_html(l, panel_layers(), "", "")
   assert_true(lacks_sub(h, "__op("), msg="caps 说没有 opacity 就不该画 α 滑杆：\{h}")
   assert_true(has_sub(h, "强度用「数值」"), msg="少画滑杆也要说清替代：\{h}")
   // 正控：同一份 JSON 只要 caps 里有 opacity，滑杆就在（判据两头都咬得住）
   let l2 = parse_json_safe(
     "{\"id\":\"a1\",\"name\":\"调亮\",\"kind\":\"adjust\",\"adjust\":{\"op\":\"brightness\",\"value\":0.25},\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"opacity\",\"mask\",\"adjust\"]}",
   )
-  let h2 = props_html(l2, panel_layers())
+  let h2 = props_html(l2, panel_layers(), "", "")
   assert_true(has_sub(h2, "globalThis.__op(\"a1\""), msg="有 opacity 就必须画：\{h2}")
+}
+
+///|
+test "属性面板：布尔运算段 —— 有「上一个选中的层」时给四个按钮，且 A/B 写清是哪个" {
+  let roots = panel_layers()
+  let r = parse_json_safe(
+    "{\"id\":\"l1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"resize\",\"opacity\"]}",
+  )
+  let h = props_html(r, roots, "g1", "组一")
+  // 四个操作各一个按钮，且参数是 (op, A, B) —— A 是当前层，B 是上一个选中的层
+  assert_true(has_sub(h, "globalThis.__bool_op(\"union\",\"l1\",\"g1\")"), msg=h)
+  assert_true(has_sub(h, "globalThis.__bool_op(\"subtract\",\"l1\",\"g1\")"), msg=h)
+  assert_true(has_sub(h, "globalThis.__bool_op(\"intersect\",\"l1\",\"g1\")"), msg=h)
+  assert_true(has_sub(h, "globalThis.__bool_op(\"xor\",\"l1\",\"g1\")"), msg=h)
+  // A/B 的名字必须在面板上写出来（不许让人猜哪个是 A）
+  assert_true(has_sub(h, "A=底 B=组一"), msg=h)
+  // 没有"上一个"时不许画出按钮（点了必然报错 = 静默失败的入口）
+  let h2 = props_html(r, roots, "", "")
+  assert_true(lacks_sub(h2, "__bool_op"), msg=h2)
+  assert_true(has_sub(h2, "再选一个形状"), msg=h2)
+  // 上一个就是自己时也不画（同层运算引擎会拒，面板不该给一个必错的按钮）
+  let h3 = props_html(r, roots, "l1", "底")
+  assert_true(lacks_sub(h3, "__bool_op"), msg=h3)
 }

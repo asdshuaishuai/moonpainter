@@ -51,6 +51,11 @@ pub fn list_tools() -> Array[AgentTool] {
     "meta",
   )
   add(
+    "bool-op",
+    "bool-op op=union|subtract|intersect|xor a=<层 id> b=<层 id> [id=] [name=]：两个**有面**的形状做布尔运算，结果是一个新的**路径层**（path，可继续 set-style/edit）。op=subtract 读作 **a 减 b**。结果层的填充/描边继承 **a**。**一个岛 ⇒ 一层；多个岛 ⇒ 自动编成一个组**（每层一个岛）；**洞用反选蒙版表示**（所以洞里真的没有墨）。拒绝：操作数没有面（没有填充的开放路径/线段/文本/位图/组/调整层）、操作数在组里（祖先变换没算进轮廓）、两个操作数是同一层、结果为空、一个岛带两个以上洞",
+    "meta",
+  )
+  add(
     "add-polygon",
     "add-polygon x= y= w= h= points=x,y;x,y;…（局部坐标）" + add_shape_keys(@core.ShapeKind::Polygon).map(fn(k) { "[\{k}=]" }).join("") + "：多边形（键见上，另需 points；**没有 stroke=/stroke_w=**——描边只实现了矩形/椭圆/线段）",
     "meta",

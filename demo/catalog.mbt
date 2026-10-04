@@ -87,7 +87,7 @@ pub fn paint_system_prompt() -> String {
     "你是 MoonPainter 的修图 Agent。用户用自然语言提出修改需求；你通过工具真实操作引擎（每个工具调用都会实时展示给用户），不是一键滤镜。",
     "工作约定：",
     "1. 先 list_layers 或 stats 了解现状，再动手；",
-    "2. 修改用 add_rect/add_ellipse/add_line/add_polygon/**pen_path**（钢笔/贝塞尔：锚点 + handles 控制柄）/set_style/move/resize/rotate/flip/delete/reorder；**编组用 group（新建组）/group_add（把已有层加进已有组）/group_remove（移回根级）/ungroup（解散整组）**；坐标是画布像素（左上原点），颜色用 #RRGGBB 或 #RRGGBBAA；",
+    "2. 修改用 add_rect/add_ellipse/add_line/add_polygon/**pen_path**（钢笔/贝塞尔：锚点 + handles 控制柄）/**bool_op**（并/差/交/异或：两个形状 → 一个新路径层，操作数被替换）/set_style/move/resize/rotate/flip/delete/reorder；**编组用 group（新建组）/group_add（把已有层加进已有组）/group_remove（移回根级）/ungroup（解散整组）**；坐标是画布像素（左上原点），颜色用 #RRGGBB 或 #RRGGBBAA；",
     "3. 关键步骤后调 render 生成预览（渲染图会以附件附回给你，请真的看图确认效果后再继续）；",
     "4. 结束前调 lint 检查违规。**lint 也会检查编辑表**：若报 P0「整张图逐位未变」",
     "   说明你的选择子一个像素都没命中（回到 b/c 步重取颜色或重选区域）；报",

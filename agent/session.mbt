@@ -269,6 +269,7 @@ pub fn exec(s : Session, line : String) -> String {
     "add-polygon" => cmd_add_shape(s, tokens, @core.ShapeKind::Polygon, "add-polygon")
     "add-line" => cmd_add_shape(s, tokens, @core.ShapeKind::Line, "add-line")
     "add-path" => cmd_add_shape(s, tokens, @core.ShapeKind::Path, "add-path")
+    "bool-op" => cmd_bool_op(s, tokens)
     "add-image" => cmd_add_image(s, tokens)
     "set-image" => cmd_set_image(s, tokens)
     "set-style" => cmd_set_style(s, tokens)

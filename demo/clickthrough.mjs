@@ -758,6 +758,67 @@ check(
   await globalThis.__tool('rect');
 }
 
+
+// ⑫b3 布尔运算（④ Stage B，人侧）：面板四个按钮走的是引擎 `bool-op`。
+// 判据落在**引擎里的层真的被结果替换、画面真的是那个集合**——不是"按钮点了不报错"。
+// 这个块自己开一张新画布：坐标要能算准（并集的盒子、洞的位置都是具体数字），
+// 而共享画布上别处的图层会让"这里应该是白纸"变成一句假话。
+{
+  el('cw').value = '300';
+  el('ch').value = '300';
+  await globalThis.__new('');
+  const mk = (id, x, y, color) => {
+    globalThis.__headless_exec(`add-rect id=${id} x=${x} y=${y} w=60 h=60 fill=${color}`);
+    return id;
+  };
+  const col = (x, y) => exec(`probe x=${x} y=${y}`).color;
+  const ids = () => layers().map((l) => l.id);
+  const A = mk('ba', 20, 20, '#FF0000FF');
+  const B = mk('bb', 60, 60, '#0000FFFF');
+  // 人侧的动作序列：先点 B（它成为"上一个选中的层"），再点 A（当前层 = A）
+  await globalThis.__sel(B);
+  await globalThis.__sel(A);
+  const before = ids();
+  await globalThis.__bool_op('union', A, B);
+  const after = ids();
+  const fresh = after.filter((i) => !before.includes(i));
+  check(
+    '布尔：两个操作数被结果替换（a/b 两层消失，多出恰好一个新层）',
+    !after.includes(A) && !after.includes(B) && fresh.length === 1,
+    `${JSON.stringify(before)} → ${JSON.stringify(after)}`,
+  );
+  const res = fresh.length === 1 ? layer(fresh[0]) : {};
+  check('布尔：结果层是 path（引擎认它是路径，不是矩形）', res.kind === 'path', JSON.stringify(res.kind));
+  check(
+    '布尔：结果盒子 = 两个形状的并集（并集是 20,20..120,120 ⇒ 100×100）',
+    res.w === 100 && res.h === 100 && res.x === 20 && res.y === 20,
+    `x=${res.x} y=${res.y} w=${res.w} h=${res.h}`,
+  );
+  check('布尔：并集里 A 独有的那角有墨（颜色继承 A）', col(30, 30) === '#FF0000FF', col(30, 30));
+  check(
+    '布尔：并集里 B 独有的那角也有墨（轮廓真的走过了两条边界）',
+    col(110, 110) === '#FF0000FF',
+    col(110, 110),
+  );
+  check('布尔：并集之外还是白纸', col(200, 200) === '#FFFFFFFF', col(200, 200));
+  // 差集挖洞：**洞里真的没墨**（反选蒙版在干活；操作数已被替换，下面没有残留层）
+  const C = mk('bc', 200, 20, '#FF0000FF');
+  const D = mk('bd', 220, 40, '#0000FFFF');
+  await globalThis.__sel(D);
+  await globalThis.__sel(C);
+  const before2 = ids();
+  await globalThis.__bool_op('subtract', C, D);
+  const after2 = ids();
+  check(
+    '布尔：差集同样替换操作数（b 层不留在洞里）',
+    !after2.includes(C) && !after2.includes(D) && after2.length === before2.length - 1,
+    `${JSON.stringify(before2)} → ${JSON.stringify(after2)}`,
+  );
+  check('布尔：差集挖出的洞里没有墨（反选蒙版）', col(250, 70) === '#FFFFFFFF', col(250, 70));
+  check('布尔：差集的环上仍有墨', col(210, 70) === '#FF0000FF', col(210, 70));
+  await globalThis.__sel('');
+}
+
 // ⑫c 步骤历史面板（③ 每步可见、可跳回）：面板 HTML 是**纯函数**算出来的，
 // 这里既查"面板列出来的步骤与引擎的 history 一致"，也查"点一行真的跳回去"。
 {
@@ -1031,7 +1092,7 @@ check(
 // ⑯ 覆盖清单（机器对账用，格式由 `build_demo.sh#html-wiring` 解析）：
 // driver 走不到的处理器必须在这儿**写明原因**，否则"没覆盖"会静默变成"覆盖了"。
 /* coverage:begin
-driven: __selfcheck __dbg_lint __dbg_edits __dbg_census __dbg_probe __dbg_help __dbg_tools __dbg_schema __dbg_preview __mvsl_set __mvsl_show __mvsl_impact __mvsl_assert __mvsl_clear __param_list __param_set __param_del __cmd __build_badge __save __export __run __sel __vis __front __back __setx __sety __setw __seth __move_delta __rotate __flip __op __del __undo __redo __rename __tag_add __tag_del __reparent __ungroup_sel __text_at __text_add __text_set __text_font __mask_ready __mask_invert __mask_clear __adj_op __adj_val __af __stroke __new __set_canvas __crop_ready __crop_apply __crop_cancel __zoom __refresh __stats __optip __toggle_ai __tool __poly_click __poly_finish __poly_cancel __shape_ready __group_sel __pick_at __clone_src __goto __pen_handle
+driven: __selfcheck __dbg_lint __dbg_edits __dbg_census __dbg_probe __dbg_help __dbg_tools __dbg_schema __dbg_preview __mvsl_set __mvsl_show __mvsl_impact __mvsl_assert __mvsl_clear __param_list __param_set __param_del __cmd __build_badge __save __export __run __sel __vis __front __back __setx __sety __setw __seth __move_delta __rotate __flip __op __del __undo __redo __rename __tag_add __tag_del __reparent __ungroup_sel __text_at __text_add __text_set __text_font __mask_ready __mask_invert __mask_clear __adj_op __adj_val __af __stroke __new __set_canvas __crop_ready __crop_apply __crop_cancel __zoom __refresh __stats __optip __toggle_ai __tool __poly_click __poly_finish __poly_cancel __shape_ready __group_sel __pick_at __clone_src __goto __pen_handle __bool_op
 browser-only: __drop=拒绝路径已被 driver 走过（没字节时明说）；成功路径要真的 File+Image 解码，壳里造一个等于把"读文件"假装测了; __file_sel=同上（driver 走的是"没选到文件"那条）; __mpd_sel=要真的 .mpd 文件字节，壳里没有 FileReader; __img_swap=换图必须先有一张真图进来
 coverage:end */
 

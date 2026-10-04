@@ -47,7 +47,7 @@ macOS 原生类 Photoshop 编辑器。对本工程最有价值的三块遗产：
 
 ```
 宿主    cli（native 行协议 + 文件 FFI + 原子落盘）
-交互    agent（68 命令 · vision 闸 · undo/redo · 步骤历史 history/goto · P0–P2 lint · MVSL 闭环 · 工具字典）
+交互    agent（69 命令 · vision 闸 · undo/redo · 步骤历史 history/goto · P0–P2 lint · MVSL 闭环 · 工具字典）
 容器    mpd（pack/unpack · manifest/params/agent/mvsl · 指纹对账 · 限额 · 预览生成）
 渲染    render（RGBA 画布 · 2×2 子采样 AA · W3C 混合 · 旋转 · 取景 · pick · stats）
 核心    core（IR 层树 · canonical JSON 双向 · 指纹 · 层定位原语 · MVSL 编辑表 IR）
@@ -282,15 +282,41 @@ manifest 的 `mvsl` 版本块 pin 住四个独立版本号（`render_contract` /
   **空断言**即保护断言的选择子零命中（P1——恒真，比"被违反"更坏，因为它给的是虚假的安心）。
   空编辑表是合法状态，不报条目——lint 不该对「我还没改任何东西」报警。
 
-## 6. 命令集（68 个；字典 = agent/tools.mbt 单一事实源）
+## 6. 命令集（69 个；字典 = agent/tools.mbt 单一事实源）
 
 会话：`session-open` `list-tools` `help`；文档：`new` `set-canvas` `list-layers` `query-layer` `lint`；
-绘制：`add-rect/ellipse/polygon/line` `add-image`（b64）`set-image`（原地换图，只换像素）`set-style` `move` `resize` `rotate` `rename` `tag` `delete` `visible` `reorder` `group` `ungroup` `group-add` `group-remove`（成员增删）；
+绘制：`add-rect/ellipse/polygon/line` `add-path` `path-preview` `bool-op`（两个形状 → 一个新路径层）`add-image`（b64）`set-image`（原地换图，只换像素）`set-style` `move` `resize` `rotate` `rename` `tag` `delete` `visible` `reorder` `group` `ungroup` `group-add` `group-remove`（成员增删）；
 元参数：`list-params` `set-param` `remove-param`；视觉：`render` `pick` `stats` `census` `probe`；
 修图：`add-paint` `brush` `erase` `crop` `sample` `add-adjust` `set-adjust` `add-mask` `set-mask` `remove-mask`；
 MVSL：`mvsl-set` `mvsl-show` `mvsl-clear` `select-preview` `mvsl-impact` `mvsl-assert`；
 历史/容器：`fingerprint` `inspect` `edits` `undo` `redo` `save-mpd-b64` `open-mpd-b64`；
 cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
+
+### 6.1 布尔运算的诚实边界（`core/bool.mbt` + `agent/bool_cmds.mbt`）
+
+- **两个闭合环进、一组环路出**：`boolean_loops(op, a, b)` 把两条边按交点切成子边、
+  按"中点在不在对方内部"分类、按操作挑边（并=两边在外、交=两边在内、差=A 在外 + B 在内**反向**、
+  异或=全留且在内反向）、再按端点串成环路。**正面积的环是岛、负面积的是洞**——
+  洞不是另写的分支，是"反向"自然得到的绕向。
+- **路口按角序挑下一条边**（`rank_less`，纯叉积/点积比较，core 里没有三角函数）。
+  这一条不是审美：两块只在一个点相接（**捏合点**）时有两条候选边，随手取一条会拼成
+  **8 字**、其中一块走成反向 ⇒ 被当成洞挖掉，而**环数与净面积照样对**。
+  判据因此不只对账环数/净面积，还断言**每一块都是正面积**（xor 的两块各 1200）。
+- **退化按"没有面积交"处理**：包围盒不相交、环逐字相同、共线重叠但**不真的叠在一起**
+  （两条边贴合）⇒ 直接给 `no_clip` 的结果，**不走裁剪**。为什么必须显式接住"贴合"：
+  贴合边的中点**正好落在对方边界上**，"在不在内部"没有稳定答案（奇偶判定的边界行为），
+  分类会随浮点抖动而变 ⇒ 环路接不上或接出零面积假环。
+- **共线重叠且真的叠在一起**（部分重合）⇒ **明确报错**，不猜：真裁剪器要合并重叠边，
+  是另一个量级（错误原话里指路"挪开一点/转一点/改用 xor"）。
+- **折线化近似**：椭圆按 64 边形、圆角矩形每角 8 段参与运算（`render/outline.mbt`
+  的 `face_ring`，与"面"的定义共用一处）——所以布尔结果与渲染轮廓**同源**，
+  不会出现"算的是 A、画的是 B"。
+- **操作数是根级、有面的层**：组里的层被拒（祖先的旋转/翻转没有折算进轮廓）；
+  文本/位图/线段/无填充开放路径/组/调整层被拒（理由照原话回）。
+- **结果替换操作数**（同 Illustrator 路径查找器）：留着的操作数会让"洞"看不见
+  （洞里露出下面那层）；结果插在两个操作数原来**最下面那个**的位置，填充/描边继承 A。
+- **未做**：一个岛多个洞（一层只能挂一个反选蒙版 ⇒ 多洞结果拒绝）、
+  把祖先变换折算进操作数轮廓、结果层自己的描边按集合边界重算（现在继承 A）。
 
 ## 7. 远期路线（本轮明确不做，排期见 PLAN.md §8）
 

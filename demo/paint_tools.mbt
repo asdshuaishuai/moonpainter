@@ -75,6 +75,7 @@ fn tool_cmd(name : String) -> String? {
     "add_line" => Some("add-line")
     "add_polygon" => Some("add-polygon")
     "pen_path" => Some("add-path")
+    "bool_op" => Some("bool-op")
     "path_preview" => Some("path-preview")
     "set_style" => Some("set-style")
     "move" => Some("move")
@@ -236,6 +237,17 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
         ("stroke", "string:描边色"),
         ("stroke_w", "number:描边宽"),
         ("name", "string:图层名"),
+      ],
+    ),
+    make_tool(
+      "bool_op",
+      "两个**有面**的形状做**布尔运算**（④ Stage B）：结果是一个新的**路径层**（并/差/交/异或）。**操作数会被结果替换**（同 Illustrator 的路径查找器）——a 与 b 两层删除，结果插在它们原来最下面那个的位置。结果层的填充/描边继承 a。一个岛一层、多个岛自动编组、洞用反选蒙版表示。**没有面的层**（没有填充的开放路径、线段、文本、位图、组、调整层）与**组内层**会被拒绝（理由照原话回）",
+      [
+        ("op", "string:req:union 并 / subtract 差(a−b) / intersect 交 / xor 异或"),
+        ("a", "string:req:第一个形状的层 id（结果继承它的填充/描边）"),
+        ("b", "string:req:第二个形状的层 id"),
+        ("id", "string:结果层的 id（默认自动发号）"),
+        ("name", "string:结果层的名字"),
       ],
     ),
     make_tool(
@@ -897,6 +909,19 @@ pub fn tool_line(name : String, args : Json) -> String {
       } else {
         "mvsl-impact max=" + mx
       }
+    }
+    "bool_op" => {
+      let mut l = "bool-op op=" + arg_of(args, "op") + " a=" + arg_of(args, "a") + " b=" +
+        arg_of(args, "b")
+      let rid = arg_of(args, "id")
+      if rid != "" {
+        l = l + " id=" + rid
+      }
+      let nm = arg_of(args, "name")
+      if nm != "" {
+        l = l + " name=" + quote_arg(nm)
+      }
+      l
     }
     "path_preview" => {
       let mut l = "path-preview points=" + arg_of(args, "points")
