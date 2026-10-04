@@ -31,9 +31,9 @@ fn rdab_paint(dabs : Array[@core.Dab]) -> @core.Layer {
 /// 会**逐位相同**，那就不再是判据）。
 fn rdab_two() -> Array[@core.Dab] {
   [
-    @core.Dab::{ x: 30.0, y: 30.0, r: 6.0, color: 0xFFFF0000, erase: false },
-    @core.Dab::{ x: 66.0, y: 46.0, r: 6.0, color: 0xFFFF0000, erase: false },
-    @core.Dab::{ x: 45.0, y: 60.0, r: 6.0, color: 0xFFFF0000, erase: false },
+    @core.Dab::{ x: 30.0, y: 30.0, r: 6.0, color: 0xFFFF0000, erase: false, clone: false, sdx: 0.0, sdy: 0.0 },
+    @core.Dab::{ x: 66.0, y: 46.0, r: 6.0, color: 0xFFFF0000, erase: false, clone: false, sdx: 0.0, sdy: 0.0 },
+    @core.Dab::{ x: 45.0, y: 60.0, r: 6.0, color: 0xFFFF0000, erase: false, clone: false, sdx: 0.0, sdy: 0.0 },
   ]
 }
 

@@ -2570,6 +2570,48 @@ MUTS = [
         "killed",
     ),
     (
+        "R72",
+        "克隆笔触不退化成普通画笔（克隆分支被短路：整笔落下自己的笔色 = 一块死色）",
+        "render/scene.mbt",
+        """            let (sc, sa_src) = if d.clone {
+              clone_sample(src_buf, d, px, py)
+            } else {
+              (d.color, 1.0)
+            }""",
+        """            let (sc, sa_src) = if false {
+              clone_sample(src_buf, d, px, py)
+            } else {
+              (d.color, 1.0)
+            }""",
+        "killed",
+    ),
+    (
+        "R73",
+        "克隆取样丢掉源偏移（取的是落点自己 = 一点变化都没有的'克隆'）",
+        "render/scene.mbt",
+        """    let sx = (px.to_double() + s.0 + d.sdx).floor().to_int()
+    let sy = (py.to_double() + s.1 + d.sdy).floor().to_int()""",
+        """    let sx = (px.to_double() + s.0).floor().to_int()
+    let sy = (py.to_double() + s.1).floor().to_int()""",
+        "killed",
+    ),
+    (
+        "R74",
+        "克隆笔触的浓度去读笔色 alpha（命令面给的是全 0 ⇒ 整笔一个像素都不落）",
+        "render/scene.mbt",
+        """    let dalpha = if d.erase || d.clone {""",
+        """    let dalpha = if d.erase {""",
+        "killed",
+    ),
+    (
+        "R75",
+        "报告面不报克隆源偏移（'这一笔从哪儿取的源'问不出来）",
+        "agent/session.mbt",
+        "      if cd > 0 {",
+        "      if false {",
+        "killed",
+    ),
+    (
         "R68",
         "多边形内距丢掉符号（羽化朝反方向长，覆盖度看着仍有过渡）",
         "render/scene.mbt",
@@ -2583,6 +2625,12 @@ MUTS = [
         "core/document.mbt",
         """  let mut rc = 1
   for l in doc.layers {
+    // 克隆笔触：老引擎会把它画成普通笔色（整笔一块死色）⇒ 必须升档
+    for d in l.dabs {
+      if d.clone && rc < RENDER_CONTRACT_CLONE {
+        rc = RENDER_CONTRACT_CLONE
+      }
+    }
     match l.mask {
       Some(m) => {
         match m.kind {
@@ -2599,7 +2647,14 @@ MUTS = [
     }
   }
   rc""",
-        """  for l in doc.layers {
+        """  let mut rc = 1
+  for l in doc.layers {
+    // 克隆笔触：老引擎会把它画成普通笔色（整笔一块死色）⇒ 必须升档
+    for d in l.dabs {
+      if d.clone && rc < RENDER_CONTRACT_CLONE {
+        rc = RENDER_CONTRACT_CLONE
+      }
+    }
     match l.mask {
       Some(m) => {
         match m.kind {

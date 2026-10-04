@@ -67,11 +67,33 @@ fn make_sample() -> @core.Document {
     fill: @core.Fill::NoFill,
     stroke: { color: 0xFFFFFFFF, width: 2.0 },
   }
+  // **Raster 层此前在样本里根本没有** ⇒ `dabs` 整个字段（含克隆三字段）的
+  // canonical 往返没人守：把 `clone` 读成常量 false、`sdx/sdy` 读成 0，
+  // 画面会从"克隆取样"退化成"一块死色"，而往返测试照样绿。
+  let ras = @core.default_layer("l6", "retouch", 10.0, 20.0, 30.0, 40.0)
+  let ras2 = {
+    ..ras,
+    kind: @core.ShapeKind::Raster,
+    dabs: [
+      {
+        x: 12.5,
+        y: 13.25,
+        r: 4.5,
+        color: 0x11223344,
+        erase: false,
+        clone: true,
+        sdx: -30.5,
+        sdy: 7.25,
+      },
+      { x: 5.0, y: 6.0, r: 2.0, color: 0xFF00FF00, erase: true, clone: false, sdx: 0.0, sdy: 0.0 },
+    ],
+  }
   let g = @core.default_layer("l3", "frame", 40.0, 40.0, 720.0, 520.0)
   let g2 = { ..g, kind: @core.ShapeKind::Group, children: [poly2, line2] }
   doc.layers.push(bg2)
   doc.layers.push(circle2)
   doc.layers.push(g2)
+  doc.layers.push(ras2)
   doc.assets.push({ hash: "abc123", width: 64, height: 48 })
   doc.params.push({ name: "palette.primary", value: "#FF7A45" })
   doc.next_layer_no = 6
@@ -119,7 +141,21 @@ test "往返后结构与语义字段保真" {
   assert_eq(back.height, 600)
   assert_eq(back.uuid, "uuid-test-0001")
   assert_eq(back.next_layer_no, 6)
-  assert_eq(back.layers.length(), 3)
+  assert_eq(back.layers.length(), 4)
+  // 克隆笔触逐个字段保真：这几个字段"写得出、读不回"的表现是画面从克隆取样
+  // 退化成一块死色（而往返字节一致照样成立——两边都错成默认值）
+  match back.layers[3].dabs {
+    [d0, d1] => {
+      assert_true(d0.clone, msg="clone 标志必须往返保真")
+      assert_eq(d0.sdx, -30.5, msg="源偏移 dx（画布向量）必须往返保真")
+      assert_eq(d0.sdy, 7.25, msg="源偏移 dy")
+      assert_eq(d0.r, 4.5)
+      assert_eq(d0.color, 0x11223344)
+      assert_true(d1.erase, msg="同一层的橡皮笔触也要保真")
+      assert_true(!d1.clone, msg="非克隆笔触不许被读成克隆")
+    }
+    other => abort("笔触数量不对：\{other.length()}")
+  }
   // 蒙版字段必须逐个保真（此前它们连一条断言都没有）
   match back.layers[0].mask {
     Some(m) => {
@@ -287,6 +323,47 @@ test "required_render_contract：按文档实际用到的能力声明，别一�
     @core.required_render_contract(d3),
     @core.RENDER_CONTRACT_POLY_MASK,
     msg="毛边(2) + 套索(3) 并存 → 报最高档 3",
+  )
+  // 仿制图章（克隆笔触）是**第四档**：老引擎读不到 `clone/sdx/sdy`，会把克隆
+  // 笔触当成普通笔色画上去 —— 整笔变成一块死色，而"污点被盖住了"还很像成功。
+  let d4 = @core.new_document("u-rc4", 16, 16)
+  let cd : @core.Dab = {
+    x: 4.0,
+    y: 4.0,
+    r: 2.0,
+    color: 0x00000000,
+    erase: false,
+    clone: true,
+    sdx: -2.0,
+    sdy: 0.0,
+  }
+  let pd : @core.Dab = {
+    x: 8.0,
+    y: 8.0,
+    r: 2.0,
+    color: 0xFF0000FF,
+    erase: false,
+    clone: false,
+    sdx: 0.0,
+    sdy: 0.0,
+  }
+  d4.layers.push({
+    ..@core.default_layer("l5", "e", 0.0, 0.0, 16.0, 16.0),
+    kind: @core.ShapeKind::Raster,
+    dabs: [cd],
+  })
+  assert_eq(
+    @core.required_render_contract(d4),
+    @core.RENDER_CONTRACT_CLONE,
+    msg="克隆笔触 → 第四档（老引擎会画成一块死色）",
+  )
+  // **负控**：普通笔触不许被一并抬到第四档 —— 一律写上限等于让版本闸失去分辨力
+  // （老引擎将打不开任何新容器）。
+  let d5 = { ..d4, layers: [{ ..d4.layers[0], dabs: [pd] }] }
+  assert_eq(
+    @core.required_render_contract(d5),
+    1,
+    msg="只有普通笔触 → 仍是基础档（不许无条件抬档）",
   )
 }
 

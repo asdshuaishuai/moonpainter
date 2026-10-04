@@ -136,6 +136,7 @@ pub fn list_tools() -> Array[AgentTool] {
   )
   add("brush", "brush layer=<raster层> pts=x1,y1;x2,y2[;…] r=<半径px> [color=#RRGGBB[AA]]：沿折线落笔触", "meta")
   add("erase", "erase layer=<raster层> pts=… r=<半径px>：橡皮擦（destination-out）。橡皮擦**恒全强度**，不接受 color 参数（收了也没用，所以入口直接拒绝）", "meta")
+  add("clone", "clone layer=<raster层> pts=x1,y1;x2,y2[;…] r=<半径px> src=x,y：**仿制图章**（去污点）——沿 pts 落笔，但每一笔的颜色取自**本层之下**那张合成图的 src 处；整笔的源偏移 = src − 第一个落点，恒定（要换源就再发一条 = 非对齐）。src 是**画布坐标**（同 pts），必须在画布内；不接受 color（颜色来自画面）", "meta")
   add("crop", "crop <x> <y> <w> <h>：裁剪画布，全部层同步平移", "meta")
   add("sample", "sample <x> <y>：吸管取色（合成像素 hex + 命中层）", "vision")
   // 元参数

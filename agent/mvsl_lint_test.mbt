@@ -307,7 +307,7 @@ test "lint：变换/混合/蒙版的读点矩阵（表里每一格都要报，�
       ..b,
       id: "r1",
       kind: @core.ShapeKind::Raster,
-      dabs: [@core.Dab::{ x: 1.0, y: 1.0, r: 2.0, color: 0xFF0000FF, erase: false }],
+      dabs: [@core.Dab::{ x: 1.0, y: 1.0, r: 2.0, color: 0xFF0000FF, erase: false, clone: false, sdx: 0.0, sdy: 0.0 }],
       // `rotation_deg` 从本轮起在 raster 上**合法**（绕落笔范围中心转，PLAN 六十）
       // ——它从这一格挪走，所以这里只剩 blend 一格
       blend: @core.BlendMode::Multiply,
@@ -428,7 +428,7 @@ test "lint：变换/混合/蒙版的读点矩阵（表里每一格都要报，�
     ..b,
     id: "r2",
     kind: @core.ShapeKind::Raster,
-    dabs: [@core.Dab::{ x: 1.0, y: 1.0, r: 2.0, color: 0xFF0000FF, erase: false }],
+    dabs: [@core.Dab::{ x: 1.0, y: 1.0, r: 2.0, color: 0xFF0000FF, erase: false, clone: false, sdx: 0.0, sdy: 0.0 }],
     mask: Some(probe_mask),
   })
   ok.layers.push({
@@ -612,7 +612,7 @@ test "lint：8 个 kind 专属字段逐格覆盖 —— 错的 kind 上带着死
     (fn(l : @core.Layer) { { ..l, points: [(0.0, 0.0), (1.0, 1.0)] } }, "2 个顶点"),
     (fn(l : @core.Layer) { { ..l, adjust: Some(@core.Adjust::{ op: @core.AdjustOp::Brightness, value: 0.5 }) } }, "adjust 字段"),
     (fn(l : @core.Layer) { { ..l, asset_hash: "deadbeef" } }, "asset 引用"),
-    (fn(l : @core.Layer) { { ..l, dabs: [@core.Dab::{ x: 1.0, y: 1.0, r: 2.0, color: 0xFF0000FF, erase: false }] } }, "1 个笔触"),
+    (fn(l : @core.Layer) { { ..l, dabs: [@core.Dab::{ x: 1.0, y: 1.0, r: 2.0, color: 0xFF0000FF, erase: false, clone: false, sdx: 0.0, sdy: 0.0 }] } }, "1 个笔触"),
     (fn(l : @core.Layer) { { ..l, children: [@core.default_layer("kid", "k", 0.0, 0.0, 4.0, 4.0)] } }, "1 个子层"),
   ]
   for c in cases {
@@ -662,7 +662,7 @@ test "lint：8 个 kind 专属字段逐格覆盖 —— 错的 kind 上带着死
       ..b,
       id: "d1",
       kind: @core.ShapeKind::Raster,
-      dabs: [@core.Dab::{ x: 1.0, y: 1.0, r: 2.0, color: 0xFF0000FF, erase: false }],
+      dabs: [@core.Dab::{ x: 1.0, y: 1.0, r: 2.0, color: 0xFF0000FF, erase: false, clone: false, sdx: 0.0, sdy: 0.0 }],
     },
   )
   okdoc.layers.push(

@@ -255,6 +255,7 @@ pub fn exec(s : Session, line : String) -> String {
     "add-paint" => cmd_add_paint(s, tokens)
     "brush" => cmd_brush(s, tokens)
     "erase" => cmd_erase(s, tokens)
+    "clone" => cmd_clone(s, tokens)
     "crop" => cmd_crop(s, tokens)
     "sample" => cmd_sample(s, tokens)
     "add-adjust" => cmd_add_adjust(s, tokens)
@@ -485,6 +486,36 @@ fn layer_summary(l : @core.Layer) -> String {
   }
   if l.flip_h || l.flip_v {
     sb.write_string(",\"flip_h\":\{l.flip_h},\"flip_v\":\{l.flip_v}")
+  }
+  // 笔触层的内容此前**一个字都不报**（x/y/r/颜色/橡皮/克隆全在容器里，问不出来）
+  // ——"这一笔是从哪儿取的源"不报出来，调用方只能靠自己记住。
+  // 报**数量**与**源偏移**：偏移是整笔恒定的那个向量（画布坐标，与 dab 自己的
+  // 局部坐标**不同空间**，所以这里绝不把两者相加后报成一个点）；
+  // 多笔克隆时给**第一笔**的偏移（同一条命令的 dab 共用一个值）。
+  if l.kind is @core.ShapeKind::Raster {
+    if l.dabs.length() > 0 {
+      sb.write_string(",\"dabs\":\{l.dabs.length()}")
+      let mut cd = 0
+      let mut cox = 0.0
+      let mut coy = 0.0
+      let mut have = false
+      for d in l.dabs {
+        if d.clone {
+          cd = cd + 1
+          if !have {
+            have = true
+            cox = d.sdx
+            coy = d.sdy
+          }
+        }
+      }
+      if cd > 0 {
+        sb.write_string(",\"clone_dabs\":\{cd}")
+        sb.write_string(
+          ",\"clone_off\":[\{@core.fmt_num(cox)},\{@core.fmt_num(coy)}]",
+        )
+      }
+    }
   }
   if l.text != "" {
     sb.write_string(",\"text\":\"\{@core.json_escape(l.text)}\"")
@@ -2871,23 +2902,36 @@ fn cmd_add_paint(s : Session, tokens : Array[String]) -> String {
 /// `dalpha` 对 erase 直接取 1.0，连笔色 alpha 都不读），那是个**收了也不
 /// 生效**的参数。拆成两条命令后，各自的键表一眼可读。
 fn cmd_brush(s : Session, tokens : Array[String]) -> String {
-  let name = "brush"
   match check_kv_args(tokens, 1, ["layer", "pts", "r", "color"], "brush") {
     Ok(_) => ()
     Err(e) => return err(e)
   }
-  cmd_dabs(s, tokens, name, false)
+  cmd_dabs(s, tokens, false, false)
 }
 
 ///|
 /// `erase`：橡皮擦（destination-out）。**不收 color=**（恒全强度）。
 fn cmd_erase(s : Session, tokens : Array[String]) -> String {
-  let name = "erase"
   match check_kv_args(tokens, 1, ["layer", "pts", "r"], "erase") {
     Ok(_) => ()
     Err(e) => return err(e)
   }
-  cmd_dabs(s, tokens, name, true)
+  cmd_dabs(s, tokens, true, false)
+}
+
+///|
+/// `clone`：**仿制图章**（去污点的基本件）——不落本色，改从"本层之下的合成
+/// 结果"里按**源偏移**取样，一笔一笔把干净的地方盖到脏的地方。
+///
+/// `src=x,y` 是源锚点（**画布坐标**，与 `pts` 同一个坐标系）：偏移 = 源锚点 −
+/// 第一个落点，整笔恒定（PS 的"对齐"模式；换一笔就重新锚定 = "非对齐"）。
+/// **不收 color=**：克隆的颜色来自画面，收下它就是"收了不生效"。
+fn cmd_clone(s : Session, tokens : Array[String]) -> String {
+  match check_kv_args(tokens, 1, ["layer", "pts", "r", "src"], "clone") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }
+  cmd_dabs(s, tokens, false, true)
 }
 
 ///|
@@ -2895,15 +2939,19 @@ fn cmd_erase(s : Session, tokens : Array[String]) -> String {
 fn cmd_dabs(
   s : Session,
   tokens : Array[String],
-  name : String,
   erase : Bool,
+  clone : Bool,
 ) -> String {
+  // 命令名**一处**推出（三条命令共用这个函数；名字决定回包 op、快照文案与
+  // 用法串——各写一份就是"同一个判断两处实现"）
+  let name = if erase { "erase" } else if clone { "clone" } else { "brush" }
   let doc = match require_doc(s) {
     Ok(d) => d
     Err(e) => return err(e)
   }
   if tokens.length() < 2 {
-    return err("用法：\{name} layer=<id> pts=x1,y1;x2,y2[;…] r=<半径px>")
+    let extra = if clone { " src=x,y" } else { "" }
+    return err("用法：\{name} layer=<id> pts=x1,y1;x2,y2[;…] r=<半径px>\{extra}")
   }
   let m = kv_args(tokens, 1)
   let lid = match m.get("layer") {
@@ -2932,7 +2980,7 @@ fn cmd_dabs(
   if r <= 0.0 || r > 200.0 {
     return err("r 越界（0 < r ≤ 200）")
   }
-  let color : Int = if erase {
+  let color : Int = if erase || clone {
     0x00000000
   } else {
     match m.get("color") {
@@ -2942,6 +2990,30 @@ fn cmd_dabs(
           Err(e) => return err(e)
         }
       None => 0xFF000000
+    }
+  }
+  // 克隆的源偏移：**画布坐标**（同 pts）。锚点必须在画布内——取样源就是画布
+  // 合成结果，锚点在外面等于"这一笔拿不到任何东西"，入口直接拒而不是画一片空。
+  let mut sdx = 0.0
+  let mut sdy = 0.0
+  if clone {
+    let (sx, sy) = match m.get("src") {
+      Some(v) =>
+        match parse_xy(v) {
+          Ok(p) => p
+          Err(e) => return err(e)
+        }
+      None => return err("clone 需要 src=x,y（源锚点，画布坐标）")
+    }
+    if sx < 0.0 || sy < 0.0 || sx >= doc.width.to_double() || sy >= doc.height.to_double() {
+      return err(
+        "源锚点 (\{@core.fmt_num(sx)},\{@core.fmt_num(sy)}) 超出画布 (\{doc.width}x\{doc.height})",
+      )
+    }
+    sdx = sx - pts[0].0
+    sdy = sy - pts[0].1
+    if sdx == 0.0 && sdy == 0.0 {
+      return err("源锚点与第一个落点重合：克隆会把自己盖到自己上（源偏移不能是 0,0）")
     }
   }
   // 折线等距落点（画布坐标 → 层局部：减层原点，move/crop 后语义稳定）
@@ -2970,16 +3042,25 @@ fn cmd_dabs(
     let mut k = 0
     while k < n {
       let t = k.to_double() / n.to_double()
-      dabs.push({ x: ax + dx * t, y: ay + dy * t, r, color, erase })
+      dabs.push({
+        x: ax + dx * t,
+        y: ay + dy * t,
+        r,
+        color,
+        erase,
+        clone,
+        sdx,
+        sdy,
+      })
       k = k + 1
     }
     i = i + 1
   }
   let last = pts[pts.length() - 1]
-  dabs.push({ x: last.0, y: last.1, r, color, erase })
-  snapshot(s, doc, "\{if erase { "erase" } else { "brush" }} \{lid} (\{dabs.length()} dabs)")
+  dabs.push({ x: last.0, y: last.1, r, color, erase, clone, sdx, sdy })
+  snapshot(s, doc, "\{name} \{lid} (\{dabs.length()} dabs)")
   let _ = update_layer(doc.layers, lid, fn(l) { { ..l, dabs: l.dabs + dabs } })
-  "{\"ok\":true,\"op\":\"\{if erase { "erase" } else { "brush" }}\",\"id\":\"\{lid}\",\"dabs\":\{dabs.length()},\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
+  "{\"ok\":true,\"op\":\"\{name}\",\"id\":\"\{lid}\",\"dabs\":\{dabs.length()},\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
 }
 
 ///|

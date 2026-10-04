@@ -559,9 +559,18 @@ fn layer_json(l : Layer) -> String {
     } else {
       sb.write_string(",")
     }
+    // 克隆字段**只写非默认值**（同 radius/points 那套：canonical 字节不被
+    // "没用到克隆"的每个 dab 撑大），所以读侧必须把这个不对称写对——
+    // `num_f`/`bool_field` 的缺省就是"没写 = 假/0"。
     sb.write_string(
-      "{\"x\":\{fmt_num(d.x)},\"y\":\{fmt_num(d.y)},\"r\":\{fmt_num(d.r)},\"c\":\"\{@codec.color_to_hex(d.color)}\",\"e\":\{d.erase}}",
+      "{\"x\":\{fmt_num(d.x)},\"y\":\{fmt_num(d.y)},\"r\":\{fmt_num(d.r)},\"c\":\"\{@codec.color_to_hex(d.color)}\",\"e\":\{d.erase}",
     )
+    if d.clone {
+      sb.write_string(
+        ",\"cl\":true,\"sdx\":\{fmt_num(d.sdx)},\"sdy\":\{fmt_num(d.sdy)}",
+      )
+    }
+    sb.write_string("}")
   }
   sb.write_string("]")
   sb.write_string(",\"asset\":\"\{l.asset_hash}\"")
@@ -889,7 +898,16 @@ fn dab_of(v : JValue) -> Result[Dab, String] {
   let c = str_of(v, "c")
   match (x, y, r, c) {
     (Ok(dx), Ok(dy), Ok(dr), Ok(dc)) =>
-      Ok({ x: dx, y: dy, r: dr, color: @codec.color_from_hex(dc), erase: bool_field(v, "e") })
+      Ok({
+        x: dx,
+        y: dy,
+        r: dr,
+        color: @codec.color_from_hex(dc),
+        erase: bool_field(v, "e"),
+        clone: bool_field(v, "cl"),
+        sdx: num_f(v, "sdx"),
+        sdy: num_f(v, "sdy"),
+      })
     _ => Err("dab 字段不完整（x/y/r/c）")
   }
 }

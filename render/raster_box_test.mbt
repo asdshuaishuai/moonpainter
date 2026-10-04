@@ -12,8 +12,8 @@
 ///|
 fn raster_doc(uuid : String) -> @core.Document {
   let doc = @core.new_document(uuid, 100, 100)
-  let d1 = @core.Dab::{ x: 20.0, y: 20.0, r: 6.0, color: 0xFFFF0000, erase: false }
-  let d2 = @core.Dab::{ x: 60.0, y: 20.0, r: 6.0, color: 0xFF00FF00, erase: false }
+  let d1 = @core.Dab::{ x: 20.0, y: 20.0, r: 6.0, color: 0xFFFF0000, erase: false, clone: false, sdx: 0.0, sdy: 0.0 }
+  let d2 = @core.Dab::{ x: 60.0, y: 20.0, r: 6.0, color: 0xFF00FF00, erase: false, clone: false, sdx: 0.0, sdy: 0.0 }
   doc.layers.push(
     {
       ..@core.default_layer("r", "笔触", 0.0, 0.0, 100.0, 100.0),

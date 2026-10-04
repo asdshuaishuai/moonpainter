@@ -60,8 +60,8 @@ test "盒子的三个来源一致：`query-layer` 报的 == 渲染窗 == 落笔�
       ..@core.default_layer("r1", "r1", 3.0, 5.0, 100.0, 100.0),
       kind: @core.ShapeKind::Raster,
       dabs: [
-        @core.Dab::{ x: 20.0, y: 20.0, r: 6.0, color: 0xFF0000FF, erase: false },
-        @core.Dab::{ x: 70.0, y: 60.0, r: 4.0, color: 0xFF0000FF, erase: false },
+        @core.Dab::{ x: 20.0, y: 20.0, r: 6.0, color: 0xFF0000FF, erase: false, clone: false, sdx: 0.0, sdy: 0.0 },
+        @core.Dab::{ x: 70.0, y: 60.0, r: 4.0, color: 0xFF0000FF, erase: false, clone: false, sdx: 0.0, sdy: 0.0 },
       ],
     },
   )
@@ -74,8 +74,8 @@ test "盒子的三个来源一致：`query-layer` 报的 == 渲染窗 == 落笔�
   d.layers[0] = {
     ..l0,
     dabs: [
-      @core.Dab::{ x: 20.0, y: 20.0, r: 6.0, color: 0xFF0000FF, erase: false },
-      @core.Dab::{ x: 99.0, y: 99.0, r: 0.0, color: 0xFF0000FF, erase: false },
+      @core.Dab::{ x: 20.0, y: 20.0, r: 6.0, color: 0xFF0000FF, erase: false, clone: false, sdx: 0.0, sdy: 0.0 },
+      @core.Dab::{ x: 99.0, y: 99.0, r: 0.0, color: 0xFF0000FF, erase: false, clone: false, sdx: 0.0, sdy: 0.0 },
     ],
   }
   let (bx2, by2, bw2, bh2) = @core.effective_box(d.layers[0])

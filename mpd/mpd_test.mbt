@@ -180,7 +180,41 @@ test "manifest 的 render_contract 按文档**实际用到的能力**声明（�
       }
     Err(e) => abort("新引擎应打得开自己写的容器：\{e}")
   }
+  // 仿制图章（克隆笔触）：老引擎把它画成一块**死色**（读不到 clone/sdx/sdy），
+  // 所以容器必须声明第四档 —— 老引擎据此拒开，而不是静默错渲。
+  let cd : @core.Dab = {
+    x: 20.0,
+    y: 20.0,
+    r: 4.0,
+    color: 0x00000000,
+    erase: false,
+    clone: true,
+    sdx: -8.0,
+    sdy: -8.0,
+  }
+  let ras = @core.default_layer("l9", "retouch", 0.0, 0.0, 64.0, 64.0)
+  doc.layers.push({ ..ras, kind: @core.ShapeKind::Raster, dabs: [cd] })
+  let packed3 = match @mpd.pack(m) {
+    Ok(b) => b
+    Err(e) => abort("pack 失败: \{e}")
+  }
+  let man3 = @codec.Zip::open(packed3).read_text("manifest.json")
+  let want3 = "\"render_contract\":" + @core.RENDER_CONTRACT_CLONE.to_string()
+  assert_true(man3.contains(want3), msg="用到克隆笔触必须声明第四档（\{want3}）：\{man3}")
+  match @mpd.unpack(packed3) {
+    Ok(back) =>
+      match back.doc.layers[back.doc.layers.length() - 1].dabs {
+        [got] => {
+          assert_true(got.clone, msg="克隆标志必须随容器往返")
+          assert_eq(got.sdx, -8.0, msg="源偏移 dx 必须随容器往返")
+          assert_eq(got.sdy, -8.0, msg="源偏移 dy")
+        }
+        _ => abort("克隆笔触在容器往返里丢了")
+      }
+    Err(e) => abort("新引擎应打得开自己写的容器：\{e}")
+  }
   // 还原（避免后续断言看到被改过的样本）
+  let _ = doc.layers.pop()
   doc.layers[0] = l0
 }
 

@@ -420,6 +420,29 @@ pub fn parse_points(s : String) -> Result[Array[(Double, Double)], String] {
 }
 
 ///|
+/// 单个点解析："x,y"。**别借 `parse_points`**：它的"至少 2 个顶点"下界是
+/// "画得出线"的契约，借来的表现是 `clone src=40,40` 被拒成
+/// "points 至少 2 个顶点"——报的话与被拒的参数**不是一回事**。
+pub fn parse_xy(s : String) -> Result[(Double, Double), String] {
+  let xy : Array[String] = []
+  for p in s.split(",") {
+    xy.push(p.to_owned())
+  }
+  if xy.length() != 2 {
+    return Err("src 应写成 x,y（收到 \{s}）")
+  }
+  let x = match to_d(xy[0]) {
+    Some(v) => v
+    None => return Err("src 的 x 不是数字：\{xy[0]}")
+  }
+  let y = match to_d(xy[1]) {
+    Some(v) => v
+    None => return Err("src 的 y 不是数字：\{xy[1]}")
+  }
+  Ok((x, y))
+}
+
+///|
 /// 应用 kv 到层样式（fill/stroke/opacity/blend/radius/rot/visible/name/tag）。
 pub fn apply_style_kv(
   l : @core.Layer,
@@ -1336,6 +1359,45 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
   if rlim != "" {
     v.push("P0 render 画布超出可渲染上限：\{rlim}")
   }
+  // ② 根级克隆笔触的取样窗全在画布外（见上面那段注释的理由）。
+  // 只判**根级**：有祖先变换时 `to_canvas` 不再精确，判了就会比渲染器严。
+  for l in doc.layers {
+    if l.kind is @core.ShapeKind::Raster {
+      for d in l.dabs {
+        if d.clone {
+          let cp = @render.to_canvas(l, d.x, d.y)
+          let cx = cp.0 + d.sdx
+          let cy = cp.1 + d.sdy
+          if cx + d.r <= 0.0 || cy + d.r <= 0.0 ||
+            cx - d.r >= doc.width.to_double() || cy - d.r >= doc.height.to_double() {
+            v.push(
+              "P2 geom 层 \{l.id} 的克隆笔触取样窗完全在画布外（中心 (\{@core.fmt_num(cx)},\{@core.fmt_num(cy)})、半径 \{@core.fmt_num(d.r)}）：这一笔什么都不落（源在画布外＝那里什么都没有）",
+            )
+          }
+        }
+      }
+    }
+  }
+  // ③ α<1 的组里的克隆笔触：取样源变成"组自己那张画面"（语义边界，报出来说清）
+  for g in doc.layers {
+    if g.kind is @core.ShapeKind::Group && g.opacity < 1.0 {
+      for c in @core.all_layers([g]) {
+        if c.id != g.id && c.kind is @core.ShapeKind::Raster {
+          let mut has = false
+          for d in c.dabs {
+            if d.clone {
+              has = true
+            }
+          }
+          if has {
+            v.push(
+              "P3 caveat 组 \{g.id}（opacity=\{@core.fmt_num(g.opacity)}）里的层 \{c.id} 有克隆笔触：渲染器为 α<1 的组另开一张缓冲，克隆的取样源是**组自己那张画面**（只有组内已画的部分），不是画布合成结果 —— 要「从整幅画取样」就把组的不透明度恢复成 1 或把克隆放到组外",
+            )
+          }
+        }
+      }
+    }
+  }
   let seen : Map[String, Bool] = Map([])
   for l in @core.all_layers(doc.layers) {
     if seen.get(l.id) is Some(_) {
@@ -1436,6 +1498,29 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
         v.push(
           "P2 geom 层 \{l.id} 有顶点落在渲染窗外：渲染器只画窗内的像素（窗 = 以层盒中心为心、对角线为边再放宽 2px），窗外那部分顶点画不出来 —— 放大 w/h 或把顶点写进窗内",
         )
+      }
+    }
+    // 克隆笔触的三个"装了不干活/画成别的样子"：
+    //  ①**非克隆**笔触却带着源偏移：渲染器根本不读它（`d.clone` 为假，
+    //    `sdx/sdy` 只在克隆分支里用），而它写进 canonical JSON、改指纹 ⇒
+    //    同一个层三个信号自相矛盾。命令面给不出这种笔触（`clone` 才会写偏移），
+    //    这里兜住手改容器 / 旧版本产物。
+    //  ②**克隆**笔触的取样窗完全落在画布外：那一笔什么都不落（渲染器对出界
+    //    样本按"那里什么都没有"处理）——命令面只拦源**锚点**，事后把层搬走
+    //    照样能得到这种状态。判据只在**根级**层上判（`to_canvas` 对根级是精确的，
+    //    有祖先变换时不能比渲染器严 ⇒ 不报）。
+    //  ③层在 **α<1 的组**里且含克隆笔：渲染器为这种组另开一张缓冲，取样源于是
+    //    是"组自己那张画面"而不是画布合成结果 ⇒ 画面与"我以为是整幅画"不同。
+    //    这是**语义边界**，不是 bug，所以报出来说清画成什么（P3），不拦。
+    if l.kind is @core.ShapeKind::Raster {
+      let mut di = 0
+      for d in l.dabs {
+        if !d.clone && (d.sdx != 0.0 || d.sdy != 0.0) {
+          v.push(
+            "P2 style 层 \{l.id} 第 \{di + 1} 个笔触不是克隆却带着源偏移（sdx=\{@core.fmt_num(d.sdx)},sdy=\{@core.fmt_num(d.sdy)}）：渲染器不读它，画面逐位不变而指纹变了",
+          )
+        }
+        di = di + 1
       }
     }
     // 蒙版参数：命令面已拦（add-mask/set-mask 都过 `@core.mask_param_error`），

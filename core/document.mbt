@@ -225,6 +225,12 @@ pub fn mask_param_error(m : LayerMask) -> String {
 pub fn required_render_contract(doc : Document) -> Int {
   let mut rc = 1
   for l in doc.layers {
+    // 克隆笔触：老引擎会把它画成普通笔色（整笔一块死色）⇒ 必须升档
+    for d in l.dabs {
+      if d.clone && rc < RENDER_CONTRACT_CLONE {
+        rc = RENDER_CONTRACT_CLONE
+      }
+    }
     match l.mask {
       Some(m) => {
         match m.kind {
@@ -377,8 +383,15 @@ pub(all) struct Dab {
   x : Double
   y : Double
   r : Double
-  color : Int // 0xAARRGGBB（erase=true 时仅 alpha 生效）
+  color : Int // 0xAARRGGBB（erase=true 时仅 alpha 生效；clone=true 时不读）
   erase : Bool
+  // **仿制图章**（克隆）：不落本色，改从"本层之下的合成结果"里按源偏移取样。
+  // `sdx`/`sdy` 是**画布坐标**的源偏移（取样点 = 落点画布坐标 + 偏移），
+  // 于是旋转/翻转过的层也对得上（落点先由 `dab_center` 换成画布坐标再加偏移）。
+  // 一次落笔里偏移恒定（PS 的"对齐"模式）= 同一条命令的每个 dab 写同一个值。
+  clone : Bool
+  sdx : Double
+  sdy : Double
 }
 
 ///|

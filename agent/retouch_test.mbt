@@ -678,3 +678,121 @@ test "remove-mask：层不存在 / 没有蒙版都要报错（remove-* 家族不
   let e4 = run(s, "remove-mask r")
   assert_true(e4.contains("本来就没有蒙版"), msg=e4)
 }
+///|
+test "仿制图章：命令面收下克隆笔触、报告面报得出源偏移、坏参数零容忍" {
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 200 200 uuid=clone-test")
+  let _ = run(s, "add-rect x=20 y=20 w=40 h=40 fill=#FF0000FF id=src")
+  let _ = run(s, "add-paint id=retouch")
+  // 源锚点 (40,40)（红块里）、第一个落点 (140,60) ⇒ 偏移 (-100,-20)
+  let rc = run(s, "clone layer=retouch pts=140,60;160,60 r=10 src=40,40")
+  assert_true(rc.contains("\"op\":\"clone\""), msg=rc)
+  // 段长 20、spacing = r*0.45 = 4.5 ⇒ 段内 4 个点 + 末点 = 5 个 dab
+  assert_eq(jnum_field(rc, "dabs"), 5.0, msg=rc)
+  // 报告面：笔触数、克隆笔数、第一笔的源偏移（画布向量）
+  // 报告面：笔触数 / 克隆笔数 / 第一笔的源偏移都在 `layer` 里（值用**精确文本**
+  // 锚住，别用 `contains("clone_dabs")` 那种只看字段名的写法）
+  let q = run(s, "query-layer retouch")
+  assert_true(q.contains("\"dabs\":5,"), msg=q)
+  assert_true(q.contains("\"clone_dabs\":5,"), msg="整笔都是克隆笔：" + q)
+  assert_true(q.contains("\"clone_off\":[-100,-20]"), msg="源偏移必须报得出来：" + q)
+  // 非克隆笔触不许被报成克隆（负控：否则上面两条对"全都报成克隆"也成立）
+  let _ = run(s, "add-paint id=plain")
+  // ⚠️ 落笔的 pts 有"至少 2 个顶点"的下界（画得出线），单点会被拒
+  let _ = run(s, "brush layer=plain pts=30,30;60,30 r=6 color=#000000FF")
+  let qp = run(s, "query-layer plain")
+  // 段长 30、spacing = 2.7 ⇒ 段内 11 个点 + 末点 = 12 个 dab。
+  // 锚点要连**紧跟其后的字符**一起锚：这层的 `dabs` 是最后一个字段（后面是 `}`），
+  // 没有克隆字段时它后面不会是逗号——写成 `"dabs":12,` 就是一个永远为假的锚。
+  assert_true(qp.contains("\"dabs\":12}"), msg=qp)
+  assert_true(!qp.contains("clone_dabs"), msg="普通笔触不许报出克隆字段：" + qp)
+  // 克隆真的改画面（不是收了不干活）：取色处从白变成红块的颜色
+  let before = run(s, "sample 140 60")
+  assert_true(before.contains("#FF0000") || before.contains("#FF000"), msg=before)
+  // 坏参数：缺 src / src 越界 / 源与落点重合 / 非 raster 层 / 认不出的键。
+  // ⚠️ `pts` 自己有"至少 2 个顶点"的下界，坏参数用例必须给合法 pts——
+  // 不然测到的是那条下界（报的话与被测的参数不是一回事）。
+  let e1 = run(s, "clone layer=retouch pts=10,10;20,10 r=4")
+  assert_true(e1.has_prefix("{\"error\":\"clone 需要 src=x,y"), msg=e1)
+  let e2 = run(s, "clone layer=retouch pts=10,10;20,10 r=4 src=999,10")
+  assert_true(e2.has_prefix("{\"error\":\"源锚点 (999,10) 超出画布"), msg=e2)
+  let e3 = run(s, "clone layer=retouch pts=10,10;20,10 r=4 src=10,10")
+  assert_true(e3.has_prefix("{\"error\":\"源锚点与第一个落点重合"), msg=e3)
+  let e4 = run(s, "clone layer=src pts=10,10;20,10 r=4 src=20,20")
+  assert_true(e4.has_prefix("{\"error\":\"层 src 不是画笔层"), msg=e4)
+  let e5 = run(s, "clone layer=retouch pts=10,10;20,10 r=4 src=20,20 color=#FF0000FF")
+  assert_true(e5.has_prefix("{\"error\":\"clone：不认识的参数"), msg=e5)
+  assert_true(
+    e5.contains("layer/pts/r/src"),
+    msg="拒绝时必须报出**认得的**键清单（否则调用方只能猜）：" + e5,
+  )
+  // 正控：同样的形状、去掉 color 就必须收下（否则上面那条对"clone 什么都不收"也成立）
+  let ok = run(s, "clone layer=retouch pts=10,10;20,10 r=4 src=20,20")
+  assert_true(ok.contains("\"op\":\"clone\""), msg=ok)
+}
+
+///|
+///|
+test "lint 兜住三种克隆笔触的装法（命令面给不出来的那些）" {
+  let s = @agent.Session::new()
+  let _ = run(s, "session-open full_image")
+  let _ = run(s, "new 120 120 uuid=clone-lint")
+  let _ = run(s, "add-rect x=10 y=10 w=40 h=40 fill=#FF0000FF id=src")
+  let _ = run(s, "add-paint id=p")
+  let _ = run(s, "clone layer=p pts=80,80;100,80 r=6 src=30,30")
+  // 正控：命令面造出来的克隆笔触，lint 一个字都不该说
+  let ok = run(s, "lint")
+  assert_true(ok.contains("\"violations\":0"), msg="正当的克隆笔触不该被 lint 报：" + ok)
+  // ①手改容器：非克隆笔触带源偏移（渲染器不读 ⇒ 画面不变而指纹变了）
+  let doc = match s.doc {
+    Some(d) => d
+    None => abort("没有文档")
+  }
+  let d = @core.Dab::{
+    x: 20.0,
+    y: 20.0,
+    r: 4.0,
+    color: 0xFF0000FF,
+    erase: false,
+    clone: false,
+    sdx: -9.0,
+    sdy: 0.0,
+  }
+  doc.layers[1] = { ..doc.layers[1], dabs: [d] }
+  let r1 = run(s, "lint")
+  assert_true(r1.contains("不是克隆却带着源偏移"), msg=r1)
+  // ②手改容器：克隆笔触的取样窗完全在画布外（那一笔什么都不落）
+  let d2 = @core.Dab::{
+    x: 20.0,
+    y: 20.0,
+    r: 4.0,
+    color: 0x00000000,
+    erase: false,
+    clone: true,
+    sdx: 500.0,
+    sdy: 500.0,
+  }
+  doc.layers[1] = { ..doc.layers[1], dabs: [d2] }
+  let r2 = run(s, "lint")
+  assert_true(r2.contains("取样窗完全在画布外"), msg=r2)
+  // ③把层放进 α<1 的组：取样源变成"组自己那张画面"（P3 说清，不拦）
+  let d3 = @core.Dab::{
+    x: 20.0,
+    y: 20.0,
+    r: 4.0,
+    color: 0x00000000,
+    erase: false,
+    clone: true,
+    sdx: -9.0,
+    sdy: -9.0,
+  }
+  doc.layers[1] = { ..doc.layers[1], dabs: [d3] }
+  // `group <gid> <id>…`（组 id 是显式给的）
+  let rg = run(s, "group g1 p")
+  assert_true(rg.contains("\"ok\":true"), msg=rg)
+  let _ = run(s, "set-style g1 opacity=0.4")
+  let r3 = run(s, "lint")
+  assert_true(r3.contains("P3 caveat"), msg=r3)
+  assert_true(r3.contains("组自己那张画面"), msg="要说清画成什么：" + r3)
+}

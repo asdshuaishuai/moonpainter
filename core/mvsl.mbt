@@ -40,15 +40,21 @@ pub const MVSL_IR_VERSION : Int = 1
 ///         蒙版画成**光滑边**；
 ///   * 3 = **多边形蒙版**（`LayerMask.kind = Polygon`）：老引擎的 `mask_cover_at`
 ///         只认 Ellipse、其余一律当**矩形**画 ⇒ 套索选区会被画成一个方框。
+///   * 4 = **仿制图章**（`Dab.clone` + 源偏移）：老引擎读不到这三个字段，会把
+///         克隆笔触当成**普通笔色**画上去 ⇒ 整笔变成一块死色（而"污点被盖住了"
+///         还很像成功了）。
 pub const RENDER_CONTRACT_ROUGHEN : Int = 2
 
 ///|
 pub const RENDER_CONTRACT_POLY_MASK : Int = 3
 
 ///|
+pub const RENDER_CONTRACT_CLONE : Int = 4
+
+///|
 /// 引擎支持的**最高**档（读入端：`render_contract > 它` 一律拒绝打开，
 /// 见 `mpd/mpd.mbt`）。
-pub const RENDER_CONTRACT_VERSION : Int = 3
+pub const RENDER_CONTRACT_VERSION : Int = 4
 
 ///|
 /// 选择子算法版本（kernel/window/环距约定都属于算法的一部分）。

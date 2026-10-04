@@ -1150,7 +1150,7 @@ fn paint_raster(
     }
     wy = wy + 1
   }
-  paint_dabs(l, frames, scratch)
+  paint_dabs(l, frames, scratch, buf)
   // 合成：src alpha ← dab alpha × 层透明度 × 蒙版（只扫落笔窗口）
   let mut y = wy0
   while y < wy1 {
@@ -1295,7 +1295,56 @@ fn dabs_window(
 }
 
 ///|
-fn paint_dabs(l : @core.Layer, frames : Transform, scratch : @codec.RgbaBuf) -> Unit {
+///|
+/// 克隆笔触的源取样：把落点周围 4 个子样本各自对应的**源像素**取出来，按
+/// **预乘**平均（不预乘的话，源里透明像素那三个通道的值会被平均进来，边缘出现
+/// 黑边/彩边），返回（去预乘后的颜色, 平均源 alpha）。
+///
+/// 源就是"本层之下那张合成缓冲"（顶层就是画布合成结果连同白底），**画布坐标**
+/// ⇒ 落点的画布坐标由 `dab_center` 给出、源偏移也是画布坐标，旋转/翻转过的层
+/// 照样对得上。取样点出缓冲的样本按"那里什么都没有"（透明）跳过。
+fn clone_sample(
+  src_buf : @codec.RgbaBuf,
+  d : @core.Dab,
+  px : Int,
+  py : Int,
+) -> (Int, Double) {
+  let mut sum_a = 0.0
+  let mut sum_r = 0.0
+  let mut sum_g = 0.0
+  let mut sum_b = 0.0
+  let mut n = 0
+  for s in dab_samples {
+    let sx = (px.to_double() + s.0 + d.sdx).floor().to_int()
+    let sy = (py.to_double() + s.1 + d.sdy).floor().to_int()
+    if sx >= 0 && sy >= 0 && sx < src_buf.width && sy < src_buf.height {
+      let p = src_buf.pixels[sy * src_buf.width + sx]
+      let a = ((p >> 24) & 0xFF).to_double() / 255.0
+      sum_a = sum_a + a
+      sum_r = sum_r + ((p >> 16) & 0xFF).to_double() * a
+      sum_g = sum_g + ((p >> 8) & 0xFF).to_double() * a
+      sum_b = sum_b + (p & 0xFF).to_double() * a
+      n = n + 1
+    }
+  }
+  if n == 0 || sum_a <= 0.0 {
+    // 取样点全在缓冲外、或源全透明：这一笔没有颜色可取（合成时 alpha=0 ⇒ 不落墨）
+    return (0x00000000, 0.0)
+  }
+  let cnt = n.to_double()
+  let rgb = ((sum_r / sum_a + 0.5).to_int() << 16) +
+    ((sum_g / sum_a + 0.5).to_int() << 8) +
+    (sum_b / sum_a + 0.5).to_int()
+  (0xFF000000 + rgb, sum_a / cnt)
+}
+
+///|
+fn paint_dabs(
+  l : @core.Layer,
+  frames : Transform,
+  scratch : @codec.RgbaBuf,
+  src_buf : @codec.RgbaBuf,
+) -> Unit {
   // 轴心遍历全部 dab ⇒ 循环外算一次（`local_pivot` 那条注释）
   let (pvx, pvy) = local_pivot(l)
   for d in l.dabs {
@@ -1305,8 +1354,16 @@ fn paint_dabs(l : @core.Layer, frames : Transform, scratch : @codec.RgbaBuf) -> 
       Some(b) => b
     }
     let r2 = d.r * d.r
-    // 橡皮擦不受笔色 alpha 影响（恒全强度）；画笔的 AA 通道=落点浓度
-    let dalpha = if d.erase { 1.0 } else { ((d.color >> 24) & 0xFF).to_double() / 255.0 }
+    // 橡皮擦不受笔色 alpha 影响（恒全强度）；**克隆笔也不读笔色**——它的浓度
+    // 来自源像素自己的 alpha 与层不透明度，而命令面给克隆的 `color` 是全 0
+    // ⇒ 照读就是"覆盖度恒 0、整笔一个像素都不落"（实测：`clone` 回 ok、
+    // 报告面认账、画面逐位不变——静默失败里最难查的那一种）。
+    // 画笔才读 AA 通道当落点浓度。
+    let dalpha = if d.erase || d.clone {
+      1.0
+    } else {
+      ((d.color >> 24) & 0xFF).to_double() / 255.0
+    }
     let mut py = py0
     while py < py1 {
       let mut px = px0
@@ -1327,19 +1384,25 @@ fn paint_dabs(l : @core.Layer, frames : Transform, scratch : @codec.RgbaBuf) -> 
             let na = (da + 0.5).to_int()
             scratch.pixels[py * scratch.width + px] = (na << 24) + (dst & 0x00FFFFFF)
           } else {
-            let a255 = (cover * 255.0 + 0.5).to_int()
+            // 非克隆：源色就是笔色、源 alpha 恒 1（乘 1.0 逐位不变 ⇒ 老画面不动）
+            let (sc, sa_src) = if d.clone {
+              clone_sample(src_buf, d, px, py)
+            } else {
+              (d.color, 1.0)
+            }
+            let sa = cover * sa_src
+            let a255 = (sa * 255.0 + 0.5).to_int()
             if a255 > 0 {
               // 简单 over 合成（同一层内笔迹自叠）
               let da = ((dst >> 24) & 0xFF).to_double() / 255.0
-              let sa = cover
               let oa = sa + da * (1.0 - sa)
               if oa > 0.0 {
                 let sr = ((dst >> 16) & 0xFF).to_double() / 255.0
                 let sg = ((dst >> 8) & 0xFF).to_double() / 255.0
                 let sb = (dst & 0xFF).to_double() / 255.0
-                let cr = (d.color >> 16) & 0xFF
-                let cg = (d.color >> 8) & 0xFF
-                let cb = d.color & 0xFF
+                let cr = (sc >> 16) & 0xFF
+                let cg = (sc >> 8) & 0xFF
+                let cb = sc & 0xFF
                 let or_ = (cr.to_double() / 255.0 * sa + sr * da * (1.0 - sa)) / oa
                 let og = (cg.to_double() / 255.0 * sa + sg * da * (1.0 - sa)) / oa
                 let ob = (cb.to_double() / 255.0 * sa + sb * da * (1.0 - sa)) / oa

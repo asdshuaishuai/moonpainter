@@ -47,7 +47,7 @@ macOS 原生类 Photoshop 编辑器。对本工程最有价值的三块遗产：
 
 ```
 宿主    cli（native 行协议 + 文件 FFI + 原子落盘）
-交互    agent（63 命令 · vision 闸 · undo/redo · P0–P2 lint · MVSL 闭环 · 工具字典）
+交互    agent（64 命令 · vision 闸 · undo/redo · P0–P2 lint · MVSL 闭环 · 工具字典）
 容器    mpd（pack/unpack · manifest/params/agent/mvsl · 指纹对账 · 限额 · 预览生成）
 渲染    render（RGBA 画布 · 2×2 子采样 AA · W3C 混合 · 旋转 · 取景 · pick · stats）
 核心    core（IR 层树 · canonical JSON 双向 · 指纹 · 层定位原语 · MVSL 编辑表 IR）
@@ -279,7 +279,7 @@ manifest 的 `mvsl` 版本块 pin 住四个独立版本号（`render_contract` /
   **空断言**即保护断言的选择子零命中（P1——恒真，比"被违反"更坏，因为它给的是虚假的安心）。
   空编辑表是合法状态，不报条目——lint 不该对「我还没改任何东西」报警。
 
-## 6. 命令集（63 个；字典 = agent/tools.mbt 单一事实源）
+## 6. 命令集（64 个；字典 = agent/tools.mbt 单一事实源）
 
 会话：`session-open` `list-tools` `help`；文档：`new` `set-canvas` `list-layers` `query-layer` `lint`；
 绘制：`add-rect/ellipse/polygon/line` `add-image`（b64）`set-image`（原地换图，只换像素）`set-style` `move` `resize` `rotate` `rename` `tag` `delete` `visible` `reorder` `group` `ungroup` `group-add` `group-remove`（成员增删）；
@@ -302,12 +302,34 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
   ②**边界本身算"外"**（`in_polygon` 的半开约定，与矩形"左闭右开"同源）；
   ③用到多边形蒙版的容器声明 `render_contract:3`：老引擎的 `mask_cover_at` 只认
   Ellipse、其余一律当**矩形**画 ⇒ 套索选区会被画成方框，属静默错渲。
-  `required_render_contract` 取**所有层里的最高档**（毛边=2、多边形=3），
+  ④用到**仿制图章（克隆笔触）**的容器声明 `render_contract:4`：老引擎的 dab 只有
+  `x/y/r/color/erase`，读不到 `clone/sdx/sdy` ⇒ 会把整笔克隆**当普通笔色**画上去
+  （一块死色），而"污点被盖住了"看着还挺像成功，属静默错渲。
+  `required_render_contract` 取**所有层里的最高档**（毛边=2、多边形=3、克隆=4），
   不是"遇到第一档就 return"；**P5 调整层**做了**叠加式像素算子**（`add-adjust` 的
   11 个算子；每个算子的可调数值**有取值范围**——brightness/contrast/saturation/
   warm 是 -1..1，blur/sharpen/smooth/whiten/vignette 是 0..1，invert/grayscale
   **没有数值**（渲染器不读 value，给了入口直接拒绝）；范围与清单是
   `agent/session.mbt` 的 `adjust_spec` **一张表**，字典描述与错误提示都从它生成）。
+  **仿制图章（`clone`，去污点）的口径**（三处实现在 `render/scene.mbt` +
+  `agent/session.mbt`，判据在 `render/clone_test.mbt`）：
+  ①**取样源 = 本层之下那张合成缓冲**（画布坐标，含不透明白底）——不是"某个固定图层"，
+  也不是"整幅画的所有层"（本层自己的笔迹**不在**源里；判据钉住了"第二笔不会取到
+  第一笔刚画上的颜色"）；
+  ②`src=x,y` 是**画布坐标**的源锚点，落点 `pts` 同样是画布坐标；引擎把它折成
+  **整笔恒定**的源偏移 `sdx/sdy`（= 源锚点 − 第一个落点），存在**每个 dab** 上
+  （同一个命令内恒定 = PS 的"对齐"；再发一条命令 = 重新锚定）。dab 的 `x/y` 仍是
+  **层局部**坐标，而 `sdx/sdy` 是**画布向量**——两者单位不同，`query-layer` 报的
+  `clone_off` 是后者，**别拿它去加层原点**；
+  ③克隆笔的浓度**不读笔色 alpha**（命令面给的 `color` 是全 0），浓度来自源像素
+  自己的 alpha × 层不透明度；取样点出画布 = 那里什么都没有 ⇒ 不落墨（不留黑边）；
+  ④命令面拒绝：`color=`（颜色来自画面）、`src` 缺失 / 在画布外、源锚点与第一个
+  落点重合（偏移为 0 = "克隆自己"）、非 Raster 层；
+  ⑤**语义边界**：层在 **α<1 的组**里时，渲染器为该组另开一张缓冲 ⇒ 克隆的取样源
+  退化成"**组自己那张画面**"（组内已画的部分），不是画布合成结果。这是渲染管线
+  的结构决定的，`lint` 报 P3 说清（不拦）；要"从整幅画取样"就把组的不透明度恢复
+  成 1 或把克隆放到组外。**未做**：修复画笔（带色彩/光照匹配的愈合，PS 的
+  healing brush）——克隆只做"照抄源区像素"。
   **调整层自己的蒙版也生效**（此前 `add-mask` 收得下、`lint` 一个字不说、而渲染
   **逐位不变**——三种信号自相矛盾，属铁律 6 那一类）：`p' = lerp(p, op(p), cover)`，
   复用编辑表那句唯一的软混合原语 `@pixel.lerp_argb`（软权重只有一处实现）。

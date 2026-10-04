@@ -323,9 +323,9 @@ test "pick：只报「真的在那里画了东西」的层（与 paint_layer 同
   assert_eq(@render.pick(d4, 5.0, 5.0), Some("m"), msg="蒙版内仍应命中")
   // 5) raster 层：只在笔触覆盖处算「有东西」，erase 过的地方不算
   let d5 = @core.new_document("u-pick-dab", 100, 100)
-  let dab = @core.Dab::{ x: 20.0, y: 20.0, r: 6.0, color: 0xFF0000FF, erase: false }
-  let era = @core.Dab::{ x: 60.0, y: 20.0, r: 6.0, color: 0x00000000, erase: true }
-  let painted = @core.Dab::{ x: 60.0, y: 20.0, r: 6.0, color: 0xFF00FF00, erase: false }
+  let dab = @core.Dab::{ x: 20.0, y: 20.0, r: 6.0, color: 0xFF0000FF, erase: false, clone: false, sdx: 0.0, sdy: 0.0 }
+  let era = @core.Dab::{ x: 60.0, y: 20.0, r: 6.0, color: 0x00000000, erase: true, clone: false, sdx: 0.0, sdy: 0.0 }
+  let painted = @core.Dab::{ x: 60.0, y: 20.0, r: 6.0, color: 0xFF00FF00, erase: false, clone: false, sdx: 0.0, sdy: 0.0 }
   d5.layers.push(
     { ..@core.default_layer("r", "r", 0.0, 0.0, 100.0, 100.0), kind: @core.ShapeKind::Raster, dabs: [dab, painted, era] },
   )

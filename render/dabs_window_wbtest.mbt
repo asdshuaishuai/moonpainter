@@ -34,7 +34,7 @@ fn raster_layer_with_dab(x : Double, y : Double, r : Double) -> @core.Layer {
   {
     ..l,
     kind: @core.ShapeKind::Raster,
-    dabs: [{ x, y, r, color: 0xFF0000FF, erase: false }],
+    dabs: [{ x, y, r, color: 0xFF0000FF, erase: false, clone: false, sdx: 0.0, sdy: 0.0 }],
   }
 }
 
@@ -68,7 +68,8 @@ test "dab 窗口：窗必须包住墨迹且留有余量（小数中心 × 半径
           Some(w) => w
         }
         let scratch = transparent(n, n)
-        paint_dabs(l, [], scratch)
+        // 源缓冲传这张 scratch 自己（这些 dab 都不是克隆 ⇒ 取样路径根本不会被走到）
+        paint_dabs(l, [], scratch, scratch)
         // 独立判据：按定义（圆心/半径/2×2 子采样）逐像素算该不该有墨。
         // 浮点算式与实现**逐字相同**（`px + 0.25 - 圆心`、`dx*dx + dy*dy <= r*r`）
         // 才不会有边界假阳性；`cx` 由测试自己从同一个表达式算出（不是反读 d.x）。
@@ -149,8 +150,8 @@ test "dab 窗口：多个 dab 取并集、空盒不算落笔、画布外的 dab 
     ..l,
     kind: @core.ShapeKind::Raster,
     dabs: [
-      { x: 10.0, y: 10.0, r: 2.0, color: 0xFF0000FF, erase: false },
-      { x: 150.0, y: 150.0, r: 2.0, color: 0xFF0000FF, erase: false },
+      { x: 10.0, y: 10.0, r: 2.0, color: 0xFF0000FF, erase: false, clone: false, sdx: 0.0, sdy: 0.0 },
+      { x: 150.0, y: 150.0, r: 2.0, color: 0xFF0000FF, erase: false, clone: false, sdx: 0.0, sdy: 0.0 },
     ],
   }
   let (wx0, wy0, wx1, wy1) = match dabs_window(l, [], 200, 200) {
@@ -167,20 +168,20 @@ test "dab 窗口：多个 dab 取并集、空盒不算落笔、画布外的 dab 
   assert_eq(wy1, 153)
 
   // r=0 的 dab 不落笔（`dab_box` 直接 None）
-  let zero = { ..l, dabs: [{ x: 10.0, y: 10.0, r: 0.0, color: 0xFF0000FF, erase: false }] }
+  let zero = { ..l, dabs: [{ x: 10.0, y: 10.0, r: 0.0, color: 0xFF0000FF, erase: false, clone: false, sdx: 0.0, sdy: 0.0 }] }
   assert_true(dabs_window(zero, [], 200, 200) is None, msg="r=0 的 dab 不该占窗口")
 
   // 完全在画布外 ⇒ 空窗（此时 `paint_raster` 连清零都不做）
   let outside = {
     ..l,
-    dabs: [{ x: -100.0, y: -100.0, r: 4.0, color: 0xFF0000FF, erase: false }],
+    dabs: [{ x: -100.0, y: -100.0, r: 4.0, color: 0xFF0000FF, erase: false, clone: false, sdx: 0.0, sdy: 0.0 }],
   }
   assert_true(dabs_window(outside, [], 200, 200) is None, msg="画布外的 dab 不该占窗口")
 
   // **部分**在画布外 ⇒ 窗口要夹到画布内（不能越界）
   let partial = {
     ..l,
-    dabs: [{ x: 2.0, y: 2.0, r: 6.0, color: 0xFF0000FF, erase: false }],
+    dabs: [{ x: 2.0, y: 2.0, r: 6.0, color: 0xFF0000FF, erase: false, clone: false, sdx: 0.0, sdy: 0.0 }],
   }
   let (px0, py0, px1, py1) = match dabs_window(partial, [], 200, 200) {
     None => fail("部分在画布内的 dab 不该给出空窗")
