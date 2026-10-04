@@ -51,6 +51,14 @@ fn d2s(d : Double) -> String {
   }
 }
 
+/// 仿制图章的**源锚点**（画布坐标 "x,y"；空 = 还没定源）。
+///
+/// ⚠️ 存的是**画布坐标**，不是层局部：引擎的 `clone` 收 `src=x,y` 也是画布坐标，
+/// 而克隆笔触自己会把它折成源偏移。这里若存局部坐标，就得在前端再算一次
+/// "画布 ↔ 局部"（蒙版那一轮栽过的正是这种两个单位共用一个字段），而且
+/// 源偏移本来就要在引擎里由"第一个落点"定——前端不该有第二处实现。
+let g_clone_src : Ref[String] = Ref("")
+
 ///|
 /// 确保画笔层存在：优先复用既有 raster 层，否则新建。
 fn ensure_paint_layer() -> String {
@@ -82,6 +90,14 @@ fn do_stroke(mode : String, pts : String) -> Unit {
   let size = js_state_get("size")
   let cmd = if mode == "erase" {
     "erase layer=\{lid} pts=\{pts} r=\{size}"
+  } else if mode == "clone" {
+    // 前端**不判**"定源了没有"：没定源就把命令原样发下去，让引擎拒它
+    // （"clone 需要 src=x,y…"）并把**引擎原话**摆到状态栏——同一条判据只有
+    // 引擎那一处实现。这里若再加一句 `if src == "" { 报错 }`，就是同一个判断
+    // 写两遍，早晚有一处先烂（而且前端的说法会比引擎的更不像人话）。
+    let src = g_clone_src.val
+    let csize = js_state_get("csize")
+    "clone layer=\{lid} pts=\{pts} r=\{csize} src=\{src}"
   } else {
     let color = js_state_get("color")
     if color == "" {
@@ -94,6 +110,9 @@ fn do_stroke(mode : String, pts : String) -> Unit {
   if eng_ok(r) {
     eng_render(800)
     refresh_layers_light()
+  } else {
+    // 人类侧入口必须报**引擎原话**（静默失败的入口比没有入口更坏）
+    ui_engine_error(r)
   }
 }
 
@@ -1395,6 +1414,13 @@ fn shape_line(
 /// 这一层是这轮补的——此前人类侧的入口大多是 `let _ = engine_exec_line(…)`，
 /// 失败了连"没反应"都算不上（画面不动，人以为自己点错了）。引擎的拒绝理由
 /// 是它唯一的说明书（"羽化必须 ≥ 0"、"画布单边 ≤ 4096"），必须传给人。
+/// 人侧入口失败时的**唯一**呈现方式（引擎原话进状态栏）。
+/// 别在调用点各写一遍 `js_status_bar("⚠ " + eng_s(j, "error"))`：短语一旦分叉，
+/// 同一个拒绝在两处会长得像两件事（而"报引擎原话"正是这条纪律的全部意义）。
+fn ui_engine_error(j : Json) -> Unit {
+  js_status_bar("⚠ " + eng_s(j, "error"))
+}
+
 fn do_ui_cmd(line : String) -> Bool {
   // `engine_exec_line` 回的是**字符串**（原始 JSON），走 `eng` 解析成 Json。
   // 返回成败：调用方若要顺带改本地状态（清选中、记新组 id），必须**只在成功后**改。
@@ -1404,7 +1430,7 @@ fn do_ui_cmd(line : String) -> Bool {
     refresh_ui()
     true
   } else {
-    js_status_bar("⚠ " + eng_s(j, "error"))
+    ui_engine_error(j)
     false
   }
 }
@@ -2040,7 +2066,7 @@ fn inject_css() -> Unit {
     #|.carea{background:#26262f;display:flex;align-items:center;justify-content:center;overflow:auto;position:relative}
     #|.cwrap{border:1px solid #444;box-shadow:0 4px 24px #0008;background:repeating-conic-gradient(#3a3a4e 0% 25%,#2a2a3e 0% 50%) 0 0/16px 16px}
     #|#canvas-img{display:block;max-width:100%;max-height:72vh}
-    #|#canvas-img.tool-brush,#canvas-img.tool-erase,#canvas-img.tool-pick,#canvas-img.tool-crop,#canvas-img.tool-text,#canvas-img.tool-rect,#canvas-img.tool-ellipse,#canvas-img.tool-line,#canvas-img.tool-poly,#canvas-img.tool-lasso{cursor:crosshair}
+    #|#canvas-img.tool-brush,#canvas-img.tool-erase,#canvas-img.tool-clone,#canvas-img.tool-pick,#canvas-img.tool-crop,#canvas-img.tool-text,#canvas-img.tool-rect,#canvas-img.tool-ellipse,#canvas-img.tool-line,#canvas-img.tool-poly,#canvas-img.tool-lasso{cursor:crosshair}
     #|.rpanel{background:#1b1b2e;border-left:1px solid #32324a;display:flex;flex-direction:column;overflow:hidden}
     #|.rscroll{flex:1;overflow-y:auto;display:flex;flex-direction:column}
     #|.ph{padding:7px 10px 5px;font-size:10px;font-weight:600;color:#667;text-transform:uppercase;letter-spacing:.8px;user-select:none}
@@ -2144,6 +2170,7 @@ pub fn app_html() -> String {
       #|<div class='ctx' data-for='move'><span>🖐 拖动移动选中图层</span><span class='hint'>先在右侧图层面板点选图层</span></div>
       #|<div class='ctx' data-for='brush'><input type='color' id='bcolor' value='#ff3366'/><span>笔径</span><input type='range' id='bsize' min='1' max='60' value='10'/><span id='bsize-v' class='hint'>10 px</span></div>
       #|<div class='ctx' data-for='erase'><span>🧽</span><span>笔径</span><input type='range' id='esize' min='1' max='60' value='14'/><span class='hint'>橡皮擦：只擦本层笔迹，透出下层</span></div>
+      #|<div class='ctx' data-for='clone'><span>🩹</span><span>笔径</span><input type='range' id='csize' min='1' max='60' value='8'/><span id='clone-src-v' class='hint'>先按 Alt 在画布上点一下**定源**（选一块干净的地方），再拖动涂抹</span></div>
       #|<div class='ctx' data-for='pick'><span>💧 点击画布取色，自动设为笔刷颜色</span></div>
       #|<div class='ctx' data-for='text'><span>T</span><input id='tinput' placeholder='输入文字内容…' style='width:200px;background:#0d1020;color:#ccc;border:1px solid #3a3a5e;border-radius:4px;padding:4px 8px;font-size:12px'/><button onclick='globalThis.__text_add()' style='background:#3d63ff;color:#fff;border:0;border-radius:4px;padding:4px 12px;font-size:12px;cursor:pointer'>添加</button><span class='hint'>先点画布选位置</span></div>
       #|<div class='ctx' data-for='crop'><span>✂️ 拖拽出裁剪选区</span>
@@ -2155,6 +2182,7 @@ pub fn app_html() -> String {
       #|<div class='t on' data-tool='move' title='移动' onclick='globalThis.__tool("move")'>🖐</div>
       #|<div class='t' data-tool='brush' title='画笔' onclick='globalThis.__tool("brush")'>🖌</div>
       #|<div class='t' data-tool='erase' title='橡皮擦' onclick='globalThis.__tool("erase")'>🧽</div>
+      #|<div class='t' data-tool='clone' title='仿制图章（去污点）：Alt 点一下定源，再拖动涂抹' onclick='globalThis.__tool("clone")'>🩹</div>
       #|<div class='t' data-tool='pick' title='吸管取色' onclick='globalThis.__tool("pick")'>💧</div>
       #|<div class='ts'></div>
       #|<div class='t' data-tool='text' title='文本' onclick='globalThis.__tool("text")'>T</div>
@@ -2372,6 +2400,8 @@ pub fn register_globals() -> Unit {
       match name {
         "brush" => "🖌 画笔：按住拖动绘制（自动建画笔层）"
         "erase" => "🧽 橡皮擦：只擦除画笔层笔迹"
+        "clone" =>
+          "🩹 仿制图章：按住 Alt 在画布上点一下**定源**（干净的地方），再拖动把干净像素盖到脏的地方（一笔一笔来，不是一键去污）"
         "pick" => "💧 吸管：点击取色"
         "text" => "T 文本：点击画布输入"
         "crop" => "✂️ 裁剪：拖拽选区后应用"
@@ -2393,6 +2423,16 @@ pub fn register_globals() -> Unit {
     }
   })
   js_reg2s("__stroke", fn(mode : String, pts : String) { do_stroke(mode, pts) })
+  // 仿制图章定源（画布坐标）。**不校验、不猜**：空串照发，让引擎拒它并把人话摆到
+  // 状态栏（"clone 需要 src=x,y…"）。前端只负责记住人点了哪儿。
+  js_reg1("__clone_src", fn(coords : String) {
+    g_clone_src.val = coords
+    js_text(
+      "clone-src-v",
+      "🎯 源已定于 (\{coords})：拖动画笔把这块干净像素盖到要修的地方（再按 Alt 点一下可换源）",
+    )
+    js_status_bar("🩹 源点 (\{coords}) —— 拖动开始仿制（Alt 点击可换源）")
+  })
   js_reg1("__pick_at", fn(coords : String) { do_pick(coords) })
   js_reg1("__text_at", fn(coords : String) { do_text_pick(coords) })
   js_reg0("__text_add", fn() -> @js_async.Promise[Unit] {

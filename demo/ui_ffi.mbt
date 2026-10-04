@@ -325,6 +325,17 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #|   ov.id = 'crop-ov';
   #|   ov.style.cssText = 'position:absolute;border:1px dashed #6a9cff;box-shadow:0 0 0 9999px rgba(10,10,20,.55);display:none;pointer-events:none';
   #|   wrap.appendChild(ov);
+  #|   // 仿制图章的**源点标记**（十字）：Alt 点一下画出来，让人看得见"从哪儿取样"。
+  #|   // 它只是**显示**——源锚点的真值在引擎侧（`clone_off`），前端不存第二份。
+  #|   const cm = document.createElement('div');
+  #|   cm.id = 'clone-src';
+  #|   cm.textContent = '✛';
+  #|   cm.style.cssText = 'position:absolute;display:none;pointer-events:none;color:#ff4d4d;font:14px/14px sans-serif;text-shadow:0 0 2px #000;transform:translate(-7px,-7px)';
+  #|   wrap.appendChild(cm);
+  #|   window.__cloneMark = (dx, dy, on) => {
+  #|     cm.style.display = on ? 'block' : 'none';
+  #|     if (on) { cm.style.left = dx + 'px'; cm.style.top = dy + 'px'; }
+  #|   };
   #|   // 逐点绘制（折线/多边形）的预览：一张 SVG 覆盖层，点由前端存、这里只画
   #|   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   #|   svg.id = 'poly-ov';
@@ -370,7 +381,12 @@ extern "js" fn js_setup_canvas(img_id : String) -> Unit =
   #|     toolDown = t;
   #|     const [x, y] = toDoc(e);
   #|     const [dx, dy] = toDisp(e);
-  #|     if (t === 'brush' || t === 'erase') {
+  #|     if (t === 'clone' && (e.altKey || e.metaKey)) {
+  #|       // Alt（或 Mac 的 ⌘）点一下 = 定源，**不落笔**。源点交给引擎算偏移，
+  #|       // 前端只把它报上去 + 画个十字。
+  #|       globalThis.__clone_src(x + ',' + y);
+  #|       window.__cloneMark(dx, dy, true);
+  #|     } else if (t === 'brush' || t === 'erase' || t === 'clone') {
   #|       drawing = true; lastPt = [x, y]; lastSend = 0;
   #|     } else if (t === 'pick') {
   #|       globalThis.__pick_at(x + ',' + y);
@@ -616,6 +632,7 @@ pub fn setup_tool_state() -> Unit {
       #|bind('bcolor', 'color');
       #|bind('bsize', 'size', (v) => Number(v));
       #|bind('esize', 'size', (v) => Number(v));
+      #|bind('csize', 'csize', (v) => Number(v));
       #|bind('fstr', 'strength', (v) => (Number(v) / 100).toFixed(2));
       #|// 蒙版圆角/羽化。椭圆那个滑块写同一个 feather 键——圆角对椭圆无效，
       #|// 而羽化两者都吃，所以两个工具条共用一份羽化值。

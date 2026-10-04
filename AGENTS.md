@@ -498,7 +498,7 @@ moon run --target native cli    # stdin 行协议；help 查看全部 64 个命�
   **但引擎从未实现还原**，于是用户输入 "Hello World"，存进去和渲染出来的
   都是 `Hello_World`。现在 `_` 保持**字面下划线**（历史行为完全不变），
   含空格靠引号。新增自由文本参数时，走 `quote_arg`（demo/main.mbt）拼串。
-- demo 工具面是 agent 命令面的**手写子集**（当前 55 个）：引擎新增命令后，
+- demo 工具面是 agent 命令面的**手写子集**（当前 56 个）：引擎新增命令后，
   要用到就该同步加进 `paint_tools.mbt` 的 `paint_tool_defs` + `tool_cmd` +
   `catalog.mbt` 的 system prompt，否则"引擎有能力"不等于"产品里的 AI 用得上"。
   模型侧只写 JSON，base64 由 SDK 的 `b64_text` 转。

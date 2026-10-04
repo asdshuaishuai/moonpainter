@@ -116,6 +116,7 @@ fn tool_cmd(name : String) -> String? {
     "add_paint_layer" => Some("add-paint")
     "paint_stroke" => Some("brush")
     "erase_stroke" => Some("erase")
+    "clone_stroke" => Some("clone")
     "apply_filter" => Some("add-adjust")
     "set_adjust" => Some("set-adjust")
     "crop_canvas" => Some("crop")
@@ -415,6 +416,16 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
         ("layer", "string:req:画笔层 id"),
         ("pts", "string:req:折线 x,y;x,y;…"),
         ("r", "number:半径 px（默认 10）"),
+      ],
+    ),
+    make_tool(
+      "clone_stroke",
+      "仿制图章（去污点）：沿折线把**本层之下那张画面**的像素盖过来——先钉一个干净的源点，再一笔一笔盖到脏的地方（不是一键去污）",
+      [
+        ("layer", "string:req:画笔层 id（raster；先 add_paint_layer）"),
+        ("pts", "string:req:折线 x,y;x,y;…（**画布坐标**；第一个落点与 src 的差就是整笔的源偏移）"),
+        ("r", "number:笔触半径 px（默认 8）"),
+        ("src", "string:req:源锚点 x,y（**画布坐标**，必须在画布内）"),
       ],
     ),
     make_tool(
@@ -765,6 +776,12 @@ pub fn tool_line(name : String, args : Json) -> String {
       let pts = arg_of(args, "pts")
       let r = opt_of(args, "r", "10")
       "erase layer=\{lid} pts=\{pts} r=\{r}"
+    }
+    "clone_stroke" => {
+      let lid = arg_of(args, "layer")
+      let pts = arg_of(args, "pts")
+      let r = opt_of(args, "r", "8")
+      "clone layer=\{lid} pts=\{pts} r=\{r} src=\{arg_of(args, "src")}"
     }
     "apply_filter" =>
       "add-adjust op=\{arg_of(args, "op")} value=\{opt_of(args, "value", "0.5")}"

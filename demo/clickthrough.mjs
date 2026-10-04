@@ -25,7 +25,13 @@ const els = new Map();
 globalThis.__downloads = [];
 // 工具状态（笔宽/笔色）：`do_stroke` 从这里读 `size`/`color`，空串会拼出 `r=` 这种
 // 空值参数（引擎拒它）。浏览器里这些由工具栏设置，驱动器给它一组确定值。
-globalThis.MPST = { tool: 'rect', size: '6', color: '#3366FF', strength: 0.35, zoom: 1 };
+// headless 分支**不跑** `setup_tool_state()`（那在浏览器分支里：它把 HTML 控件的
+// 初值 bind 进 `MPST`），所以这里的 `MPST` 就是**驱动扮演的"人调好的工具参数"**。
+// 新增工具参数（如仿制图章的 `csize`）时，这里必须一起给——否则命令拼出来是
+// `r=` 空值，引擎回「`r=` 的值是空的」，而现象看着像"这个工具没做"。
+globalThis.MPST = {
+  tool: 'rect', size: '6', csize: '8', color: '#3366FF', strength: 0.35, zoom: 1,
+};
 function mkEl(id) {
   return {
     id,
@@ -639,6 +645,56 @@ check(
   '指纹 ' + String(fpPaint0).slice(0, 8) + ' → ' + String(fpPaint1).slice(0, 8),
 );
 
+// ⑫b 仿制图章（去污点）：人侧那条链 = 选 🩹 工具 → Alt 点一下定源 → 拖动涂抹。
+// 判据要**两头咬**：源点与目标点的颜色本来不同（判别力自证），克隆之后目标点
+// 必须变成**源点的颜色**——不是笔刷色、也不是"什么都没发生"。
+el('cw').value = '120';
+el('ch').value = '120';
+await globalThis.__new('');
+exec('add-rect x=10 y=10 w=40 h=40 fill=#22CC88FF');
+globalThis.__tool('clone');
+check(
+  '🩹 工具：状态栏说清"Alt 定源再拖"，且画布光标切到十字',
+  /仿制图章/.test(status()) && String(el('canvas-img').className || '').includes('tool-clone'),
+  `status="${status()}" class="${el('canvas-img').className}"`,
+);
+const cloneSrc = exec('sample 30 30').color; // 源区（干净的绿块）
+const cloneDst0 = exec('sample 90 80').color; // 目标点（原本是白纸）
+check(
+  '克隆前：源点与目标点颜色**本就不同**（不然下面那条断言是空的）',
+  cloneSrc !== cloneDst0,
+  `源 ${cloneSrc} vs 目标 ${cloneDst0}`,
+);
+await globalThis.__clone_src('30,30');
+await globalThis.__stroke('clone', '80,80;100,80');
+const cloneDst1 = exec('sample 90 80').color;
+const cloneLayer = layers().filter((l) => l.kind === 'raster').slice(-1)[0];
+const cloneQ = cloneLayer ? exec(`query-layer ${cloneLayer.id}`) : null;
+check(
+  '克隆真的落笔：目标点变成**源点的颜色**（不是笔刷色、也不是没反应）',
+  cloneDst1 === cloneSrc && cloneDst1 !== cloneDst0,
+  `目标 ${cloneDst0} → ${cloneDst1}；源 ${cloneSrc}`,
+);
+// 报告面：**读解析后的数值**（别拿字符串 `contains` 判——`exec` 回的是对象，
+// 而且子串匹配会被 `clone_off:[-50.5,-50]` 这类值骗过）。
+const cloneL = cloneQ && cloneQ.layer ? cloneQ.layer : {};
+check(
+  '克隆笔触记在文档里：报告面报出克隆笔数与**源偏移**（画布向量 −50,−50）',
+  cloneL.clone_dabs > 0 && JSON.stringify(cloneL.clone_off) === '[-50,-50]',
+  JSON.stringify({ clone_dabs: cloneL.clone_dabs, clone_off: cloneL.clone_off }),
+);
+// 拒控：没定源就画 ⇒ 人侧入口把**引擎原话**摆出来（不是静默不画）
+await globalThis.__clone_src('');
+el('sbar-text').textContent = '';
+await globalThis.__stroke('clone', '20,100;40,100');
+// 没定源时前端把 `src=` 原样发下去（**前端不判**这条前置条件——同一个判断
+// 只许引擎那一处实现），引擎按"空值参数一律拒绝"回原话，入口把它摆到状态栏。
+check(
+  '拒控：没 Alt 定源就涂抹 ⇒ 状态栏报引擎原话（不是静默不画）',
+  /clone/.test(status()) && /src=/.test(status()),
+  status() || '(空)',
+);
+
 // ⑬ 画布：新建（顶栏尺寸 → 画布 + 白底）、改尺寸、以及**越界必须报原话**
 el('cw').value = '44';
 el('ch').value = '33';
@@ -834,7 +890,7 @@ check(
 // ⑯ 覆盖清单（机器对账用，格式由 `build_demo.sh#html-wiring` 解析）：
 // driver 走不到的处理器必须在这儿**写明原因**，否则"没覆盖"会静默变成"覆盖了"。
 /* coverage:begin
-driven: __selfcheck __dbg_lint __dbg_edits __dbg_census __dbg_probe __dbg_help __dbg_tools __dbg_schema __dbg_preview __mvsl_set __mvsl_show __mvsl_impact __mvsl_assert __mvsl_clear __param_list __param_set __param_del __cmd __build_badge __save __export __run __sel __vis __front __back __setx __sety __setw __seth __move_delta __rotate __flip __op __del __undo __redo __rename __tag_add __tag_del __reparent __ungroup_sel __text_at __text_add __text_set __text_font __mask_ready __mask_invert __mask_clear __adj_op __adj_val __af __stroke __new __set_canvas __crop_ready __crop_apply __crop_cancel __zoom __refresh __stats __optip __toggle_ai __tool __poly_click __poly_finish __poly_cancel __shape_ready __group_sel __pick_at
+driven: __selfcheck __dbg_lint __dbg_edits __dbg_census __dbg_probe __dbg_help __dbg_tools __dbg_schema __dbg_preview __mvsl_set __mvsl_show __mvsl_impact __mvsl_assert __mvsl_clear __param_list __param_set __param_del __cmd __build_badge __save __export __run __sel __vis __front __back __setx __sety __setw __seth __move_delta __rotate __flip __op __del __undo __redo __rename __tag_add __tag_del __reparent __ungroup_sel __text_at __text_add __text_set __text_font __mask_ready __mask_invert __mask_clear __adj_op __adj_val __af __stroke __new __set_canvas __crop_ready __crop_apply __crop_cancel __zoom __refresh __stats __optip __toggle_ai __tool __poly_click __poly_finish __poly_cancel __shape_ready __group_sel __pick_at __clone_src
 browser-only: __drop=拒绝路径已被 driver 走过（没字节时明说）；成功路径要真的 File+Image 解码，壳里造一个等于把"读文件"假装测了; __file_sel=同上（driver 走的是"没选到文件"那条）; __mpd_sel=要真的 .mpd 文件字节，壳里没有 FileReader; __img_swap=换图必须先有一张真图进来
 coverage:end */
 
