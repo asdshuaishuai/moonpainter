@@ -199,6 +199,10 @@ extern "js" fn js_refresh_layers(html : String) -> Unit =
   #| (html) => { const el = document.getElementById('llist'); if (el) el.innerHTML = html; }
 
 ///|
+extern "js" fn js_refresh_history(html : String) -> Unit =
+  #| (html) => { const el = document.getElementById('hlist'); if (el) el.innerHTML = html; }
+
+///|
 extern "js" fn js_update_props(html : String) -> Unit =
   #| (html) => { const el = document.getElementById('pprops'); if (el) el.innerHTML = html; }
 

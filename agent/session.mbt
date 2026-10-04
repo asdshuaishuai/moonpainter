@@ -15,6 +15,29 @@ pub(all) struct Session {
   mut vision_ok : Bool
   undo_stack : Array[String]
   redo_stack : Array[String]
+  /// **步骤历史**（③ 每步可见、可跳回）：每个真实变更命令的"人话标签"，
+  /// 与撤销栈**同一批打点**（`snapshot` 一处）。
+  ///
+  /// 与 `edits` 的分工：`edits` 是**事件日志**（连 undo/redo/goto 这些"不产生
+  /// 新状态"的动作也记），`labels` 只记**产生状态的步骤**——面板上出现的每一行
+  /// 必须对应一个能跳回去的状态，否则"跳到第 3 步"会落到一个语义不明的地方。
+  labels : Array[String]
+  /// `labels[0]` 对应的**绝对步号**（1 起）。撤销栈有 64 的容量上限，溢出时最早
+  /// 的快照被丢掉 ⇒ 能回去的最早一步跟着往后挪，这里如实记账（`history` 会报
+  /// 出来，`goto` 越过它就**报错**而不是"跳到一个看着对、其实不是那一刻"的状态）。
+  mut step_base : Int
+  /// 当前状态的**绝对步号**：0 = `new` 之后的初始文档；= 已发生的变更数。
+  mut cursor : Int
+  /// **命令之前**的状态（`exec` 在分发前抓一次，`snapshot` 用它入栈）。
+  ///
+  /// 为什么要在入口抓：`snapshot` 原先在命令中途调用，而"中途"往往已经改过
+  /// doc——最典型的是 `alloc_layer_id` 已经把 `next_layer_no` 递增了。于是快照
+  /// 里存的是一个**从未存在过**的状态（层是旧的、计数器是新的），`undo` 回来的
+  /// doc 与"那一刻"**指纹不同**（实测 `add-rect`×4 后 `undo`×2 得到
+  /// `next_layer_no:4`，而直接建两层是 3；画面一样，只有指纹看得出来）。
+  /// 修法放在入口而不是 32 个调用点：调用点每加一个都可能忘，而入口只有一处。
+  /// 只读命令抓了也不用（不调 `snapshot` ⇒ 栈不变），代价是一次序列化。
+  mut pending_pre : String?
   /// 最近一次 render 的 png sha256（vision 通道注册）
   mut last_render_hash : String
   /// 当前 MVSL 编辑表（人机同一 IR：GUI 操作与 AI 工具调用走同一张表、
@@ -45,6 +68,10 @@ pub fn Session::new() -> Session {
     vision_ok: false,
     undo_stack: [],
     redo_stack: [],
+    labels: [],
+    step_base: 0,
+    cursor: 0,
+    pending_pre: None,
     last_render_hash: "",
     mvsl: @core.EditProgram::new(),
   }
@@ -208,6 +235,13 @@ pub fn exec(s : Session, line : String) -> String {
     return err("空命令")
   }
   let verb = tokens[0]
+  // **命令之前**的状态：就在分发之前抓（`snapshot` 的唯一输入）。
+  // 放在这里而不是各命令内部——"快照必须是命令之前"这条只要有一个调用点忘，
+  // `undo` 回来的就不是那一刻，而那种偏差**只在指纹上看得出来**（画面对）。
+  s.pending_pre = match s.doc {
+    Some(d) => Some(@core.doc_to_json(d))
+    None => None
+  }
   // ---- 无需 vision 闸的命令 ----
   if verb == "help" {
     return help_json()
@@ -278,6 +312,8 @@ pub fn exec(s : Session, line : String) -> String {
     "fingerprint" => cmd_fingerprint(s)
     "inspect" => cmd_inspect(s)
     "edits" => cmd_edits(s)
+    "history" => cmd_history(s)
+    "goto" => cmd_goto(s, tokens)
     "undo" => cmd_undo(s)
     "redo" => cmd_redo(s)
     // MVSL 编辑表（PLAN-MVSL §4 P1 闭环 affordance）
@@ -332,11 +368,32 @@ fn require_doc(s : Session) -> Result[@core.Document, String] {
 ///|
 /// 变更快照：撤销栈入栈、重做栈清空、编辑日志登记（带容量护栏）。
 fn snapshot(s : Session, doc : @core.Document, edit_line : String) -> Unit {
-  s.undo_stack.push(@core.doc_to_json(doc))
+  // 跳回历史中间再动手 ⇒ 后面那些步骤**真的没了**（PS 的历史面板同语义：
+  // 新操作截断未来）。这里必须把标签一起截掉：留着它们，面板会出现"看得见、
+  // 跳不回去"的幽灵步骤，而 `goto 5` 会落到一条已经作废的线上。
+  while s.labels.length() > s.cursor - s.step_base {
+    let _ = s.labels.pop()
+  }
+  // 入栈的是**命令之前**的状态（`exec` 在分发前抓）：命令中途的 doc 已经不是
+  // "那一刻"了——`alloc_layer_id` 早把计数器动了，存下来的会是一个从未存在过的
+  // 状态，`undo` 的指纹与"那一刻"对不上（画面对、指纹不对，最难查的那种）。
+  let pre = match s.pending_pre {
+    Some(p) => p
+    None => @core.doc_to_json(doc)
+  }
+  s.pending_pre = None
+  s.undo_stack.push(pre)
   if s.undo_stack.length() > 64 {
     let _ = shift_str(s.undo_stack)
+    // 最早那份快照被丢掉了 ⇒ 能回去的最早一步往后挪一位，**如实记账**
+    s.step_base = s.step_base + 1
+    if s.labels.length() > 0 {
+      let _ = s.labels.remove(0)
+    }
   }
   s.redo_stack.clear()
+  s.labels.push(edit_line)
+  s.cursor = s.step_base + s.labels.length()
   s.edits.push(edit_line)
   if s.edits.length() > 500 {
     let _ = shift_str(s.edits)
@@ -385,6 +442,9 @@ fn cmd_new(s : Session, tokens : Array[String]) -> String {
   s.doc = Some(doc)
   s.undo_stack.clear()
   s.redo_stack.clear()
+  s.labels.clear()
+  s.step_base = 0
+  s.cursor = 0
   s.edits.push("new \{w}x\{h}")
   "{\"ok\":true,\"op\":\"new\",\"uuid\":\"\{uuid}\",\"width\":\{w},\"height\":\{h},\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
 }
@@ -2698,6 +2758,82 @@ fn cmd_edits(s : Session) -> String {
 }
 
 ///|
+/// 步骤历史：每一步的**人话标签** + 当前游标（③ 每步可见）。
+///
+/// `done=false` 的那些是"跳回后还没重做的未来步骤"（PS 历史面板里显示为灰行）
+/// ——面板据此把它们画成可点的未来、并说清"再动手就没了"。
+/// `base` 是**还能回去的最早一步**（撤销栈容量 64 的护栏如实报出来，
+/// 别让人以为能一路回到开头）。
+fn cmd_history(s : Session) -> String {
+  let sb = StringBuilder()
+  let total = s.step_base + s.labels.length()
+  sb.write_string(
+    "{\"ok\":true,\"op\":\"history\",\"cursor\":\{s.cursor},\"base\":\{s.step_base},\"total\":\{total},\"count\":\{s.labels.length()},\"can_undo\":\{s.cursor > s.step_base},\"can_redo\":\{s.cursor < total},\"steps\":[",
+  )
+  let mut i = 0
+  for label in s.labels {
+    if i > 0 {
+      sb.write_string(",")
+    }
+    let abs = s.step_base + i + 1
+    sb.write_string(
+      "{\"i\":\{abs},\"label\":\"\{@core.json_escape(label)}\",\"done\":\{abs <= s.cursor}}",
+    )
+    i = i + 1
+  }
+  sb.write_string("]}")
+  sb.to_string()
+}
+
+///|
+/// 跳到第 k 步（0 = `new` 之后的初始文档）——**复用已有的 undo/redo 原语**，
+/// 不新增第二条恢复路径（同一个"恢复状态"的判断只许有一处实现）。
+///
+/// 越界与"超出保留窗口"都在入口拒绝，并把能回去的范围报出来。
+fn cmd_goto(s : Session, tokens : Array[String]) -> String {
+  if tokens.length() < 2 {
+    return err("用法：goto <步号>（0 = 初始状态；步号见 history）")
+  }
+  let k = match to_i(tokens[1]) {
+    Some(v) => v
+    None => return err("goto 的步号=\{tokens[1]} 不是整数")
+  }
+  let total = s.step_base + s.labels.length()
+  if k < s.step_base {
+    return err(
+      "回不到第 \{k} 步：只保留最近 \{s.labels.length()} 步（\{s.step_base}..\{total}，撤销栈 64 的容量上限），更早的快照已被丢弃",
+    )
+  }
+  if k > total {
+    return err("第 \{k} 步还不存在：当前总步数是 \{total}")
+  }
+  // `guard` 是保留字（AGENTS 铁律 9 里就写着），这里叫 hops。
+  let mut hops = 0
+  while s.cursor > k && hops < 600 {
+    let r = cmd_undo(s)
+    if r.has_prefix("{\"error\"") {
+      return r
+    }
+    hops = hops + 1
+  }
+  while s.cursor < k && hops < 600 {
+    let r = cmd_redo(s)
+    if r.has_prefix("{\"error\"") {
+      return r
+    }
+    hops = hops + 1
+  }
+  if s.cursor != k {
+    return err("goto 没能走到第 \{k} 步（停在 \{s.cursor}）：历史栈异常")
+  }
+  let fp = match s.doc {
+    Some(d) => @core.fingerprint(d)
+    None => ""
+  }
+  "{\"ok\":true,\"op\":\"goto\",\"step\":\{k},\"fingerprint\":\"\{fp}\"}"
+}
+
+///|
 fn cmd_undo(s : Session) -> String {
   let doc = match require_doc(s) {
     Ok(d) => d
@@ -2712,6 +2848,7 @@ fn cmd_undo(s : Session) -> String {
   match @core.doc_from_json(snap) {
     Ok(prev) => {
       s.doc = Some(prev)
+      s.cursor = s.cursor - 1
       s.edits.push("undo")
       "{\"ok\":true,\"op\":\"undo\",\"fingerprint\":\"\{@core.fingerprint(prev)}\"}"
     }
@@ -2734,6 +2871,7 @@ fn cmd_redo(s : Session) -> String {
   match @core.doc_from_json(snap) {
     Ok(next) => {
       s.doc = Some(next)
+      s.cursor = s.cursor + 1
       s.edits.push("redo")
       "{\"ok\":true,\"op\":\"redo\",\"fingerprint\":\"\{@core.fingerprint(next)}\"}"
     }

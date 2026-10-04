@@ -695,6 +695,84 @@ check(
   status() || '(空)',
 );
 
+// ⑫c 步骤历史面板（③ 每步可见、可跳回）：面板 HTML 是**纯函数**算出来的，
+// 这里既查"面板列出来的步骤与引擎的 history 一致"，也查"点一行真的跳回去"。
+{
+  // 面板判据要跑在**有多步**的画布上（此前那条链只留下 1 步，"跳回"就无从谈起）。
+  // 这本身是一条自查：先把步骤做够，再断言行数与游标。
+  exec('add-rect x=4 y=4 w=5 h=5 fill=#FFAA00FF');
+  exec('add-rect x=12 y=4 w=5 h=5 fill=#00AAFFFF');
+  exec('add-rect x=20 y=4 w=5 h=5 fill=#AA00FFFF');
+  // ⚠️ 断言顺序有讲究：`exec`（`__headless_exec`）只跑引擎、**不刷界面**，
+  // 而面板是"上次人侧交互"那一帧。所以先做完所有引擎侧准备，**再触发一次
+  // 人侧动作**（`__goto` → `refresh_ui`）让面板对齐，然后才断言行数。
+  // 不这么做，"行数 vs 步数"比的其实是两个不同时刻的事实——实测就是这么差了 2。
+  const hBefore = exec('history');
+  const rows = (h) => (h.steps || []);
+  check(
+    '步骤面板的前提：此刻确实有多步历史（单步时"跳回"这条断言是空的）',
+    rows(hBefore).length >= 3,
+    `步数 ${rows(hBefore).length}`,
+  );
+  await globalThis.__goto(String(hBefore.cursor)); // 人侧动作：面板随之对齐
+  const html0 = el('hlist').innerHTML || '';
+  check(
+    '步骤面板：每一行对应引擎 history 里的一步（行数 = 步数 + 初始行）',
+    (html0.match(/class='hstep/g) || []).length === rows(hBefore).length + 1,
+    `行 ${(html0.match(/class='hstep/g) || []).length} vs 步 ${rows(hBefore).length}`,
+  );
+  check(
+    '步骤面板：当前步高亮（.cur 恰好一个），未来步骤没有（此刻在末尾）',
+    (html0.match(/hstep cur/g) || []).length === 1 && !/undone/.test(html0),
+    html0.slice(0, 160),
+  );
+  // 当前步号（面板上说"哪一步"必须与引擎一致）
+  const cur = hBefore.cursor;
+  const target = Math.max(0, cur - 1);
+  const fpBefore = exec('fingerprint').fingerprint;
+  // 跳回上一步：指纹要变；面板 .cur 要跟着挪
+  await globalThis.__goto(String(target));
+  const hAfter = exec('history');
+  const html1 = el('hlist').innerHTML || '';
+  check(
+    '步骤面板：点一行跳回去 ⇒ 引擎游标跟着走（面板与引擎同一条事实）',
+    hAfter.cursor === target && hAfter.can_redo === true,
+    `游标 ${cur} → ${hAfter.cursor}，can_redo=${hAfter.can_redo}`,
+  );
+  check(
+    '步骤面板：跳回去后后面的步骤标成"未来"（.undone 与 .cur 各就各位）',
+    /undone/.test(html1) && (html1.match(/hstep cur/g) || []).length === 1,
+    html1.slice(0, 200),
+  );
+  check(
+    '步骤面板：跳回真的改了画布状态（不是只挪了游标）',
+    exec('fingerprint').fingerprint !== fpBefore,
+    `${fpBefore.slice(0, 8)} → ${exec('fingerprint').fingerprint.slice(0, 8)}`,
+  );
+  // 点"未来"那一行 = 重做回去（面板上灰行**仍然可点**，这是 PS 的口径）。
+  // 判据咬住"跳回再往前"这个来回，而不是"灰行存在"——后者任何重建都满足。
+  const future = rows(hAfter).filter((st) => !st.done).map((st) => st.i);
+  check(
+    '步骤面板：跳回后确实还有"未来步骤"（不然下面那条断言是空的）',
+    future.length > 0,
+    `未来步骤 ${JSON.stringify(future)}`,
+  );
+  const back = future[future.length - 1];
+  await globalThis.__goto(String(back));
+  check(
+    '步骤面板：点"未来"那行 = 重做回去（游标回到那一步，未来步骤变少）',
+    exec('history').cursor === back && rows(exec('history')).filter((st) => !st.done).length === 0,
+    `游标 ${exec('history').cursor}，期望 ${back}`,
+  );
+  el('sbar-text').textContent = '';
+  await globalThis.__goto('9999');
+  check(
+    '拒控：面板点到不存在的步号 ⇒ 状态栏报引擎原话（不是静默不跳）',
+    /第 9999 步还不存在/.test(status()),
+    status() || '(空)',
+  );
+}
+
 // ⑬ 画布：新建（顶栏尺寸 → 画布 + 白底）、改尺寸、以及**越界必须报原话**
 el('cw').value = '44';
 el('ch').value = '33';
@@ -890,7 +968,7 @@ check(
 // ⑯ 覆盖清单（机器对账用，格式由 `build_demo.sh#html-wiring` 解析）：
 // driver 走不到的处理器必须在这儿**写明原因**，否则"没覆盖"会静默变成"覆盖了"。
 /* coverage:begin
-driven: __selfcheck __dbg_lint __dbg_edits __dbg_census __dbg_probe __dbg_help __dbg_tools __dbg_schema __dbg_preview __mvsl_set __mvsl_show __mvsl_impact __mvsl_assert __mvsl_clear __param_list __param_set __param_del __cmd __build_badge __save __export __run __sel __vis __front __back __setx __sety __setw __seth __move_delta __rotate __flip __op __del __undo __redo __rename __tag_add __tag_del __reparent __ungroup_sel __text_at __text_add __text_set __text_font __mask_ready __mask_invert __mask_clear __adj_op __adj_val __af __stroke __new __set_canvas __crop_ready __crop_apply __crop_cancel __zoom __refresh __stats __optip __toggle_ai __tool __poly_click __poly_finish __poly_cancel __shape_ready __group_sel __pick_at __clone_src
+driven: __selfcheck __dbg_lint __dbg_edits __dbg_census __dbg_probe __dbg_help __dbg_tools __dbg_schema __dbg_preview __mvsl_set __mvsl_show __mvsl_impact __mvsl_assert __mvsl_clear __param_list __param_set __param_del __cmd __build_badge __save __export __run __sel __vis __front __back __setx __sety __setw __seth __move_delta __rotate __flip __op __del __undo __redo __rename __tag_add __tag_del __reparent __ungroup_sel __text_at __text_add __text_set __text_font __mask_ready __mask_invert __mask_clear __adj_op __adj_val __af __stroke __new __set_canvas __crop_ready __crop_apply __crop_cancel __zoom __refresh __stats __optip __toggle_ai __tool __poly_click __poly_finish __poly_cancel __shape_ready __group_sel __pick_at __clone_src __goto
 browser-only: __drop=拒绝路径已被 driver 走过（没字节时明说）；成功路径要真的 File+Image 解码，壳里造一个等于把"读文件"假装测了; __file_sel=同上（driver 走的是"没选到文件"那条）; __mpd_sel=要真的 .mpd 文件字节，壳里没有 FileReader; __img_swap=换图必须先有一张真图进来
 coverage:end */
 

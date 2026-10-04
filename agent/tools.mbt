@@ -153,7 +153,17 @@ pub fn list_tools() -> Array[AgentTool] {
   // 历史 / 容器
   add("fingerprint", "当前 canonical design.json 指纹", "meta")
   add("inspect", "元参数层实时视图：manifest 摘要 + design.json 全文 + params + 编辑历史", "meta")
-  add("edits", "编辑历史摘要", "meta")
+  add("edits", "编辑历史摘要（事件日志：连 undo/redo/goto 也记）", "meta")
+  add(
+    "history",
+    "步骤历史：每一步的**人话标签** + 当前游标 + 还能回去的最早一步（`base`）与总步数；`done=false` 的行是「跳回后还没重做的未来步骤」（再动手就没了）",
+    "both",
+  )
+  add(
+    "goto",
+    "goto <步号>：跳到第 k 步（0 = 初始状态；步号见 history）。跳回后再做新操作会**丢掉后面的步骤**（同 PS 历史面板）",
+    "both",
+  )
   add("undo", "撤销（canonical 快照栈，≤64）", "meta")
   add("redo", "重做", "meta")
   add("save-mpd-b64", "会话打包为 .mpd 容器字节（base64）", "meta")

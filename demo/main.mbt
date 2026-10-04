@@ -109,7 +109,9 @@ fn do_stroke(mode : String, pts : String) -> Unit {
   let r = eng(cmd)
   if eng_ok(r) {
     eng_render(800)
-    refresh_layers_light()
+    // 落笔也要进**步骤历史**面板（每一笔一段快照）：只刷轻量指纹的话，
+    // 面板会滞后一帧——"我刚画的那笔没进历史"正是人眼看到的那个 bug。
+    refresh_ui()
   } else {
     // 人类侧入口必须报**引擎原话**（静默失败的入口比没有入口更坏）
     ui_engine_error(r)
@@ -666,6 +668,70 @@ fn layers_html(layers : Array[Json], sel : String) -> String {
   sb.to_string()
 }
 
+///|
+/// 步骤历史面板的 HTML：**纯函数**（输入 `history` 的回包 Json）——同
+/// `layers_html` 那条理由：能测的那半要测得到（只有浏览器点开才生成的 HTML
+/// 只能靠 grep 证明"写过"）。
+///
+/// 面板口径（PS 的历史面板）：每一步一行、**当前步高亮**、跳回后那些"未来步骤"
+/// 标灰（`done=false`）并且**仍然可点**（点回去 = 重做）；画布状态本身在第 0 行
+/// （`new` 之后的初始文档）。`base > 0` 时多说一句"更早的步骤已不在撤销窗口内"
+/// ——护栏只要会改变输出就必须报出来，别让人以为能一路回到开头。
+fn history_html(h : Json) -> String {
+  let sb = StringBuilder()
+  let steps = match json_get(h, "steps") {
+    Some(Json::Array(a)) => a
+    _ => []
+  }
+  let cur = json_get_num(h, "cursor")
+  let base = json_get_num(h, "base")
+  sb.write_string("<div class='hstep")
+  sb.write_string(if cur == 0 { " cur" } else { "" })
+  sb.write_string("' onclick='globalThis.__goto(0)'>0 · 初始画布</div>")
+  for st in steps {
+    let i = json_get_num(st, "i")
+    let done = match json_get(st, "done") {
+      Some(Json::True) => true
+      _ => false
+    }
+    let cls = if i == cur {
+      " cur"
+    } else if done {
+      ""
+    } else {
+      " undone"
+    }
+    sb.write_string("<div class='hstep")
+    sb.write_string(cls)
+    sb.write_string("' title='")
+    sb.write_string(if done { "点这里跳回这一步" } else { "未来步骤（当前没生效）——点它 = 重做回到这里" })
+    sb.write_string("' onclick='globalThis.__goto(")
+    sb.write_string(i.to_string())
+    sb.write_string(")'><span class='hi'>")
+    sb.write_string(i.to_string())
+    sb.write_string("</span> · ")
+    // 标签来自命令面（含用户输入的层名/文字），一律转义
+    sb.write_string(html_attr(json_get_str(st, "label")))
+    sb.write_string("</div>")
+  }
+  if base > 0 {
+    sb.write_string("<div class='hhint'>更早的 ")
+    sb.write_string(base.to_string())
+    sb.write_string(" 步已不在撤销窗口内（快照栈上限 64）</div>")
+  }
+  sb.to_string()
+}
+
+///|
+/// 拉一次 `history` 并刷新历史面板。
+fn refresh_history() -> Unit {
+  let h = eng("history")
+  if !eng_ok(h) {
+    return
+  }
+  js_refresh_history(history_html(h))
+}
+
 fn refresh_ui() -> Unit {
   let j = eng("list-layers")
   if !eng_ok(j) {
@@ -683,6 +749,7 @@ fn refresh_ui() -> Unit {
   let _ = doc_j
   js_status_bar("图层: \{count} │ 指纹: \{fp}")
   refresh_props()
+  refresh_history()
 }
 
 ///|
@@ -1436,6 +1503,24 @@ fn do_ui_cmd(line : String) -> Bool {
 }
 
 ///|
+/// 人侧命令的**统一执行路径**：跑引擎命令 → 渲染 → **全量刷新界面**
+/// （图层/属性/**步骤历史**）→ 失败把引擎原话摆到状态栏。
+///
+/// 为什么要有这一层：`do_ui_cmd` 只做"执行 + 刷新渲染"，调用点若忘了再调
+/// `refresh_ui`，界面就停在上一帧——实测拖拽建矩形那条链**根本没刷**，
+/// 于是步骤面板在"刚画完"那一刻少一行、下一次刷新才补上（滞后一帧，
+/// 而人眼看到的正是"我刚做的操作没进历史"）。把两件事绑在一起之后，
+/// 调用点不可能只做一半。
+fn do_ui_cmd_full(line : String) -> Bool {
+  if do_ui_cmd(line) {
+    refresh_ui()
+    true
+  } else {
+    false
+  }
+}
+
+///|
 /// 拖拽出的矩形/椭圆（`__shape_ready(kind, "x0,y0,w,h")`）。太小就当没画：
 /// 一个 1×1 的层在画布上根本看不见，而它会改变指纹、进列表、被 lint 念。
 fn do_shape_ready(kind : String, box : String) -> Unit {
@@ -1452,9 +1537,9 @@ fn do_shape_ready(kind : String, box : String) -> Unit {
       // 就等于没有入口）。两条命令各写一遍，参数部分共用。
       let args = "x=\{x0} y=\{y0} w=\{w} h=\{h} fill=\{fill} name="
       if kind == "ellipse" {
-        let _ = do_ui_cmd("add-ellipse " + args + "椭圆")
+        let _ = do_ui_cmd_full("add-ellipse " + args + "椭圆")
       } else {
-        let _ = do_ui_cmd("add-rect " + args + "矩形")
+        let _ = do_ui_cmd_full("add-rect " + args + "矩形")
       }
     }
     None => js_status_bar("⚠ 画布坐标没读出来（\{box}）")
@@ -1802,8 +1887,14 @@ fn do_new() -> Unit {
   // 尺寸跟着顶栏输入框走（此前写死 800×600，人想开个别的尺寸只能先建再裁）
   let w = canvas_dim("cw", "800")
   let h = canvas_dim("ch", "600")
+  // 两条命令都**丢掉回包**（`let _ = engine_exec_line`）：`new` 之后还有白底那一步，
+  // 中途报错没地方说。至少把白底建层失败说出来——否则"新建之后画布是空的"
+  // 会被当成"底色功能坏了"。
   let _ = engine_exec_line("new " + w + " " + h + " uuid=n\{js_now_ms()}")
-  let _ = engine_exec_line("add-rect x=0 y=0 w=\{w} h=\{h} fill=#FFFFFFFF name=背景")
+  let rb = eng("add-rect x=0 y=0 w=\{w} h=\{h} fill=#FFFFFFFF name=背景")
+  if !eng_ok(rb) {
+    ui_engine_error(rb)
+  }
   g_sel.val = ""
   g_paint.val = ""
   eng_render(800)
@@ -2077,6 +2168,13 @@ fn inject_css() -> Unit {
     #|.fstr{display:flex;align-items:center;gap:8px;padding:2px 10px 8px;font-size:11px;color:#889}
     #|.fstr input{flex:1;accent-color:#3d63ff}
     #|#llist{min-height:80px;max-height:200px;overflow-y:auto}
+    #|#hlist{min-height:60px;max-height:190px;overflow-y:auto;font-size:12px}
+    #|#hlist .hstep{padding:2px 6px;cursor:pointer;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #|#hlist .hstep:hover{background:#2c3550}
+    #|#hlist .hstep.cur{background:#2f4a7a;color:#fff;font-weight:600}
+    #|#hlist .hstep.undone{opacity:.45;font-style:italic}
+    #|#hlist .hi{color:#8fb4ff}
+    #|#hlist .hhint{padding:2px 6px;color:#c99;font-size:11px}
     #|.li{display:flex;align-items:center;padding:5px 8px;cursor:pointer;border-bottom:1px solid #20203a;gap:6px;font-size:12px;transition:background .1s}
     #|.li:hover{background:#22284a}
     #|.li.sel{background:#2a3a6e;border-left:2px solid #4a7cff}
@@ -2230,6 +2328,8 @@ pub fn app_html() -> String {
       #|</div>
       #|<div class='ph2'>图层</div>
       #|<div id='llist'></div>
+      #|<div class='ph2'>步骤历史<span class='hint' style='float:right'>点一行跳回那一步</span></div>
+      #|<div id='hlist'><div class='ns'>还没有任何步骤</div></div>
       #|<div class='ph2'>属性</div>
       #|<div id='pprops'><div class='ns'>点击图层查看属性</div></div>
       #|<div class='ph2'>🩺 自检 · 调试（面向功能测试）</div>
@@ -2425,6 +2525,18 @@ pub fn register_globals() -> Unit {
   js_reg2s("__stroke", fn(mode : String, pts : String) { do_stroke(mode, pts) })
   // 仿制图章定源（画布坐标）。**不校验、不猜**：空串照发，让引擎拒它并把人话摆到
   // 状态栏（"clone 需要 src=x,y…"）。前端只负责记住人点了哪儿。
+  // 步骤历史（③）：点一行跳回那一步。跳回本身**不新开恢复路径**——走引擎的
+  // `goto`（它内部复用 undo/redo 原语），前端只负责把结果刷新出来。
+  js_reg1("__goto", fn(step : String) {
+    let r = eng("goto \{step}")
+    if eng_ok(r) {
+      eng_render(800)
+      refresh_ui()
+      js_status_bar("⏪ 已跳到第 \{step} 步（再做新操作会丢掉后面的步骤）")
+    } else {
+      ui_engine_error(r)
+    }
+  })
   js_reg1("__clone_src", fn(coords : String) {
     g_clone_src.val = coords
     js_text(

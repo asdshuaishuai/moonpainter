@@ -2612,6 +2612,33 @@ MUTS = [
         "killed",
     ),
     (
+        "R76",
+        "快照存的是命令**中途**的状态（alloc_layer_id 已经递进过 ⇒ undo 回来的计数器是未来值，画面一样、指纹不同）",
+        "agent/session.mbt",
+        """  let pre = match s.pending_pre {
+    Some(p) => p
+    None => @core.doc_to_json(doc)
+  }""",
+        """  let pre = @core.doc_to_json(doc)""",
+        "killed",
+    ),
+    (
+        "R77",
+        "goto 跳过头（循环条件写反 ⇒ 只走一步就停，跳哪儿都差一步）",
+        "agent/session.mbt",
+        """  while s.cursor > k && hops < 600 {""",
+        """  while s.cursor + 1 > k && hops < 600 {""",
+        "killed",
+    ),
+    (
+        "R78",
+        "跳回后再动手不截断未来（面板留下看得见、跳不回去的幽灵步骤）",
+        "agent/session.mbt",
+        """  while s.labels.length() > s.cursor - s.step_base {""",
+        """  while false {""",
+        "killed",
+    ),
+    (
         "R68",
         "多边形内距丢掉符号（羽化朝反方向长，覆盖度看着仍有过渡）",
         "render/scene.mbt",
