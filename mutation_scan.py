@@ -20,25 +20,55 @@
   * INVALID（锚点失效 **或变异本身编译不过**）会让脚本**退出码 1**。两类都
     意味着"这条变异没在测试任何东西"——实测 R29 的替换串括号不配对、一直编译
     不过，而每次汇总照旧印 PASS；
-  * `--check-anchors` 只校验锚点唯一命中（秒级），已接进 `verify.sh` 第 9 步。
+  * `--check-anchors` 只校验锚点唯一命中（秒级），已接进 `verify.sh#anchors`。
+
+**这个脚本还能把仓库本身弄坏**（2026-10-08 实测）：注入前要把原文件备份起来，
+原先备份是**全机共用的一个** `/tmp/moonpainter_mut_bak`。两个扫描（工作区 +
+一份克隆副本）同时在跑时，还原会拿**另一个文件的备份**顶进去——
+`base/sha256.mbt` 整段变成了别的文件的正文，而 `git status` 只显示"文件被改过"，
+看着像自己的改动。修法三条，全部有自检（`--selfcheck`，也接在门禁里）：
+  * 备份**按文件**一一对应（`BAK_DIR/<相对路径>.bak`），两个文件不可能共用；
+  * 还原**只认内存里的原文**，磁盘备份只为"硬杀之后给下一轮留指纹"；
+  * **全机唯一锁**：同一时刻只许一个扫描在跑（共享资源是全局的，锁也是全局的），
+    开工前还会检查上一轮是否留下"注入态"的指纹，有就**拒绝开工**并指名道姓。
 
 用法（在仓库根）：
-    python3 mutation_scan.py                  # 全跑（本机约 42 分钟：110 条 × 每条一次全量 moon test）
+    python3 mutation_scan.py                  # 全跑。**本机实测约 100 秒/条**
+                                              # （每条一次全量 moon test），293 条
+                                              # ≈ 8 小时；条数变了时间就变，别抄旧数
     python3 mutation_scan.py M1 M7            # 只跑指定项
     python3 mutation_scan.py --check-anchors  # 只校验锚点（秒级）
 退出码：有「应当被抓住却存活」的变异 → 1；有锚点失效 → 1。
 """
 
+import atexit
+import json
 import os
-import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-BAK = "/tmp/moonpainter_mut_bak"
 
-# 当前注入着的变异：`(mid, path)`。信号处理器靠它把自己注入的东西**还原回去**——
+# 备份**按文件**走，不再有一个全局的单文件备份。
+#
+# 为什么改（2026-10-08 实测的真事故）：原先备份是 `/tmp/moonpainter_mut_bak`
+# 一个文件、所有变异共用。工作区扫描与一份克隆副本的扫描同时在跑时，还原
+# 拿的是**另一个文件**的备份——`base/sha256.mbt` 整段变成了别的文件的正文，
+# 而 `git status` 只显示"文件被改过"（看着像自己的改动），接着那一轮 584 条
+# 判 INVALID、汇总照旧往下跑。**一个能悄悄换掉文件内容的门禁，毁的不是这一轮
+# 的结果，是仓库本身**，所以这三条（按文件备份 / 还原只认内存原文 / 全机唯一锁）
+# 各自都有 `--selfcheck` 判据，不允许只靠"我记得别并发跑"。
+# 路径故意用**字面 `/tmp`**（不用 `tempfile.gettempdir()`）：macOS 上后者是
+# `/var/folders/…/T`，报错信息里印出来的路径人类根本找不到——而这两处正是
+# "出事了要去清"的地方，必须可预期（与旧版本的 `/tmp/moonpainter_mut_bak`
+# 同一处；那个单文件已废弃，它正是这起事故的根因）。
+BAK_DIR = "/tmp/moonpainter_mut_bak.d"
+LOCK = "/tmp/moonpainter_mut.lock"
+
+# 当前注入着的变异：`(mid, path, src, bak)`——**原文放在内存里**，还原只认它。
+# 信号处理器靠它把自己注入的东西**还原回去**——
 # 实测踩过：`job_kill` 掉扫描（AGENTS 里还写着"宁可用 job_kill 停掉重跑"），
 # `try/finally` 里的还原**根本不执行**，注入的变异就留在工作区里
 # （那次是 `pixel/program.mbt` 的 `if prog.ops.length() == 0` 变成 `if false`）。
@@ -47,14 +77,145 @@ BAK = "/tmp/moonpainter_mut_bak"
 INFLIGHT = None
 
 
+def _bak_path(rel, bak_dir=None):
+    """这个文件自己的备份路径（按相对路径一一对应，两个文件不可能共用）。"""
+    return os.path.join(bak_dir or BAK_DIR, rel.replace("/", "__") + ".bak")
+
+
+def record_inflight(mid, rel, src, bak_dir=None):
+    """注入**之前**：写下这一份的备份 + 在案清单。返回备份路径。
+
+    清单里带 `root`/`pid`/`rel`——下一轮开工时它能**指名道姓**地说"哪个仓库
+    副本的哪个文件可能还带着注入态"，而不是只喊一句"工作区不干净"。
+    """
+    d = bak_dir or BAK_DIR
+    os.makedirs(d, exist_ok=True)
+    bp = _bak_path(rel, d)
+    with open(bp, "w", encoding="utf-8") as f:
+        f.write(src)
+    with open(os.path.join(d, "inflight.json"), "w", encoding="utf-8") as f:
+        json.dump({"pid": os.getpid(), "root": ROOT, "mid": mid, "rel": rel, "bak": bp}, f)
+    return bp
+
+
+def restore_file(path, src, bp=None):
+    """把**内存里的原文**写回去，并清掉这一份的备份。
+
+    ⚠️ 还原不读磁盘上的任何备份：读共享备份正是上面那起事故的根因
+    （A 文件的正文落进 B 文件）。磁盘备份只为"硬杀之后给下一轮留指纹"。
+    """
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(src)
+    if bp:
+        try:
+            os.remove(bp)
+        except OSError:
+            pass
+
+
+def clear_inflight_mark(bak_dir=None):
+    """这一轮走完了：撤掉在案清单（备份已逐份清掉）。"""
+    try:
+        os.remove(os.path.join(bak_dir or BAK_DIR, "inflight.json"))
+    except OSError:
+        pass
+
+
+def leftover_bak_report(bak_dir=None):
+    """上一轮（或另一个仓库副本）有没有留下"注入态"？返回 [(root, rel, mid, bak)]。
+
+    **两面都要看**：①在案清单还在（这一轮没走完）；②孤儿备份还在（清单都没写上，
+    更早的进程被硬杀）。只看一面会漏——那起事故里正是清单被清掉了、
+    另一份备份留在盘上。
+    """
+    d = bak_dir or BAK_DIR
+    out = []
+    man = os.path.join(d, "inflight.json")
+    if os.path.exists(man):
+        try:
+            with open(man, encoding="utf-8") as f:
+                rec = json.load(f)
+            out.append((rec.get("root"), rec.get("rel"), rec.get("mid"), rec.get("bak")))
+        except Exception as e:
+            out.append((None, "（清单读不出来）", f"清单损坏：{e}", man))
+    if os.path.isdir(d):
+        known = {r[3] for r in out}
+        for name in sorted(os.listdir(d)):
+            p = os.path.join(d, name)
+            if name.endswith(".bak") and p not in known:
+                out.append((None, name[: -len(".bak")].replace("__", "/"), "（孤儿备份）", p))
+    return out
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def acquire_lock(lock_path=None, pid=None):
+    """全机唯一：同一时刻只许一个扫描在跑。返回 False = 拒绝开工。
+
+    锁是**全局的**而不是"每个仓库副本一把"：共享资源（备份目录）就是全局的，
+    两个扫描哪怕在不同目录里也会互相踩（实测那起"文件被顶替"正是工作区扫描
+    与克隆扫描同时在跑）。进程已死的陈旧锁会被接管并提示。
+    """
+    lp = lock_path or LOCK
+    me = pid or os.getpid()
+    if os.path.exists(lp):
+        info = {}
+        try:
+            with open(lp, encoding="utf-8") as f:
+                info = json.load(f)
+        except Exception:
+            info = {}
+        other = info.get("pid")
+        if other and other != me and _pid_alive(other):
+            print(
+                f"拒绝开工：已有扫描在跑（pid {other}，root {info.get('root')}）——"
+                "备份目录是全机共用的一份，两个扫描会互相踩（实测把 A 文件的正文"
+                "写进了 B 文件）。先停掉它再跑。",
+                file=sys.stderr,
+            )
+            return False
+        if other and other != me:
+            print(f"提示：发现失效的锁（pid {other} 已不在）——接管", file=sys.stderr)
+    os.makedirs(os.path.dirname(lp), exist_ok=True)
+    with open(lp, "w", encoding="utf-8") as f:
+        json.dump({"pid": me, "root": ROOT}, f)
+    return True
+
+
+def release_lock(lock_path=None, pid=None):
+    """撤锁。**只撤自己的**：别把接管者的锁删掉。"""
+    lp = lock_path or LOCK
+    try:
+        with open(lp, encoding="utf-8") as f:
+            info = json.load(f)
+    except Exception:
+        return
+    if info.get("pid") in (None, pid or os.getpid()):
+        try:
+            os.remove(lp)
+        except OSError:
+            pass
+
+
 def _restore_inflight():
     """还原当前注入的变异；返回被还原的变异 id（没有则 None）。"""
     global INFLIGHT
     if INFLIGHT is None:
         return None
-    mid, path = INFLIGHT
+    mid, path, src, bp = INFLIGHT
     try:
-        shutil.copy(BAK, path)
+        restore_file(path, src, bp)
+        clear_inflight_mark()
     except Exception as e:  # 还原失败必须喊出来：静默 = 树里留着注入
         print(f"!!! 还原 {path} 失败：{e}（工作区可能带着注入的变异！）", file=sys.stderr)
     INFLIGHT = None
@@ -73,6 +234,8 @@ def _on_signal(signum, _frame):
 
 signal.signal(signal.SIGTERM, _on_signal)
 signal.signal(signal.SIGINT, _on_signal)
+# 锁在正常退出/异常退出时都要撤（`--selfcheck` 与单跑 id 也一样走这条路）。
+atexit.register(release_lock)
 
 # (编号, 说明, 相对路径, 原串, 替换串, 预期)
 # 预期只能是 "killed"（应当被测试抓住）或 "equivalent"（语义等价，允许存活）
@@ -3182,7 +3345,10 @@ def stale_in(bodies, wanted):
 
 
 def selfcheck():
-    """这道"残余态"护栏的自检：喂合成正文，三种情形都要判对。"""
+    """护栏自检：残余态判据 + 备份/还原/锁（2026-10-08 那起"文件被顶替"之后补的）。
+
+    全部在**临时目录**里造合成样本，不碰仓库、不碰全局锁。
+    """
     mid, _desc, rel, old, new, _expect = MUTS[0]
     cases = [
         ("干净（锚点在）", {rel: "prefix " + old + " suffix"}, []),
@@ -3195,12 +3361,73 @@ def selfcheck():
         got = stale_in(bodies, {rel})
         if got != want:
             bad.append(f"{name}：期望 {want}，实际 {got}")
+
+    with tempfile.TemporaryDirectory() as d:
+        a_rel, b_rel = "base/a.mbt", "agent/b.mbt"
+        a_src, b_src = "/// A 原文\nfn a() {}\n", "/// B 原文\nfn b() {}\n"
+        pa, pb = os.path.join(d, "a.mbt"), os.path.join(d, "b.mbt")
+        bd = os.path.join(d, "bak")
+        # ① 备份**按文件**一一对应：共享一份正是那次事故的根因
+        if _bak_path(a_rel, bd) == _bak_path(b_rel, bd):
+            bad.append("按文件备份：两个文件的备份路径居然是同一个")
+        # ② 两个文件"同时在注入"（模拟两个扫描/两个文件叠着），B 的备份故意留在盘上，
+        #    还原 A 必须只认内存原文 ⇒ 结果不能沾到 B 的任何字节
+        record_inflight("X1", a_rel, a_src, bak_dir=bd)
+        bp_b = record_inflight("X2", b_rel, b_src, bak_dir=bd)
+        with open(pa, "w", encoding="utf-8") as f:
+            f.write("注入态 A\n")
+        with open(pb, "w", encoding="utf-8") as f:
+            f.write("注入态 B\n")
+        restore_file(pa, a_src)
+        if open(pa, encoding="utf-8").read() != a_src:
+            bad.append("还原只认内存原文：还原后的 A 不是它自己的原文")
+        restore_file(pb, b_src, bp_b)
+        if open(pb, encoding="utf-8").read() != b_src:
+            bad.append("还原只认内存原文：还原后的 B 不是它自己的原文")
+        if os.path.exists(bp_b):
+            bad.append("还原后该清掉这一份的备份")
+        # ③ 残留指纹要**两面都报**：清单在 / 孤儿备份在（事故里是清单没了、备份还在）
+        bd1 = os.path.join(d, "bak1")
+        record_inflight("Y1", a_rel, a_src, bak_dir=bd1)
+        r1 = leftover_bak_report(bak_dir=bd1)
+        if not r1 or r1[0][1] != a_rel or r1[0][2] != "Y1":
+            bad.append(f"残留指纹：清单在时报得不对：{r1}")
+        bd2 = os.path.join(d, "bak2")
+        os.makedirs(bd2)
+        with open(_bak_path(a_rel, bd2), "w", encoding="utf-8") as f:
+            f.write(a_src)
+        r2 = leftover_bak_report(bak_dir=bd2)
+        if not r2 or "孤儿备份" not in str(r2[0][2]):
+            bad.append(f"残留指纹：孤儿备份没报出来：{r2}")
+        # 负控：干净时一个都不许报（否则上面两条可以被"永远报"满足）
+        if leftover_bak_report(bak_dir=os.path.join(d, "bak3")):
+            bad.append("残留指纹：干净时不该报")
+        # ④ 锁：没有锁→拿到；自己持有→放行；**别人的活 pid 持有→拒绝**；失效锁→接管
+        lk = os.path.join(d, "mut.lock")
+        if not acquire_lock(lock_path=lk, pid=os.getpid()):
+            bad.append("锁：没有锁时应当拿得到")
+        with open(lk, "w", encoding="utf-8") as f:
+            json.dump({"pid": os.getpid(), "root": "/x"}, f)
+        if not acquire_lock(lock_path=lk, pid=os.getpid()):
+            bad.append("锁：自己持有（同一个 pid）时应当放行")
+        if acquire_lock(lock_path=lk, pid=999999):
+            bad.append("锁：另一个**活着的** pid 持有锁时应当拒绝开工")
+        with open(lk, "w", encoding="utf-8") as f:
+            json.dump({"pid": 999999, "root": "/x"}, f)
+        if not _pid_alive(999999):
+            if not acquire_lock(lock_path=lk, pid=os.getpid()):
+                bad.append("锁：失效的锁（pid 不在）应当允许接管")
+        release_lock(lock_path=lk, pid=os.getpid())
+
     if bad:
-        print("FAIL: 残余态护栏自检不过：", file=sys.stderr)
+        print("FAIL: 残余态/备份/锁 自检不过：", file=sys.stderr)
         for b in bad:
             print("   " + b, file=sys.stderr)
         return 1
-    print(f"残余态护栏自检通过（{len(cases)} 种情形；样本用 {mid}）")
+    print(
+        f"护栏自检通过（残余态 {len(cases)} 种情形；另加按文件备份/只认内存原文/"
+        "残留指纹两面/锁四种情形）"
+    )
     return 0
 
 
@@ -3246,6 +3473,23 @@ def main():
     if not todo:
         print(f"没有匹配的变异：{wanted}", file=sys.stderr)
         return 2
+
+    # **开工前两道闸，都在"注入"之前**：
+    # ①上一轮/另一个仓库副本留没留下"注入态"的指纹（硬杀、断电、两个扫描并行）——
+    #   有就拒绝开工并指名道姓，因为**继续跑等于把变异态当基线**；
+    # ②全机唯一锁——备份目录是全机共用的一份，两个扫描会互相踩。
+    left = leftover_bak_report()
+    if left:
+        print("\n拒绝开工：上一轮扫描留下了「注入态」的指纹（硬杀/断电/并行留下的）：",
+              file=sys.stderr)
+        for root, rel, mid, bak in left:
+            print(f"   {rel}  ←  {mid}（root={root or '未知'}，备份={bak}）", file=sys.stderr)
+        print("修法：在它自己的仓库里 `git diff <文件>` 看一眼，确认不是自己的改动后 "
+              f"`git checkout -- <文件>`；再删掉备份目录 {BAK_DIR} 重跑。", file=sys.stderr)
+        return 4
+    if not acquire_lock():
+        return 5
+
     dirty = subprocess.run(
         ["git", "status", "--porcelain"], cwd=ROOT, capture_output=True, text=True
     ).stdout.strip()
@@ -3292,14 +3536,16 @@ def main():
             results.append((mid, desc, expect, "INVALID", f"锚点出现 {n} 次"))
             print(f"{mid}: INVALID（锚点 {n} 次）", flush=True)
             continue
-        shutil.copy(path, BAK)
+        bp = record_inflight(mid, rel, src)
         global INFLIGHT
         try:
-            INFLIGHT = (mid, path)
+            INFLIGHT = (mid, path, src, bp)
             open(path, "w", encoding="utf-8").write(src.replace(old, new, 1))
             verdict, detail = judge(run_native_tests())
         finally:
-            shutil.copy(BAK, path)  # 无论成败都还原
+            # 无论成败都还原，且**只认内存里的原文**（不读任何磁盘备份）
+            restore_file(path, src, bp)
+            clear_inflight_mark()
             INFLIGHT = None
         results.append((mid, desc, expect, verdict, detail))
         mark = ""
