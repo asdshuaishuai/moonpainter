@@ -500,6 +500,93 @@ test "调整层要能改值：set_adjust 原地改、不丢层序" {
 }
 
 ///|
+test "滤镜工具行：apply_filter / set_adjust 拼得出滤镜参数键（键表一处、顺序固定）" {
+  // ②B：滤镜的 16 个参数键此前**只在引擎里**——工具面（`adjust_arg_keys`）
+  // 没有它们，于是"引擎有能力"不等于"产品里的 AI 用得上"（模型只能发 value，
+  // 而滤镜一个 value 都不收 ⇒ 每个滤镜层都被入口拒）。
+  // 判据：拼出来的整行**逐字**（键表顺序固定，不是模型给的顺序）。
+  assert_eq(
+    @demo.tool_line(
+      "apply_filter",
+      @demo.parse_json_safe("{\"op\":\"pixelate\",\"size\":8}"),
+    ),
+    "add-adjust op=pixelate size=8",
+  )
+  // 多键按**键表顺序**（core 的 canonical 并集顺序：angle, radius, center_x, …）
+  assert_eq(
+    @demo.tool_line(
+      "apply_filter",
+      @demo.parse_json_safe(
+        "{\"op\":\"motion-blur\",\"radius\":16,\"angle\":90}",
+      ),
+    ),
+    "add-adjust op=motion-blur angle=90 radius=16",
+  )
+  // 一个参数都不给：**只拼 op**（引擎会拒"什么都不干的层"，那是引擎的判据，
+  // 前端不许替它编一个中性值——一键美化不在这个产品里）
+  assert_eq(
+    @demo.tool_line("apply_filter", @demo.parse_json_safe("{\"op\":\"noise\"}")),
+    "add-adjust op=noise",
+  )
+  // `set_adjust` 部分更新：只改滤镜的一格
+  assert_eq(
+    @demo.tool_line(
+      "set_adjust",
+      @demo.parse_json_safe("{\"id\":\"l2\",\"radius\":20}"),
+    ),
+    "set-adjust l2 radius=20",
+  )
+  // 负数参数不被吃掉（`fmt_arg_num` 一处）：色相 -45.5 / 红 -0.4
+  assert_eq(
+    @demo.tool_line(
+      "set_adjust",
+      @demo.parse_json_safe("{\"id\":\"l2\",\"cr\":-0.4,\"hue\":-45.5}"),
+    ),
+    "set-adjust l2 hue=-45.5 cr=-0.4",
+  )
+}
+
+///|
+test "换算子中性值：从引擎的 adjust-spec 回包生成（前端不抄算子名单/键表）" {
+  // 面板把算子换成滤镜时得铺一套中性值（引擎拒绝"换成 pixelate 却一个参数都不给"）。
+  // 键名与中性值**都从引擎来**：喂一段真的 `adjust-spec op=pixelate` 回包，
+  // 拼出来的尾巴必须与引擎的表逐字一致。
+  let spec = @demo.parse_json_safe(
+    "{\"ok\":true,\"spec\":[{\"op\":\"pixelate\",\"uses_value\":false,\"lo\":-1,\"hi\":1,\"params\":[{\"key\":\"size\",\"lo\":2,\"hi\":256,\"neutral\":2,\"integral\":true,\"doc\":\"色块边长\"}]}]}",
+  )
+  let _ = spec
+  assert_eq(
+    @demo.adj_op_neutral_tail(
+      "{\"ok\":true,\"spec\":[{\"op\":\"pixelate\",\"uses_value\":false,\"lo\":-1,\"hi\":1,\"params\":[{\"key\":\"size\",\"lo\":2,\"hi\":256,\"neutral\":2,\"integral\":true,\"doc\":\"色块边长\"}]}]}",
+      "pixelate",
+    ),
+    " size=2",
+  )
+  // 多参数算子：**按引擎报出来的顺序**逐键铺（hue-sat 是 hue/light/sat 升序）
+  assert_eq(
+    @demo.adj_op_neutral_tail(
+      "{\"ok\":true,\"spec\":[{\"op\":\"hue-sat\",\"params\":[{\"key\":\"hue\",\"neutral\":0},{\"key\":\"light\",\"neutral\":0},{\"key\":\"sat\",\"neutral\":0}]}]}",
+      "hue-sat",
+    ),
+    " hue=0 light=0 sat=0",
+  )
+  // 数值类算子：params 空 ⇒ 尾巴为空（引擎沿用当前 value）
+  assert_eq(
+    @demo.adj_op_neutral_tail(
+      "{\"ok\":true,\"spec\":[{\"op\":\"blur\",\"uses_value\":true,\"params\":[]}]}",
+      "blur",
+    ),
+    "",
+  )
+  // 回包不合法（引擎没开门/算子在表外）：空尾巴，不许崩、也不许瞎编
+  assert_eq(@demo.adj_op_neutral_tail("不是 JSON", "pixelate"), "")
+  assert_eq(
+    @demo.adj_op_neutral_tail("{\"ok\":true,\"spec\":[]}", "pixelate"),
+    "",
+  )
+}
+
+///|
 test "图层样式工具行：set_fx 拼得出 set-fx（部分更新、clear 与别的键互斥由引擎拒）" {
   // 两张表都得接上：`tool_cmd`（工具名→命令名，`undispatched_tools()` 守）
   // 与 `tool_line`（参数→整行）。这里测第二张：键表 `fx_arg_keys` 一处，

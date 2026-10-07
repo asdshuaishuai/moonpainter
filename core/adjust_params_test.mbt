@@ -209,7 +209,21 @@ test "哪个算子读 value：清单与 all_adjust_ops 对齐（加算子时漏�
   // 再比数组：本仓库的 `Array::sort()` 不是按字典序（实测给出
   // `[curves, invert, levels, grayscale]`），断言会以"看起来像排序问题"的形式
   // 失败，而真正要守的"有没有漏一格"反而被噪声埋掉。
-  let no_value_names = ["invert", "grayscale", "levels", "curves"]
+  let no_value_names = [
+    "invert",
+    "grayscale",
+    "levels",
+    "curves",
+    // ②B 滤镜：多参数算子，数值走 params 表（`adjust_uses_value` 一处说了算）
+    "motion-blur",
+    "radial-blur",
+    "noise",
+    "pixelate",
+    "posterize",
+    "threshold",
+    "hue-sat",
+    "color-balance",
+  ]
   assert_eq(no_value.length(), no_value_names.length(), msg="不读 value 的算子条数")
   for n in no_value_names {
     assert_true(

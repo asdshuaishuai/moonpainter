@@ -391,3 +391,215 @@ test "两张键清单只差 id/name（字面量 + 一条会红的等式，替掉
   assert_true(!set.contains("id") && !set.contains("name"), msg="set-adjust 不建层，认 id/name 就是死数据")
   assert_true(add.contains("id") && add.contains("name"), msg="add-adjust 认 id/name")
 }
+
+///|
+/// 滤镜参数对象里的一个数（`adjust.params.<key>`）——回包与 `query-layer`
+/// 两种形态都认（同 `lv_num`）。
+fn filt_num(text : String, key : String) -> Double {
+  let ps = match adj_of(text).get("params") {
+    Some(v) => v
+    None => abort("adjust 缺 params：\{text}")
+  }
+  match ps.get(key) {
+    Some(v) =>
+      match v.as_num() {
+        Some(x) => x
+        None => abort("params.\{key} 不是数字：\{text}")
+      }
+    None => abort("params 缺字段 \{key}：\{text}")
+  }
+}
+
+///|
+test "②B 滤镜：缺键按中性值补、回包按键名升序（输入顺序不影响字节）" {
+  let s = adj_scene("filter-parse")
+  // 正控：只给一个键，其余按中性值补（缺参数不该悄悄带来看得见的效果）
+  let r = run(s, "add-adjust op=motion-blur radius=12 id=mb")
+  assert_true(!r.contains("error"), msg="合法滤镜要收：\{r}")
+  assert_eq(filt_num(r, "angle"), 0.0, msg="没给的 angle 补中性值 0")
+  assert_eq(filt_num(r, "radius"), 12.0, msg="给了的 radius 原样收下")
+  // `value` 在 adjust 顶层（不在 params 里）：滤镜不读它，回显必须是 0
+  assert_true(
+    r.contains("\"op\":\"motion-blur\",\"value\":0,"),
+    msg="滤镜的 value 回显应当是 0：\{r}",
+  )
+  // 升序这条是**字节**承诺：回包里的键对必须原样按 amount,mono 出现
+  let r2 = run(s, "add-adjust op=noise mono=1 amount=0.4 id=ns")
+  assert_true(
+    r2.contains("\"params\":{\"amount\":0.4,\"mono\":1}"),
+    msg="params 必须按键名升序回显（输入是乱序的）：\{r2}",
+  )
+  let r3 = run(s, "add-adjust op=color-balance cr=0.2 cg=-0.1 cb=0.05 id=cb1")
+  assert_true(
+    r3.contains("\"params\":{\"cb\":0.05,\"cg\":-0.1,\"cr\":0.2}"),
+    msg="三个键也要升序：\{r3}",
+  )
+  // query-layer 与 add 的回显必须是同一份（报告面不许有两种口径）
+  let q = run(s, "query-layer cb1")
+  // 键序是**字节**承诺 ⇒ 直接钉那一段字节（从对象里读键会丢掉顺序）
+  assert_true(
+    q.contains("\"params\":{\"cb\":0.05,\"cg\":-0.1,\"cr\":0.2}"),
+    msg="回读也必须按键名升序：\{q}",
+  )
+  assert_eq(filt_num(q, "cr"), 0.2, msg="回读的数值")
+  assert_eq(filt_num(q, "cg"), -0.1, msg="回读的负值")
+}
+
+///|
+test "②B 滤镜入口判据：一个键都不给 / 给别的算子键 / 给色阶键 / 非数 / 越界 / 非整数" {
+  let s = adj_scene("filter-enter")
+  // ①一个键都不给 = 一个什么都不干的层 ⇒ 拒（同色阶那条）
+  let r1 = run(s, "add-adjust op=pixelate")
+  assert_true(r1.contains("至少要给一个参数"), msg="空参数表要拒：\{r1}")
+  assert_true(r1.contains("size=2..256"), msg="错话要带上合法的键与范围：\{r1}")
+  // ②给了**别的滤镜算子**的键 ⇒ 拒（静默丢掉就是"回 ok 而画面没变"）
+  let r2 = run(s, "add-adjust op=motion-blur size=5")
+  assert_true(r2.contains("不吃 size="), msg="别的算子的键要拒：\{r2}")
+  assert_true(r2.contains("pixelate"), msg="还要指路给哪个算子：\{r2}")
+  // ③非滤镜算子带着滤镜键 ⇒ 同样拒（`op=blur value=0.5 angle=30` 此前静默丢掉 angle）
+  let r3 = run(s, "add-adjust op=blur value=0.5 angle=30")
+  assert_true(r3.contains("不吃 angle="), msg="非滤镜算子不许收滤镜键：\{r3}")
+  // ④滤镜带着色阶键 / 曲线点表 ⇒ 拒（互斥族，同"亮度层不许带色阶"）
+  let r4 = run(s, "add-adjust op=hue-sat in_lo=0.1")
+  assert_true(r4.contains("色阶"), msg="滤镜不收色阶键：\{r4}")
+  let r5 = run(s, "add-adjust op=hue-sat hue=1 points=0,0;1,1")
+  assert_true(r5.contains("points"), msg="滤镜不收曲线点表：\{r5}")
+  // ⑤非数 / 越界 / 非整数（三个各自的话术）
+  let r6 = run(s, "add-adjust op=noise amount=abc")
+  assert_true(r6.contains("不是数字"), msg="非数要说清：\{r6}")
+  let r7 = run(s, "add-adjust op=threshold channel=9")
+  assert_true(r7.contains("超出范围"), msg="越界要说清：\{r7}")
+  let r8 = run(s, "add-adjust op=pixelate size=2.5")
+  assert_true(r8.contains("必须是整数"), msg="色块边长必须整数：\{r8}")
+  let r9 = run(s, "add-adjust op=posterize levels=2.5")
+  assert_true(r9.contains("必须是整数"), msg="海报化级数必须整数：\{r9}")
+  // 正控：全部合法取值都能收（含边界）
+  for cmd in [
+    "add-adjust op=motion-blur angle=360 radius=64 id=ok1",
+    "add-adjust op=radial-blur center_x=0 center_y=1 radius=64 id=ok2",
+    "add-adjust op=noise amount=1 mono=0.5 id=ok3",
+    "add-adjust op=pixelate size=256 id=ok4",
+    "add-adjust op=posterize levels=16 id=ok5",
+    "add-adjust op=threshold level=1 channel=0 id=ok6",
+    "add-adjust op=hue-sat hue=-180 sat=-1 light=1 id=ok7",
+    "add-adjust op=color-balance cr=-1 cg=1 cb=0 id=ok8",
+  ] {
+    let r = run(s, cmd)
+    assert_true(!r.contains("error"), msg="边界值要收：\{cmd} → \{r}")
+  }
+}
+
+///|
+test "set-adjust：滤镜逐键部分更新（缺的键沿用当前层的值），换算子不给键要拒" {
+  let s = adj_scene("filter-set")
+  let _ = run(s, "add-adjust op=motion-blur angle=30 radius=4 id=mb")
+  // 只给 radius：angle 必须**沿用当前层的 30**（不是回到中性值 0）
+  let r = run(s, "set-adjust mb radius=20")
+  assert_true(!r.contains("error"), msg="部分更新要收：\{r}")
+  assert_eq(filt_num(r, "angle"), 30.0, msg="没给的键沿用当前层")
+  assert_eq(filt_num(r, "radius"), 20.0, msg="给了的键生效")
+  let q = run(s, "query-layer mb")
+  assert_eq(filt_num(q, "angle"), 30.0, msg="回读也要是沿用后的值")
+  // 换算子不给参数 ⇒ 拒（换成 neutral 全填 = 空操作层）
+  let r2 = run(s, "set-adjust mb op=noise")
+  assert_true(r2.contains("至少要给一个参数"), msg="换算子不给键要拒：\{r2}")
+  // 换算子并给一个键 ⇒ 其余补中性值
+  let r3 = run(s, "set-adjust mb op=noise amount=0.5")
+  assert_eq(filt_num(r3, "amount"), 0.5, msg="新算子的键生效")
+  assert_eq(filt_num(r3, "mono"), 0.0, msg="换了算子，没给的键补中性值")
+  // 原地改：层序不变（同 id 的层还在原位、不新增层）
+  let before = run(s, "query-layer r")
+  assert_true(!before.contains("error"), msg="底图还在")
+  // 滤镜层给 value ⇒ 拒（规则①：没有可调数值的算子不接受 value）
+  let r4 = run(s, "set-adjust mb value=0.5")
+  assert_true(r4.contains("不接受 value="), msg="滤镜层不许带 value：\{r4}")
+  // 滤镜层给**别的**滤镜算子的键 ⇒ 拒（互斥面在两个命令上是同一句话）
+  let r5 = run(s, "set-adjust mb angle=10")
+  assert_true(r5.contains("不吃 angle="), msg="换了算子后旧键要拒：\{r5}")
+}
+
+///|
+test "lint：参数全中性的滤镜层是「装了却什么都不干」，有非中性参数就一句不说（正控）" {
+  let s = adj_scene("filter-lint")
+  // ①中性参数（radial-blur 半径 0）：装了不干活
+  let _ = run(s, "add-adjust op=radial-blur radius=0 id=nrb")
+  // ②中性参数（noise 数量 0）
+  let _ = run(s, "add-adjust op=noise amount=0 id=nns")
+  // ③正控：像素化 size=2 是"看得见的最小值"，不是空转
+  let _ = run(s, "add-adjust op=pixelate size=2 id=realpx")
+  // ④正控：阈值 level=0 是极值（把画面变全白），不是空转
+  let _ = run(s, "add-adjust op=threshold level=0 id=realth")
+  let r = run(s, "lint")
+  assert_true(r.contains("nrb"), msg="半径 0 的缩放要报：\{r}")
+  assert_true(r.contains("nns"), msg="数量 0 的噪点要报：\{r}")
+  assert_true(r.contains("中性值"), msg="要说清是参数都是中性值：\{r}")
+  assert_true(!r.contains("realpx"), msg="像素化 size=2 不许被报成空转：\{r}")
+  assert_true(!r.contains("realth"), msg="阈值 level=0 不许被报成空转：\{r}")
+}
+
+///|
+test "容器往返：滤镜参数随 .mpd 逐值往返（升序与键序在字节层面也一样）" {
+  let s = adj_scene("filter-roundtrip")
+  let _ = run(s, "add-adjust op=hue-sat hue=-45.5 sat=0.25 light=-0.125 id=hs")
+  let _ = run(s, "add-adjust op=radial-blur center_x=0.25 center_y=0.75 radius=18.5 id=rb")
+  let before = run(s, "query-layer hs")
+  let saved = run(s, "save-mpd-b64")
+  let b64 = match @core.parse_json(saved) {
+    Ok(o) =>
+      match o.get("mpd_b64") {
+        Some(v) =>
+          match v.as_str() {
+            Some(x) => x
+            None => abort("mpd_b64 不是字符串")
+          }
+        None => abort("回包缺 mpd_b64")
+      }
+    Err(e) => abort("save 回包不是 JSON：\{e}")
+  }
+  let s2 = @agent.Session::new()
+  let _ = run(s2, "session-open full_image")
+  let opened = run(s2, "open-mpd-b64 \{b64}")
+  assert_true(!opened.contains("error"), msg="本引擎必须能打开自己写的滤镜容器：\{opened}")
+  let after = run(s2, "query-layer hs")
+  assert_eq(filt_num(after, "hue"), -45.5, msg="hue 往返")
+  assert_eq(filt_num(after, "sat"), 0.25, msg="sat 往返")
+  assert_eq(filt_num(after, "light"), -0.125, msg="light 往返")
+  assert_true(
+    after.contains("\"params\":{\"hue\":-45.5,\"light\":-0.125,\"sat\":0.25}"),
+    msg="往返后仍是升序（容器字节级）：\{after}",
+  )
+  let rb = run(s2, "query-layer rb")
+  assert_eq(filt_num(rb, "center_y"), 0.75, msg="中心 y 往返")
+  assert_eq(filt_num(rb, "radius"), 18.5, msg="半径往返")
+  assert_true(!before.contains("error"), msg="回读可用")
+}
+
+///|
+test "键清单不许与 core 的滤镜表漂移（加一个键只加一边要红）" {
+  let add = @agent.add_adjust_keys()
+  let set = @agent.set_adjust_keys()
+  let structural = ["op", "value", "in_lo", "in_hi", "gamma", "out_lo", "out_hi", "points", "id", "name"]
+  // 正向：core 表里的每个滤镜键都必须在那份**字面量**里（`param_audit.py` 读的就是它）
+  for op in @core.all_adjust_ops() {
+    for k in @core.filter_param_keys(op) {
+      assert_true(
+        add.contains(k),
+        msg="core 的 \{@core.adjust_op_name(op)} 键 \{k} 没进 add_adjust_keys（字典会漏说，LLM 就发不出来）",
+      )
+      assert_true(set.contains(k), msg="滤镜键 \{k} 也该在 set_adjust_keys 里（原地改要用）")
+    }
+  }
+  // 反向：清单里的每个键都得有归属（滤镜键或结构键），不许留幽灵键
+  for k in add {
+    if structural.contains(k) {
+      continue
+    }
+    let mut owned = false
+    for op in @core.all_adjust_ops() {
+      if @core.filter_param_keys(op).contains(k) {
+        owned = true
+      }
+    }
+    assert_true(owned, msg="add_adjust_keys 里的 \{k} 没有任何算子认它（幽灵键）")
+  }
+}

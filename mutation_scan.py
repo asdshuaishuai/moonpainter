@@ -2620,9 +2620,9 @@ MUTS = [
         "R108",
         "色阶/曲线层不升渲染契约档（老引擎读不出 levels/curve ⇒ 静默丢一层/当空操作）",
         "core/document.mbt",
-        """        if (adj.levels is Some(_) || adj.curve.length() > 0) &&
+        """        if (adj.levels is Some(_) || adj.curve.length() > 0 || adj.params.length() > 0) &&
           rc < RENDER_CONTRACT_ADJUST_PARAMS {""",
-        """        if false && (adj.levels is Some(_) || adj.curve.length() > 0) &&
+        """        if false &&
           rc < RENDER_CONTRACT_ADJUST_PARAMS {""",
         "killed",
     ),
@@ -2647,9 +2647,11 @@ MUTS = [
         "R110",
         "容器里的值算子带着色阶参数时不再拒绝（被静默收下又丢掉）",
         "core/document.mbt",
-        r"""      if adj.levels is Some(_) {
+        r"""    _ =>
+      if adj.levels is Some(_) {
         Some("算子 \{name} 不吃色阶参数（in_lo=… 只对 op=levels 有意义）")""",
-        r"""      if false {
+        r"""    _ =>
+      if false {
         Some("算子 \{name} 不吃色阶参数（in_lo=… 只对 op=levels 有意义）")""",
         "killed",
     ),
@@ -3267,6 +3269,118 @@ MUTS = [
         "core/document.mbt",
         """      Some(f) => if fx_any_on(f) && rc < RENDER_CONTRACT_FX {""",
         """      Some(_f) => if rc < RENDER_CONTRACT_FX {""",
+        "killed",
+    ),
+    # ---- ②B 滤镜库（16 个参数键 / 8 个算子）----
+    # 每条都指着一个**新判据**：改坏了哪条测试会红，写在描述里。
+    (
+        "R125", "海报化量化向下取整（级数错一级）",
+        "render/scene.mbt",
+        "  clamp8(round_i((v.to_double() / step + 0.5).floor() * step))",
+        "  clamp8(round_i((v.to_double() / step).floor() * step))",
+        "killed",
+    ),
+    (
+        "R126", "阈值边界用 > 而不是 >=（恰好等于阈值的像素反过来）",
+        "render/scene.mbt",
+        "      let v = if src.to_double() >= level { 255 } else { 0 }",
+        "      let v = if src.to_double() > level { 255 } else { 0 }",
+        "killed",
+    ),
+    (
+        "R127", "像素化不取块内平均（最后一个像素赢）",
+        "render/scene.mbt",
+        """          sa = sa + ((p >> 24) & 0xFF)
+          sr = sr + ((p >> 16) & 0xFF)
+          sg = sg + ((p >> 8) & 0xFF)
+          sb = sb + (p & 0xFF)
+          count = count + 1""",
+        """          sa = ((p >> 24) & 0xFF)
+          sr = ((p >> 16) & 0xFF)
+          sg = ((p >> 8) & 0xFF)
+          sb = (p & 0xFF)
+          count = count + 1""",
+        "killed",
+    ),
+    (
+        "R128", "动感模糊只往正方向取样（拖影不对称）",
+        "render/scene.mbt",
+        "        let t = -r + 2.0 * r * j.to_double() / last",
+        "        let t = r * j.to_double() / last",
+        "killed",
+    ),
+    (
+        "R129", "径向模糊忽略半径（k 恒 0 ⇒ 一个像素都不动）",
+        "render/scene.mbt",
+        "  let k = r / FILTER_BLUR_MAX_RADIUS * 0.25",
+        "  let k = r * 0.0 + 0.0",
+        "killed",
+    ),
+    (
+        "R130", "噪点的 mono=1 不生效（红通道还是自己那条噪声）",
+        "render/scene.mbt",
+        "      let dr = (1.0 - mono) * noise_hash(x, y, 0) + mono * nm",
+        "      let dr = noise_hash(x, y, 0)",
+        "killed",
+    ),
+    (
+        "R131", "色相/饱和度/明度的中性短路拿掉（空转的层也过 OKLab 往返）",
+        "render/scene.mbt",
+        """      if hue == 0.0 && sat == 0.0 && light == 0.0 {
+        (r, g, b)
+      } else {""",
+        """      if false {
+        (r, g, b)
+      } else {""",
+        # **等价**，不是"没人守"：短路返回的就是入参本身，而拿掉短路后走 OKLab
+        # 往返——`render/temp_scan_wbtest.mbt`（一次性测量，跑完即删）实测
+        # **16,777,216 个 24-bit 颜色里 0 个不同**（8-bit 量化把浮点尾差全吃掉了）。
+        # 短路留着是为了让"空转的层真的空转"这句话**不依赖浮点尾差的运气**
+        # （便宜且显式），但它不改变任何可观测字节 ⇒ 变异等价。
+        "equivalent",
+    ),
+    (
+        "R132", "色彩平衡不夹紧（越界字节溢出到相邻通道）",
+        "render/scene.mbt",
+        '      clamp8(r + round_i(filter_d(adj, "cr", 0.0) * 100.0)),',
+        '      r + round_i(filter_d(adj, "cr", 0.0) * 100.0),',
+        "killed",
+    ),
+    (
+        "R133", "参数键比较反序（canonical 顺序变成降序，容器存了读不回）",
+        "core/document.mbt",
+        "      return ca < cb",
+        "      return ca > cb",
+        "killed",
+    ),
+    (
+        "R134", "滤镜参数不查整数（size=2.5 静默收下）",
+        "core/document.mbt",
+        "    if r.integral && got.1 != got.1.floor() {",
+        "    if false {",
+        "killed",
+    ),
+    (
+        "R135", "滤镜参数不按键名逐位对（写错键名按位置收下）",
+        "core/document.mbt",
+        "    if got.0 != r.key {",
+        "    if false {",
+        "killed",
+    ),
+    (
+        "R136", "滤镜参数不抬渲染契约档（老引擎会静默丢参数）",
+        "core/document.mbt",
+        """        if (adj.levels is Some(_) || adj.curve.length() > 0 || adj.params.length() > 0) &&
+          rc < RENDER_CONTRACT_ADJUST_PARAMS {""",
+        """        if (adj.levels is Some(_) || adj.curve.length() > 0) &&
+          rc < RENDER_CONTRACT_ADJUST_PARAMS {""",
+        "killed",
+    ),
+    (
+        "R137", "lint 不再报「装了却什么都不干」的滤镜层",
+        "core/document.mbt",
+        '    MotionBlur | RadialBlur => get("radius") == 0.0',
+        "    MotionBlur | RadialBlur => false",
         "killed",
     ),
     ]

@@ -211,7 +211,7 @@ test "set-fx：调整层装不了样式（同一格 kind 表），摘得掉手�
   doc.layers.push({
     ..@core.default_layer("a9", "a", 0.0, 0.0, 80.0, 60.0),
     kind: @core.ShapeKind::Adjust,
-    adjust: Some(@core.Adjust::{ op: @core.AdjustOp::Brightness, value: 0.3, levels: None, curve: [] }),
+    adjust: Some(@core.make_adjust(@core.AdjustOp::Brightness, 0.3)),
     fx: Some({ ..@core.default_fx(), shadow: true }),
   })
   let v = @agent.lint_doc(doc)

@@ -205,6 +205,27 @@ test "属性面板：文字层给内容+字号，调整层给算子+数值（各
   assert_true(has_sub(hc, "<polyline"), msg="曲线要有预览折线：\{hc}")
   assert_true(has_sub(hc, "60,22.5"), msg="预览点要按引擎采样换成屏幕坐标（0.5⇒x=60、0.75⇒y=(1-0.75)*90=22.5）：\{hc}")
   assert_true(lacks_sub(hc, "__adj_val"), msg="曲线层不该画单个数值框：\{hc}")
+  // ②B 滤镜层：**每一格一个输入框**，键名与顺序都由引擎报出来的 `params` 决定。
+  // 报串故意把键写成**非升序**（引擎实际是升序，但前端不许依赖输入顺序——
+  // 它自己按码位序排），并断言 amount 那一格排在 mono 前面。
+  let hf = props_html(
+    parse_json_safe(
+      "{\"id\":\"a4\",\"name\":\"噪点\",\"kind\":\"adjust\",\"adjust\":{\"op\":\"noise\",\"value\":0,\"params\":{\"mono\":1,\"amount\":0.4}},\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"opacity\",\"mask\",\"adjust\"]}",
+    ),
+    roots,
+    "",
+    "",
+  )
+  assert_true(has_sub(hf, "globalThis.__adj_key(\"a4\",\"amount\",this.value)"), msg=hf)
+  assert_true(has_sub(hf, "globalThis.__adj_key(\"a4\",\"mono\",this.value)"), msg=hf)
+  assert_true(has_sub(hf, "value='0.4'"), msg="滤镜格子要填当前值：\{hf}")
+  assert_true(has_sub(hf, "value='1'"), msg="滤镜格子要填当前值：\{hf}")
+  assert_true(lacks_sub(hf, "__adj_val"), msg="滤镜层不该画单个数值框：\{hf}")
+  match (hf.find("__adj_key(\"a4\",\"amount\""), hf.find("__adj_key(\"a4\",\"mono\"")) {
+    (Some(i), Some(j)) =>
+      assert_true(i < j, msg="参数格要按键名升序排（与容器的 canonical 顺序同一条规则）：\{hf}")
+    _ => assert_true(false, msg="两格都该出现：\{hf}")
+  }
   // 调整层作用于**其下的合成**，它的 x/y 与盒子都不读（实测 move/resize
   // 回 ok、指纹变、画面逐位不变）⇒ X/Y 与 W/H 都不该是输入框，而要印出理由
   assert_true(lacks_sub(ha, "__setx"), msg="调整层不该有 X 输入框：\{ha}")

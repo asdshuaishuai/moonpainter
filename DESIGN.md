@@ -47,7 +47,7 @@ macOS 原生类 Photoshop 编辑器。对本工程最有价值的三块遗产：
 
 ```
 宿主    cli（native 行协议 + 文件 FFI + 原子落盘）
-交互    agent（71 命令 · vision 闸 · undo/redo · 步骤历史 history/goto · P0–P2 lint · MVSL 闭环 · 工具字典）
+交互    agent（72 命令 · vision 闸 · undo/redo · 步骤历史 history/goto · P0–P2 lint · MVSL 闭环 · 工具字典）
 容器    mpd（pack/unpack · manifest/params/agent/mvsl · 指纹对账 · 限额 · 预览生成）
 渲染    render（RGBA 画布 · 2×2 子采样 AA · W3C 混合 · 旋转 · 取景 · pick · stats）
 核心    core（IR 层树 · canonical JSON 双向 · 指纹 · 层定位原语 · MVSL 编辑表 IR）
@@ -282,7 +282,7 @@ manifest 的 `mvsl` 版本块 pin 住四个独立版本号（`render_contract` /
   **空断言**即保护断言的选择子零命中（P1——恒真，比"被违反"更坏，因为它给的是虚假的安心）。
   空编辑表是合法状态，不报条目——lint 不该对「我还没改任何东西」报警。
 
-## 6. 命令集（71 个；字典 = agent/tools.mbt 单一事实源）
+## 6. 命令集（72 个；字典 = agent/tools.mbt 单一事实源）
 
 会话：`session-open` `list-tools` `help`；文档：`new` `set-canvas` `list-layers` `query-layer` `lint`；
 绘制：`add-rect/ellipse/polygon/line` `add-path` `path-preview` `bool-op`（两个形状 → 一个新路径层）`add-image`（b64）`set-image`（原地换图，只换像素）`set-style` `move` `resize` `rotate` `transform`（自由变换：位置+盒子+旋转**一次**写完 = 一步历史）`rename` `tag` `delete` `visible` `reorder` `group` `ungroup` `group-add` `group-remove`（成员增删）；
@@ -340,12 +340,26 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
   `required_render_contract` 取**所有层里的最高档**（毛边=2、多边形=3、克隆=4、
   贝塞尔路径=5、色阶/曲线=6），
   不是"遇到第一档就 return"；**P5 调整层**做了**叠加式像素算子**（`add-adjust` 的
-  13 个算子；每个算子的可调数值**有取值范围**——brightness/contrast/saturation/
+  21 个算子 = 13 个数值/色阶族 + 8 个滤镜（②B：动感/径向模糊、噪点、像素化、
+  海报化、阈值、色相饱和度、色彩平衡）；每个算子的可调数值**有取值范围**——brightness/contrast/saturation/
   warm 是 -1..1，blur/sharpen/smooth/whiten/vignette 是 0..1，invert/grayscale/
   levels/curves **没有数值**（渲染器不读 value，给了入口直接拒绝）；范围是
   `agent/session.mbt` 的 `adjust_bounds`、"读不读 value"是
   `core.adjust_uses_value`、**哪个算子读哪些参数**是 `core.adjust_param_error`
   （各自一处，字典描述与错误提示都从它们生成）。
+
+  **滤镜库（②B）**：八个滤镜算子的参数键（键名/范围/中性值/整数标记）是**一张
+  表** `core.filter_param_rows`（`Adjust.params` 按键名**升序**存、容器按表序
+  逐位回读；`adjust-spec` 把这张表报给前端，面板据此画控件 ⇒ 前端不抄算子名单）。
+  入口校验（`filter_param_error`）、`lint` 的空操作判据（`filter_is_noop`）、
+  字典描述、渲染器取值（`filter_d`）全读它一处；渲染实现在
+  `render/scene.mbt`：`apply_motion_blur`/`apply_radial_blur`/`apply_noise`/
+  `apply_pixelate` 与 `adjust_pixel` 里的 Posterize/Threshold/HueSat/
+  ColorBalance 分支。**诚实边界**：模糊族固定 25 采样（`radius>12` 时步长 >1px、
+  会跳像素）、径向模糊只向外取样、噪点是确定性哈希（无种子/无颗粒大小）、
+  色彩平衡只有三通道整体偏移（无阴影/中间调/高光）、像素化的块均值把 α 一起
+  平均、海报化按每通道等分、阈值没有软过渡、采样点不吸附像素中心（过渡像素对
+  浮点尾差敏感 ⇒ 判据只咬整段同色块与对称性不变量）。
 
   **色阶/曲线（PLAN 七十）**：与上面那些"一个数字"的算子不同，这两族要**成组参数**。
   纪律与实测：
@@ -398,10 +412,12 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
   会把已经改过的像素当邻居（**不按算子分类**是有意的：分派表已经有一份"哪些是
   邻域"，再抄一张清单必然先烂），代价是这条路上多一次整幅拷贝（12MP ≈ 48MB）。
   覆盖度恰好 1 处走直通 ⇒ "蒙版盖满整幅"与"没有蒙版"逐位相同；**没有蒙版的调整层
-  逐位等于旧实现**（既有 golden 一个像素都没动），
-  可反复编辑参数的独立调整层（levels/curves/hue_sat 面板）仍未做；
+  逐位等于旧实现**（既有 golden 一个像素都没动）；
+  调整层的**参数面可反复编辑**（`set-adjust` 原地改、层序不变；人类面板按引擎
+  报出来的参数面画控件：色阶五格、曲线点表 + 引擎采样的预览折线、滤镜逐键数字
+  格）；仍未做的是"把调整层限定到某几个层"（剪贴）与分通道曲线；
   **文本层**做了 **ASCII 点阵字形**（无 CJK、无字体文件）。
-- **仍未做**：图层样式 fx、多色渐变/径向渐变；
+- **仍未做**：多色渐变/径向渐变；
   **路径（贝塞尔）本轮是 Stage A**：锚点 + 每锚 in/out 控制柄的采样 / 包含 / 描边 / 包围盒，闭合语义只有一处（`core.fill_closed`：`fill = NoFill` ⇒ 开放）。布尔运算（并/差/交/异或）、路径上再编辑（加/删锚点、人侧除「点下拖出」以外的控制柄手柄）、把已有形状转成路径、路径文字、SVG/AI 导入**仍未做**——判据只咬「这条曲线画得对不对」，不咬「能不能布尔」。
 - **PSD L1 读 → L3 写**（PSD 为第一公民，Photopea 天然覆盖）、AI（PDF 层）导入、Sketch/XCF/KRA；原文保全策略（source/ 层）；
 - MCP server / WASM 面向宿主、SKILL.md、mpdView 只读查看器（ddpView 模式）、collab 合并、变体（fork/score/merge）；
@@ -996,8 +1012,8 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
 - **能力边界的权威清单是 `docs/scorecard.md`**（由 `scorecard.py` 从
   `scorecard/areas.toml` 生成、`verify.sh#scorecard` 逐字节核对）：8 个域 63 条，
   每条一个状态三档（**已做 / 部分+声明边界 / 未做**）与一个**唯一命中**的源码锚点。
-  它存在的理由是一条现场教训：**接线计数不是能力**——"71 条命令 / 61 个工具 /
-  71 条人类可达"说的全是**入口存在**，而一个入口背后可能只是"回一个错误"，
+  它存在的理由是一条现场教训：**接线计数不是能力**——"72 条命令 / 61 个工具 /
+  72 条人类可达"说的全是**入口存在**，而一个入口背后可能只是"回一个错误"，
   或者更坏：参数收下了、一个像素都没读（这一类现在由 `key_effect_audit.py`
   现场数：187 个（命令, 键）配对，死键目标 0，"测不出来"单列不许算通过）。
   ⚠️ 锚点与门禁列保证的是"这条依据还在、那条门禁还在守"，**保证不了"依据说的话

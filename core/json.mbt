@@ -551,6 +551,25 @@ fn curve_json(pts : Array[(Double, Double)]) -> String {
   sb.to_string()
 }
 
+///|
+/// 滤镜参数的写出端：`[["angle",30],["radius",12]]`——**顺序即字节**（键名升序，
+/// `sort_params` 一处保证），所以 canonical 指纹稳定。字符串走 `json_escape`
+/// （键名本该来自 `filter_param_rows` 的 ASCII 表，但写端不该假设输入是干净的）。
+fn filter_params_json(params : Array[(String, Double)]) -> String {
+  let sb = StringBuilder()
+  sb.write_string("[")
+  let mut i = 0
+  while i < params.length() {
+    if i > 0 {
+      sb.write_string(",")
+    }
+    sb.write_string("[\"" + json_escape(params[i].0) + "\"," + fmt_num(params[i].1) + "]")
+    i = i + 1
+  }
+  sb.write_string("]")
+  sb.to_string()
+}
+
 fn adjust_json(a : Adjust?) -> String {
   match a {
     None => "null"
@@ -568,6 +587,10 @@ fn adjust_json(a : Adjust?) -> String {
       if adj.curve.length() > 0 {
         sb.write_string(",\"curve\":")
         sb.write_string(curve_json(adj.curve))
+      }
+      if adj.params.length() > 0 {
+        sb.write_string(",\"params\":")
+        sb.write_string(filter_params_json(adj.params))
       }
       sb.write_string("}")
       sb.to_string()
@@ -1055,7 +1078,40 @@ fn adjust_of(v : JValue) -> Result[Adjust?, String] {
       }
     None => ()
   }
-  let adj : Adjust = { op, value, levels, curve }
+  // 滤镜参数：字段在就必须是 [[键,数值],…]（形状/范围/排序由 adjust_param_error 一句判）
+  let params : Array[(String, Double)] = []
+  match raw.get("params") {
+    Some(pv) =>
+      match pv {
+        JArr(items) => {
+          let mut i = 0
+          for it in items {
+            match it {
+              JArr(pair) =>
+                if pair.length() != 2 {
+                  return Err("params 的第 \{i + 1} 项不是 [键,数值]")
+                } else {
+                  let k = match pair[0] {
+                    JStr(sv) => sv
+                    _ => return Err("params 的第 \{i + 1} 项的键不是字符串")
+                  }
+                  let v = match pair[1] {
+                    JNum(d) => d
+                    _ => return Err("params 的第 \{i + 1} 项的数值不是数字")
+                  }
+                  params.push((k, v))
+                }
+              _ => return Err("params 的第 \{i + 1} 项不是 [键,数值]")
+            }
+            i = i + 1
+          }
+        }
+        JNull => ()
+        _ => return Err("params 必须是 [[键,数值],…] 的表")
+      }
+    None => ()
+  }
+  let adj : Adjust = { op, value, levels, curve, params }
   match adjust_param_error(adj) {
     Some(e) => Err(e)
     None => Ok(Some(adj))

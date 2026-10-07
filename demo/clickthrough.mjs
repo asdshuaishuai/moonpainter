@@ -653,6 +653,30 @@ check(
     a6.curve_sample[4][1] === 0.75,
   `levels=${JSON.stringify(a3.levels)}→gamma ${a4.levels && a4.levels.gamma}｜points=${a5.points}→${a6.points}｜采样=${a6.curve_sample && a6.curve_sample.length} 中点=${a6.curve_sample && a6.curve_sample[4] && a6.curve_sample[4][1]}｜状态栏=${status()}`,
 );
+// ②B 滤镜：换算子时人侧**问引擎要中性值**（`adjust-spec`），再改一格原地生效；
+// 面板要为参数面的每个键画一格（键名来自引擎报出来的 `params`，前端不抄表）
+await globalThis.__adj_op('adj1', 'pixelate');
+const a7 = layer('adj1').adjust || {};
+await globalThis.__adj_key('adj1', 'size', '8');
+const a8 = layer('adj1').adjust || {};
+await globalThis.__sel('adj1');
+const propsF = String(globalThis.document.getElementById('pprops').innerHTML || '');
+check(
+  '滤镜：换算子铺引擎给的**中性值**（pixelate ⇒ size=2）→ 改一格原地生效 + 面板画出这一格',
+  a7.op === 'pixelate' && a7.params && a7.params.size === 2 &&
+    a8.op === 'pixelate' && a8.params && a8.params.size === 8 &&
+    propsF.includes('__adj_key("adj1","size"'),
+  `op=${a7.op} params=${JSON.stringify(a7.params)}→${JSON.stringify(a8.params)}｜面板有格子=${propsF.includes('__adj_key("adj1","size"')}｜状态栏=${status()}`,
+);
+// 坏参数名在人侧入口就拒（键名是从 HTML 属性拼进命令行的，多一个空格就能塞进
+// 第二个参数）——**但不抄引擎的键清单**：只卡形状，语义由引擎拒
+await globalThis.__adj_key('adj1', 'si ze', '8');
+check(
+  '滤镜：不合法的参数名在人侧入口被拒（状态栏说清楚，不拼进命令行）',
+  status().includes('不合法的调整参数名') && (layer('adj1').adjust || {}).op === 'pixelate',
+  `状态栏=${status()}｜op=${(layer('adj1').adjust || {}).op}`,
+);
+
 // ⑪b 混合模式（人侧下拉）：改成 multiply → 引擎回读；**有面层才有这个控件**，
 // 调整层没有面 ⇒ 面板画只读回显（`caps` 里没有 blend），DOM 里不该有下拉
 const blendLayer = layers().find((l) => l.kind === 'rect') || layers()[0];

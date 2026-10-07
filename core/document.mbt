@@ -243,7 +243,7 @@ pub fn required_render_contract(doc : Document) -> Int {
     // 空操作 ⇒ 静默错渲，必须升档。
     match l.adjust {
       Some(adj) =>
-        if (adj.levels is Some(_) || adj.curve.length() > 0) &&
+        if (adj.levels is Some(_) || adj.curve.length() > 0 || adj.params.length() > 0) &&
           rc < RENDER_CONTRACT_ADJUST_PARAMS {
           rc = RENDER_CONTRACT_ADJUST_PARAMS
         }
@@ -298,6 +298,16 @@ pub(all) enum AdjustOp {
   Vignette // 暗角：value 0..1，径向渐暗
   Levels // 色阶：5 个参数（输入黑白点/gamma/输出黑白点），**不吃 value**
   Curves // 曲线：控制点表（每点 x,y ∈ 0..1，x 严格递增），**不吃 value**
+  // ②B 滤镜库：多参数算子（参数走 `Adjust.params` 的键值表，**不吃 value**）。
+  // 每个算子的参数键、范围、中性值都在 `filter_param_rows` **一张表**里。
+  MotionBlur // 动感模糊：angle(0..360 度) radius(0..64 px)
+  RadialBlur // 径向模糊（缩放拖影）：center_x/center_y(0..1) radius(0..64 px)
+  Noise // 噪点：amount(0..1) mono(0..1，彩色↔单色)
+  Pixelate // 像素化：size(2..256 px 色块边长)
+  Posterize // 海报化：levels(2..16，每通道色阶数)
+  Threshold // 阈值：level(0..1) channel(0=R 1=G 2=B 3=luma)
+  HueSat // 色相/饱和度：hue(-180..180 度) sat(-1..1) light(-1..1)
+  ColorBalance // 色彩平衡：cr/cg/cb(-1..1，均匀加减)
 }
 
 ///|
@@ -368,6 +378,14 @@ pub fn adjust_op_name(op : AdjustOp) -> String {
     Vignette => "vignette"
     Levels => "levels"
     Curves => "curves"
+    MotionBlur => "motion-blur"
+    RadialBlur => "radial-blur"
+    Noise => "noise"
+    Pixelate => "pixelate"
+    Posterize => "posterize"
+    Threshold => "threshold"
+    HueSat => "hue-sat"
+    ColorBalance => "color-balance"
   }
 }
 
@@ -393,6 +411,14 @@ pub fn adjust_op_from_name(name : String) -> AdjustOp? {
     "vignette" => Some(Vignette)
     "levels" => Some(Levels)
     "curves" => Some(Curves)
+    "motion-blur" => Some(MotionBlur)
+    "radial-blur" => Some(RadialBlur)
+    "noise" => Some(Noise)
+    "pixelate" => Some(Pixelate)
+    "posterize" => Some(Posterize)
+    "threshold" => Some(Threshold)
+    "hue-sat" => Some(HueSat)
+    "color-balance" => Some(ColorBalance)
     _ => None
   }
 }
@@ -415,6 +441,14 @@ pub fn all_adjust_ops() -> Array[AdjustOp] {
     Vignette,
     Levels,
     Curves,
+    MotionBlur,
+    RadialBlur,
+    Noise,
+    Pixelate,
+    Posterize,
+    Threshold,
+    HueSat,
+    ColorBalance,
   ]
 }
 
@@ -564,12 +598,65 @@ pub(all) struct Adjust {
   value : Double
   levels : Levels?
   curve : Array[(Double, Double)]
+  // ②B 滤镜算子的参数（键值对，**按键名升序**存储——canonical 字节必须确定）。
+  // 非滤镜算子恒为空（`adjust_param_error` 一处判据）。
+  params : Array[(String, Double)]
 }
 
 ///|
 /// 造一个调整参数（其余字段缺省）。加参数时**只改这一处**：8 个构造点都读它。
 pub fn make_adjust(op : AdjustOp, value : Double) -> Adjust {
-  { op, value, levels: None, curve: [] }
+  { op, value, levels: None, curve: [], params: [] }
+}
+
+///|
+/// 造一个**滤镜**算子（②B，多参数）。参数按键名升序排好——canonical JSON 与
+/// 指纹都读这个顺序，入口别自己排第二遍（`sort_params` 只此一份）。
+pub fn make_filter_adjust(op : AdjustOp, params : Array[(String, Double)]) -> Adjust {
+  { op, value: 0.0, levels: None, curve: [], params: sort_params(params) }
+}
+
+///|
+/// 参数按键名升序（**单一实现**：`make_filter_adjust` 与容器读入端都走它）。
+/// 键名是 ASCII 小写+下划线，按字节序比较即可（不依赖任何 locale）。
+pub fn sort_params(params : Array[(String, Double)]) -> Array[(String, Double)] {
+  let out = params.copy()
+  let n = out.length()
+  let mut i = 1
+  while i < n {
+    let cur = out[i]
+    let mut j = i
+    while j > 0 && param_key_less(cur.0, out[j - 1].0) {
+      out[j] = out[j - 1]
+      j = j - 1
+    }
+    out[j] = cur
+    i = i + 1
+  }
+  out
+}
+
+///|
+/// 参数键名的**码位序**比较（`a < b`）。存在的理由：canonical 顺序不能靠
+/// "字符串的 `>` 大概就是字典序"——`sort_params` 实测被 `String` 上的 `>` 排成了
+/// 反序（`noise` 的两个键报成 `mono,amount`），于是"键名升序"这条承诺在容器字节、
+/// 指纹、回读三处同时不成立，而**没有任何门禁会红**。键是 ASCII 小写+下划线，
+/// 按码位逐位比就是它该有的定义（`adjust_params_test.mbt` 里对 `Array::sort()`
+/// 也有同一类实测：本仓库的字符串排序不是字典序，别拿它当顺序的定义）。
+pub fn param_key_less(a : String, b : String) -> Bool {
+  let la = a.length()
+  let lb = b.length()
+  let n = if la < lb { la } else { lb }
+  let mut i = 0
+  while i < n {
+    let ca = a[i].to_int()
+    let cb = b[i].to_int()
+    if ca != cb {
+      return ca < cb
+    }
+    i = i + 1
+  }
+  la < lb
 }
 
 ///|
@@ -577,7 +664,164 @@ pub fn make_adjust(op : AdjustOp, value : Double) -> Adjust {
 pub fn adjust_uses_value(op : AdjustOp) -> Bool {
   match op {
     Invert | Grayscale | Levels | Curves => false
+    MotionBlur | RadialBlur | Noise | Pixelate | Posterize | Threshold | HueSat | ColorBalance =>
+      false
     _ => true
+  }
+}
+
+///|
+/// 滤镜算子的**一个参数键**（②B）。参数面的一切（键清单、范围、中性值、
+/// 字典描述、错误话术）都从这张表出——手写第二份清单就是"加参数时漏改一处"。
+pub(all) struct FilterParam {
+  key : String
+  doc : String
+  lo : Double
+  hi : Double
+  // 调用方没给这个键时填什么。一律选**让这一维不干活**的值：
+  // 缺参数不该悄悄带来看得见的效果（`lint` 再报"整层不干活"）。
+  neutral : Double
+  // 只许取整数（`threshold` 的 `channel`）：给了 1.5 要**报**，不许悄悄取整。
+  integral : Bool
+}
+
+///|
+/// 滤镜算子的参数键表（**一行一个键**；加算子/加参数只改这里）。非滤镜算子返回空。
+pub fn filter_param_rows(op : AdjustOp) -> Array[FilterParam] {
+  match op {
+    MotionBlur => [
+      { key: "angle", doc: "运动方向（度，0=向右、90=向下）", lo: 0.0, hi: 360.0, neutral: 0.0, integral: false },
+      { key: "radius", doc: "拖影长度（像素，0=不动）", lo: 0.0, hi: 64.0, neutral: 0.0, integral: false },
+    ]
+    RadialBlur => [
+      { key: "center_x", doc: "缩放中心 x（0..1 = 相对画布宽）", lo: 0.0, hi: 1.0, neutral: 0.5, integral: false },
+      { key: "center_y", doc: "缩放中心 y（0..1 = 相对画布高）", lo: 0.0, hi: 1.0, neutral: 0.5, integral: false },
+      { key: "radius", doc: "缩放拖影强度（像素，0=不动）", lo: 0.0, hi: 64.0, neutral: 0.0, integral: false },
+    ]
+    Noise => [
+      { key: "amount", doc: "噪声强度（0..1，0=不加）", lo: 0.0, hi: 1.0, neutral: 0.0, integral: false },
+      { key: "mono", doc: "单色程度（0=彩色噪声，1=单色）", lo: 0.0, hi: 1.0, neutral: 0.0, integral: false },
+    ]
+    Pixelate => [
+      { key: "size", doc: "色块边长（像素，≥2，必须整数）", lo: 2.0, hi: 256.0, neutral: 2.0, integral: true },
+    ]
+    Posterize => [
+      { key: "levels", doc: "每个通道的色阶数（≥2，必须整数）", lo: 2.0, hi: 16.0, neutral: 2.0, integral: true },
+    ]
+    // ⚠️ 行顺序 = **键名升序**（不是"读起来顺"的顺序）：`filter_param_error`
+    // 按表序逐位对（容器里存的就是升序），表序错了容器就**读不回来**——
+    // 实测 threshold 原先写成 (level, channel)，存进去再打开会报"第 1 个参数
+    // 应当是 level"。不变量由 `core/filter_test.mbt` 逐个算子钉住。
+    Threshold => [
+      { key: "channel", doc: "跟谁比：0=R 1=G 2=B 3=luma（必须整数）", lo: 0.0, hi: 3.0, neutral: 3.0, integral: true },
+      { key: "level", doc: "阈值（0..1，按上面那个通道的值比）", lo: 0.0, hi: 1.0, neutral: 0.5, integral: false },
+    ]
+    HueSat => [
+      { key: "hue", doc: "色相偏移（度，-180..180）", lo: -180.0, hi: 180.0, neutral: 0.0, integral: false },
+      { key: "light", doc: "明度（-1..1，正=更亮）", lo: -1.0, hi: 1.0, neutral: 0.0, integral: false },
+      { key: "sat", doc: "饱和度（-1..1，正=更艳、-1=灰）", lo: -1.0, hi: 1.0, neutral: 0.0, integral: false },
+    ]
+    ColorBalance => [
+      { key: "cb", doc: "蓝通道（-1..1，正=加蓝、负=加黄）", lo: -1.0, hi: 1.0, neutral: 0.0, integral: false },
+      { key: "cg", doc: "绿通道（-1..1，正=加绿、负=加品红）", lo: -1.0, hi: 1.0, neutral: 0.0, integral: false },
+      { key: "cr", doc: "红通道（-1..1，正=加红、负=加青）", lo: -1.0, hi: 1.0, neutral: 0.0, integral: false },
+    ]
+    _ => []
+  }
+}
+
+///|
+/// 这个算子是不是②B 的滤镜（多参数）算子。
+pub fn is_filter_op(op : AdjustOp) -> Bool {
+  filter_param_rows(op).length() > 0
+}
+
+///|
+/// 参数键清单（**从表生成**，agent 的键表与字典描述都读它）。
+pub fn filter_param_keys(op : AdjustOp) -> Array[String] {
+  filter_param_rows(op).map(fn(r) { r.key })
+}
+
+///|
+/// 取一个参数值（`None` = 这个键不属于这个算子/没给）。渲染器读参数的**唯一**入口。
+pub fn filter_param_value(params : Array[(String, Double)], key : String) -> Double? {
+  for p in params {
+    if p.0 == key {
+      return Some(p.1)
+    }
+  }
+  None
+}
+
+///|
+/// 参数**形状与取值**的判据（**一处**：命令入口、`set-adjust` 部分更新、
+/// 容器读入端、`lint` 共用）。
+///
+/// 三条都在这一句里：①键必须**恰好**是表里那些（缺一个/多一个都报——多出来的
+/// 键渲染器不读，收了就是"静默丢掉"）；②必须**按键名升序**（canonical 字节要确定）；
+/// ③取值在范围内、标了 `integral` 的必须是整数（`channel=1.5` 要报，不许悄悄取整）。
+pub fn filter_param_error(op : AdjustOp, params : Array[(String, Double)]) -> String? {
+  let rows = filter_param_rows(op)
+  let name = adjust_op_name(op)
+  if rows.length() == 0 {
+    if params.length() > 0 {
+      return Some("算子 \{name} 不吃参数表（params；参数键只对滤镜算子有意义）")
+    }
+    return None
+  }
+  if params.length() != rows.length() {
+    return Some(
+      "算子 \{name} 需要 \{rows.length()} 个参数（" +
+      rows.map(fn(r) { "\{r.key}=\{fmt_num(r.lo)}..\{fmt_num(r.hi)}" }).join(" ") +
+      "）：收到 \{params.length()} 个",
+    )
+  }
+  let mut i = 0
+  while i < rows.length() {
+    let r = rows[i]
+    let got = params[i]
+    if got.0 != r.key {
+      // 未排序与"写错键名"在这里是同一句话：**按表序逐位对**，错位就指名道姓。
+      // （分成两条判据的话，"排序"那条会在键名写错时先报，掩盖真正的问题。）
+      return Some(
+        "算子 \{name} 的第 \{i + 1} 个参数应当是 \{r.key}=…（按键名升序），收到 \{got.0}",
+      )
+    }
+    if got.1 < r.lo || got.1 > r.hi {
+      return Some(
+        "算子 \{name} 的 \{r.key}=\{fmt_num(got.1)} 超出范围 [\{fmt_num(r.lo)}..\{fmt_num(r.hi)}]（\{r.doc}）",
+      )
+    }
+    if r.integral && got.1 != got.1.floor() {
+      return Some("算子 \{name} 的 \{r.key}=\{fmt_num(got.1)} 必须是整数（\{r.doc}）")
+    }
+    i = i + 1
+  }
+  None
+}
+
+///|
+/// 这层滤镜**装了却什么都不干**吗（②B）？判据只有这一处，`lint` 读它。
+///
+/// 与色阶的 value=0 同一条分工：中性值合法（命令面不拦——"先把参数建好、
+/// 待会儿再调"是正常操作），但它确实不干活，所以 `lint` 必须报。
+pub fn filter_is_noop(op : AdjustOp, params : Array[(String, Double)]) -> Bool {
+  let get = fn(key : String) -> Double {
+    match filter_param_value(params, key) {
+      Some(v) => v
+      None => 0.0
+    }
+  }
+  match op {
+    MotionBlur | RadialBlur => get("radius") == 0.0
+    Noise => get("amount") == 0.0
+    Pixelate => get("size") <= 1.0
+    Posterize => get("levels") <= 1.0
+    // 阈值任何取值都会把画面变成纯黑白（level=0 全白、level=1 全黑）⇒ 从不空转
+    Threshold => false
+    HueSat => get("hue") == 0.0 && get("sat") == 0.0 && get("light") == 0.0
+    ColorBalance => get("cr") == 0.0 && get("cg") == 0.0 && get("cb") == 0.0
+    _ => false
   }
 }
 
@@ -604,11 +848,23 @@ pub fn adjust_param_error(adj : Adjust) -> String? {
         Some(_) => Some("算子 \{name} 读 points=，不读色阶参数（in_lo=… 请用 op=levels）")
         None => curve_error(adj.curve)
       }
+    MotionBlur | RadialBlur | Noise | Pixelate | Posterize | Threshold | HueSat | ColorBalance => {
+      // 参数字族的互斥先判（"给了色阶/曲线"要说清为什么不行），再判参数表本身
+      if adj.levels is Some(_) {
+        Some("算子 \{name} 不吃色阶参数（in_lo=… 只对 op=levels 有意义）")
+      } else if adj.curve.length() > 0 {
+        Some("算子 \{name} 不吃 points=（曲线控制点只对 op=curves 有意义）")
+      } else {
+        filter_param_error(adj.op, adj.params)
+      }
+    }
     _ =>
       if adj.levels is Some(_) {
         Some("算子 \{name} 不吃色阶参数（in_lo=… 只对 op=levels 有意义）")
       } else if adj.curve.length() > 0 {
         Some("算子 \{name} 不吃 points=（曲线控制点只对 op=curves 有意义）")
+      } else if adj.params.length() > 0 {
+        Some("算子 \{name} 不吃参数表（params；参数键只对滤镜算子有意义）")
       } else {
         None
       }

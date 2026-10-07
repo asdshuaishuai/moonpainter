@@ -1764,6 +1764,13 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
                   "P2 noop 调整层 \{l.id} 是曲线但控制点全在对角线上（画面逐位不变；给个非中性参数或删掉这层）",
                 )
               }
+            } else if @core.is_filter_op(a.op) {
+              // ②B 滤镜：参数全是中性值 ⇒ 这层装了却什么都不干（判据在 core 一处）
+              if @core.filter_is_noop(a.op, a.params) {
+                v.push(
+                  "P2 noop 调整层 \{l.id} 是 \{name} 但参数都是中性值（画面逐位不变；给个非中性参数或删掉这层）",
+                )
+              }
             }
           } else {
             let (lo, hi) = adjust_bounds(a.op)

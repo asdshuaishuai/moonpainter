@@ -1505,6 +1505,13 @@ fn apply_adjust(a : @core.Adjust?, buf : @codec.RgbaBuf) -> Unit {
     @core.AdjustOp::Sharpen => apply_sharpen(buf, adj.value)
     @core.AdjustOp::Smooth => apply_smooth(buf, adj.value)
     @core.AdjustOp::Vignette => apply_vignette(buf, adj.value)
+    // ②B 滤镜：这四个要读**邻域/整块**（拖影、缩放取样、色块平均、逐像素噪声），
+    // 走专用实现；海报化/阈值/色相饱和度/色彩平衡只读自己那个像素 ⇒ 留在
+    // `adjust_pixel` 那条路上（蒙版混合、scratch 路径都不用再写一遍）。
+    @core.AdjustOp::MotionBlur => apply_motion_blur(buf, adj)
+    @core.AdjustOp::RadialBlur => apply_radial_blur(buf, adj)
+    @core.AdjustOp::Noise => apply_noise(buf, adj)
+    @core.AdjustOp::Pixelate => apply_pixelate(buf, adj)
     _ => apply_adjust_pixel(adj, buf)
   }
 }
@@ -1806,6 +1813,65 @@ fn adjust_pixel(adj : @core.Adjust, lut : Array[Int]?, p : Int) -> Int {
       let d = (adj.value * 45.0 + 0.5).to_int()
       (clamp8(r + d), g, clamp8(b - d))
     }
+    // ---- ②B 滤镜（逐像素那一半；参数语义见 core.filter_param_rows 的表）----
+    // 海报化：每通道量化到 `levels` 级（levels=2 ⇒ 只有 0/255）
+    @core.AdjustOp::Posterize => {
+      let levels = filter_d(adj, "levels", 2.0)
+      let step = 255.0 / (levels - 1.0)
+      (posterize_ch(r, step), posterize_ch(g, step), posterize_ch(b, step))
+    }
+    // 阈值：跟 `channel` 选的那个量比（0=R 1=G 2=B 3=luma），出纯黑白
+    @core.AdjustOp::Threshold => {
+      let level = clamp01(filter_d(adj, "level", 0.5)) * 255.0
+      let src = match clamp_int(filter_d(adj, "channel", 3.0).floor(), 0, 3) {
+        0 => r
+        1 => g
+        2 => b
+        _ => (r * 30 + g * 59 + b * 11) / 100
+      }
+      let v = if src.to_double() >= level { 255 } else { 0 }
+      (v, v, v)
+    }
+    // 色相/饱和度/明度：在 **OKLCh** 里做（与选择子同一套坐标，不引入第三套：
+    // 色相转角度、彩度乘 (1+sat)（-1⇒全灰）、明度向 1 或 0 压。
+    // 超出色域由 `oklab_to_argb` 的 gamut compress 收尾）。
+    @core.AdjustOp::HueSat => {
+      let hue = filter_d(adj, "hue", 0.0)
+      let sat = filter_d(adj, "sat", 0.0)
+      let light = filter_d(adj, "light", 0.0)
+      // 中性参数 = **逐位不变**（显式短路，不靠浮点尾差的运气）：`filter_is_noop`
+      // 那句"画面逐位不变"会被 `lint` 当事实说给调用方听，所以它必须是**保证**。
+      // 实测（一次性 24-bit 全色域扫描，见 PLAN 七十八）：拿掉这段短路走 OKLab
+      // 往返，16,777,216 个颜色里 0 个字节不同——8-bit 量化把浮点尾差吃干净了。
+      // 也就是说这段短路**行为等价**（变异 R131 因此申报为等价），留下它是为了
+      // 让这句承诺不依赖"量化恰好每次都吃得住"，并且省掉一次无用往返。
+      if hue == 0.0 && sat == 0.0 && light == 0.0 {
+        (r, g, b)
+      } else {
+      let lch = @pixel.oklab_to_oklch(@pixel.argb_to_oklab(p))
+      let mut h2 = lch.h + hue
+      while h2 < 0.0 {
+        h2 = h2 + 360.0
+      }
+      while h2 >= 360.0 {
+        h2 = h2 - 360.0
+      }
+      let c2 = lch.c * (1.0 + sat)
+      let l2 = if light < 0.0 { lch.l * (1.0 + light) } else { lch.l + (1.0 - lch.l) * light }
+      let out = @pixel.oklab_to_argb(
+        @pixel.oklch_to_oklab({ l: l2, c: c2, h: h2 }),
+        (p >> 24) & 0xFF,
+      )
+      ((out >> 16) & 0xFF, (out >> 8) & 0xFF, out & 0xFF)
+      }
+    }
+    // 色彩平衡：三通道各均匀加减（±100 级 = 满量程约 40%）。
+    // **边界（丐版）**：PS 的"阴影/中间调/高光"三段与"保持亮度"没做，只有整幅均匀加减。
+    @core.AdjustOp::ColorBalance => (
+      clamp8(r + round_i(filter_d(adj, "cr", 0.0) * 100.0)),
+      clamp8(g + round_i(filter_d(adj, "cg", 0.0) * 100.0)),
+      clamp8(b + round_i(filter_d(adj, "cb", 0.0) * 100.0)),
+    )
     _ => (r, g, b)
   }
   (p & 0xFF000000) + (pair.0 << 16) + (pair.1 << 8) + pair.2
@@ -1821,6 +1887,288 @@ fn apply_adjust_pixel(adj : @core.Adjust, buf : @codec.RgbaBuf) -> Unit {
   while i < total {
     buf.pixels[i] = adjust_pixel(adj, lut, buf.pixels[i])
     i = i + 1
+  }
+}
+
+///|
+/// ②B 滤镜的**采样上限**（能力上限，必须写出来）：动感/径向模糊各取
+/// `FILTER_BLUR_SAMPLES` 个样本均匀铺满拖影范围——半径 ≤ 12px 时步长 ≤ 1px
+/// （等于逐像素积分），更长的拖影就是**采样平均**（步长 > 1px，可能漏细节）。
+/// 上限存在的理由是代价：12MP 上每像素 25 次取样已经 ≈ 3 亿次采样。
+const FILTER_BLUR_SAMPLES : Int = 25
+
+///|
+/// 半径上限（与 `core.filter_param_rows` 的上界一致；容器里的坏值在这里兜底）。
+const FILTER_BLUR_MAX_RADIUS : Double = 64.0
+
+///|
+/// 从调整层的参数表里取一个数（缺了用**中性值**——中性值表在 core，不在这里
+/// 再写一份默认值；容器读入端已经拦过缺键，这里只兜"渲染器被喂了残缺 adj"）。
+fn filter_d(adj : @core.Adjust, key : String, dflt : Double) -> Double {
+  match @core.filter_param_value(adj.params, key) {
+    Some(v) => v
+    None => dflt
+  }
+}
+
+///|
+/// 平均值量化（拖影/缩放的累加器收尾）：round-half-up 后夹 0..255。
+fn quant_avg(sum : Double, inv : Double) -> Int {
+  let q = sum * inv + 0.5
+  if q < 0.0 {
+    0
+  } else if q > 255.0 {
+    255
+  } else {
+    q.to_int()
+  }
+}
+
+///|
+/// 缓冲区整幅拷贝（邻域算子要读**原**图；就地读会把改过的像素当邻居）。
+fn clone_rgba(buf : @codec.RgbaBuf) -> @codec.RgbaBuf {
+  let out = @codec.rgba_new(buf.width, buf.height)
+  let total = buf.width * buf.height
+  let mut i = 0
+  while i < total {
+    out.pixels[i] = buf.pixels[i]
+    i = i + 1
+  }
+  out
+}
+
+///|
+/// 海报化的单通道量化：`round(round(v/step)*step)`（step = 255/(levels-1)）。
+fn posterize_ch(v : Int, step : Double) -> Int {
+  clamp8(round_i((v.to_double() / step + 0.5).floor() * step))
+}
+
+///|
+/// **确定性噪声**（②B）：`(x,y,salt)` → [-1,1]。不能用随机数（铁律 7：渲染
+/// sha256 必须可复现），所以是一个纯整数散列——同样的坐标永远同样的噪声，
+/// 于是"同一份文档渲染两次逐位相同"这条不变量对噪点层也成立。
+fn noise_hash(x : Int, y : Int, salt : Int) -> Double {
+  let mut h : Int64 = x.to_int64() * 374761393L + y.to_int64() * 668265263L +
+    salt.to_int64() * 2246822519L
+  h = (h ^ (h >> 13)) * 1274126177L
+  h = h ^ (h >> 16)
+  let u = (h & 0xFFFFL).to_double() / 65535.0
+  u * 2.0 - 1.0
+}
+
+///|
+/// 动感模糊（②B）：沿 `angle` 方向、长度 `±radius` 的**均匀采样平均**。
+/// 采样数上限见 `FILTER_BLUR_SAMPLES`；取样点夹到画布内（边缘像素重复，与
+/// PS 的"重复边缘像素"同口径）。alpha 一起平均（拖影会把透明区拖进来）。
+fn apply_motion_blur(buf : @codec.RgbaBuf, adj : @core.Adjust) -> Unit {
+  if buf.width <= 0 || buf.height <= 0 {
+    return
+  }
+  let radius = filter_d(adj, "radius", 0.0)
+  if radius <= 0.0 {
+    return
+  }
+  let r = if radius > FILTER_BLUR_MAX_RADIUS { FILTER_BLUR_MAX_RADIUS } else { radius }
+  let rad = filter_d(adj, "angle", 0.0) * 3.141592653589793 / 180.0
+  let dx = cos_rad(rad)
+  let dy = sin_rad(rad)
+  let src = clone_rgba(buf)
+  let n = FILTER_BLUR_SAMPLES
+  let last = (n - 1).to_double()
+  let inv = 1.0 / n.to_double()
+  let mut y = 0
+  while y < buf.height {
+    let mut x = 0
+    while x < buf.width {
+      let mut sa = 0.0
+      let mut sr = 0.0
+      let mut sg = 0.0
+      let mut sb = 0.0
+      let mut j = 0
+      while j < n {
+        let t = -r + 2.0 * r * j.to_double() / last
+        let sx = clamp_int((x.to_double() + dx * t).floor(), 0, buf.width - 1)
+        let sy = clamp_int((y.to_double() + dy * t).floor(), 0, buf.height - 1)
+        let p = src.pixels[sy * buf.width + sx]
+        sa = sa + ((p >> 24) & 0xFF).to_double()
+        sr = sr + ((p >> 16) & 0xFF).to_double()
+        sg = sg + ((p >> 8) & 0xFF).to_double()
+        sb = sb + (p & 0xFF).to_double()
+        j = j + 1
+      }
+      buf.pixels[y * buf.width + x] = (quant_avg(sa, inv) << 24) + (quant_avg(sr, inv) << 16) +
+        (quant_avg(sg, inv) << 8) + quant_avg(sb, inv)
+      x = x + 1
+    }
+    y = y + 1
+  }
+}
+
+///|
+/// 径向模糊（②B，"缩放"型）：以 `center` 为中心沿射线取样，最外层样本的缩放
+/// 系数 = `1 + radius/64 × 0.25`（radius=64 时 25%）。
+/// **越靠边拖影越强**：混合权重 = 该点到中心距离 / 最远角距（中心逐位不动）。
+fn apply_radial_blur(buf : @codec.RgbaBuf, adj : @core.Adjust) -> Unit {
+  if buf.width <= 0 || buf.height <= 0 {
+    return
+  }
+  let radius = filter_d(adj, "radius", 0.0)
+  if radius <= 0.0 {
+    return
+  }
+  let r = if radius > FILTER_BLUR_MAX_RADIUS { FILTER_BLUR_MAX_RADIUS } else { radius }
+  let k = r / FILTER_BLUR_MAX_RADIUS * 0.25
+  let cx = filter_d(adj, "center_x", 0.5) * buf.width.to_double()
+  let cy = filter_d(adj, "center_y", 0.5) * buf.height.to_double()
+  // 最远角距（权重分母）：四个角里离中心最远的那个
+  let w = buf.width.to_double()
+  let hh = buf.height.to_double()
+  let d00 = radial_dist(cx, cy, 0.0, 0.0)
+  let d10 = radial_dist(cx, cy, w, 0.0)
+  let d01 = radial_dist(cx, cy, 0.0, hh)
+  let d11 = radial_dist(cx, cy, w, hh)
+  let mut maxd = d00
+  if d10 > maxd {
+    maxd = d10
+  }
+  if d01 > maxd {
+    maxd = d01
+  }
+  if d11 > maxd {
+    maxd = d11
+  }
+  let src = clone_rgba(buf)
+  let n = FILTER_BLUR_SAMPLES
+  let last = (n - 1).to_double()
+  let inv = 1.0 / n.to_double()
+  let mut y = 0
+  while y < buf.height {
+    let mut x = 0
+    while x < buf.width {
+      let px = x.to_double() + 0.5
+      let py = y.to_double() + 0.5
+      let vx = px - cx
+      let vy = py - cy
+      let mut sa = 0.0
+      let mut sr = 0.0
+      let mut sg = 0.0
+      let mut sb = 0.0
+      let mut j = 0
+      while j < n {
+        let s = 1.0 + k * j.to_double() / last
+        let sx = clamp_int((cx + vx * s).floor(), 0, buf.width - 1)
+        let sy = clamp_int((cy + vy * s).floor(), 0, buf.height - 1)
+        let p = src.pixels[sy * buf.width + sx]
+        sa = sa + ((p >> 24) & 0xFF).to_double()
+        sr = sr + ((p >> 16) & 0xFF).to_double()
+        sg = sg + ((p >> 8) & 0xFF).to_double()
+        sb = sb + (p & 0xFF).to_double()
+        j = j + 1
+      }
+      let at = y * buf.width + x
+      let avg = (quant_avg(sa, inv) << 24) + (quant_avg(sr, inv) << 16) +
+        (quant_avg(sg, inv) << 8) + quant_avg(sb, inv)
+      let t = if maxd <= 0.0 { 0.0 } else { clamp01(radial_dist(cx, cy, px, py) / maxd) }
+      buf.pixels[at] = if t <= 0.0 { buf.pixels[at] } else { @pixel.lerp_argb(buf.pixels[at], avg, t) }
+      x = x + 1
+    }
+    y = y + 1
+  }
+}
+
+///|
+fn radial_dist(cx : Double, cy : Double, x : Double, y : Double) -> Double {
+  let dx = x - cx
+  let dy = y - cy
+  Double::sqrt(dx * dx + dy * dy)
+}
+
+///|
+/// 噪点（②B）：逐像素确定性噪声。`mono` 是**连续**的混音（0=每个通道各自
+/// 一条噪声、1=三通道共用一条；中间值就是两者的插值），不是布尔开关——
+/// 布尔化的参数会有"0.3 被悄悄当成 0"的静默语义。
+fn apply_noise(buf : @codec.RgbaBuf, adj : @core.Adjust) -> Unit {
+  let amount = clamp01(filter_d(adj, "amount", 0.0))
+  if amount <= 0.0 {
+    return
+  }
+  let mono = clamp01(filter_d(adj, "mono", 0.0))
+  // ±64 级是满强度噪声的幅度（与 PS 的"数量 100%"量级接近）
+  let amp = amount * 64.0
+  let mut y = 0
+  while y < buf.height {
+    let mut x = 0
+    while x < buf.width {
+      let at = y * buf.width + x
+      let p = buf.pixels[at]
+      let nm = noise_hash(x, y, 7)
+      let dr = (1.0 - mono) * noise_hash(x, y, 0) + mono * nm
+      let dg = (1.0 - mono) * noise_hash(x, y, 1) + mono * nm
+      let db = (1.0 - mono) * noise_hash(x, y, 2) + mono * nm
+      let r = (p >> 16) & 0xFF
+      let g = (p >> 8) & 0xFF
+      let b = p & 0xFF
+      buf.pixels[at] = (p & 0xFF000000) + (clamp8(r + round_i(amp * dr)) << 16) +
+        (clamp8(g + round_i(amp * dg)) << 8) + clamp8(b + round_i(amp * db))
+      x = x + 1
+    }
+    y = y + 1
+  }
+}
+
+///|
+/// 像素化（②B）：把画布切成 `size × size` 的色块，每块取块内**原图**平均
+/// （含 alpha；不预乘——与 PS 的"平均"同口径是"未预乘平均"，这里按引擎的
+/// 直通字节平均，边界块只平均画布内的像素）。
+fn apply_pixelate(buf : @codec.RgbaBuf, adj : @core.Adjust) -> Unit {
+  if buf.width <= 0 || buf.height <= 0 {
+    return
+  }
+  // 手改容器可能是 1/0：至少按 2 走（"装了却什么都不干"由 lint 报，不在这里静默）
+  let size = clamp_int(filter_d(adj, "size", 2.0).floor(), 2, 256)
+  let src = clone_rgba(buf)
+  let mut by = 0
+  while by < buf.height {
+    let mut bx = 0
+    while bx < buf.width {
+      let x1 = if bx + size > buf.width { buf.width } else { bx + size }
+      let y1 = if by + size > buf.height { buf.height } else { by + size }
+      let mut sa = 0
+      let mut sr = 0
+      let mut sg = 0
+      let mut sb = 0
+      let mut count = 0
+      let mut yy = by
+      while yy < y1 {
+        let mut xx = bx
+        while xx < x1 {
+          let p = src.pixels[yy * buf.width + xx]
+          sa = sa + ((p >> 24) & 0xFF)
+          sr = sr + ((p >> 16) & 0xFF)
+          sg = sg + ((p >> 8) & 0xFF)
+          sb = sb + (p & 0xFF)
+          count = count + 1
+          xx = xx + 1
+        }
+        yy = yy + 1
+      }
+      if count > 0 {
+        let inv = 1.0 / count.to_double()
+        let avg = (quant_avg(sa.to_double(), inv) << 24) + (quant_avg(sr.to_double(), inv) << 16) +
+          (quant_avg(sg.to_double(), inv) << 8) + quant_avg(sb.to_double(), inv)
+        let mut y2 = by
+        while y2 < y1 {
+          let mut x2 = bx
+          while x2 < x1 {
+            buf.pixels[y2 * buf.width + x2] = avg
+            x2 = x2 + 1
+          }
+          y2 = y2 + 1
+        }
+      }
+      bx = bx + size
+    }
+    by = by + size
   }
 }
 

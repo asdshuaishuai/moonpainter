@@ -297,6 +297,7 @@ pub fn exec(s : Session, line : String) -> String {
     "crop" => cmd_crop(s, tokens)
     "sample" => cmd_sample(s, tokens)
     "add-adjust" => cmd_add_adjust(s, tokens)
+    "adjust-spec" => cmd_adjust_spec(s, tokens)
     "set-adjust" => cmd_set_adjust(s, tokens)
     "set-fx" => cmd_set_fx(s, tokens)
     "add-mask" => cmd_add_mask(s, tokens)
@@ -509,6 +510,20 @@ fn adjust_json(adj : @core.Adjust) -> String {
         ",\"levels\":{\"in_lo\":\{@core.fmt_num(lv.in_lo)},\"in_hi\":\{@core.fmt_num(lv.in_hi)},\"gamma\":\{@core.fmt_num(lv.gamma)},\"out_lo\":\{@core.fmt_num(lv.out_lo)},\"out_hi\":\{@core.fmt_num(lv.out_hi)}}",
       )
     None => ()
+  }
+  if adj.params.length() > 0 {
+    // ②B 滤镜参数：按键名升序（存的就是升序）——**对象字面量顺序即字节**
+    sb.write_string(",\"params\":{")
+    let mut first_p = true
+    for p in adj.params {
+      if first_p {
+        first_p = false
+      } else {
+        sb.write_string(",")
+      }
+      sb.write_string("\"\{p.0}\":\{@core.fmt_num(p.1)}")
+    }
+    sb.write_string("}")
   }
   if adj.curve.length() > 0 {
     sb.write_string(",\"points\":\"\{@core.curve_points_text(adj.curve)}\"")
@@ -1003,7 +1018,37 @@ fn add_text_keys() -> Array[String] {
 /// `add-adjust` 认的全部键（与 `cmd_add_adjust` 的校验一一对应）。
 /// 工具字典的描述从它生成——**别再手写第二份**。
 pub fn add_adjust_keys() -> Array[String] {
-  ["op", "value", "in_lo", "in_hi", "gamma", "out_lo", "out_hi", "points", "id", "name"]
+  [
+    "op",
+    "value",
+    "in_lo",
+    "in_hi",
+    "gamma",
+    "out_lo",
+    "out_hi",
+    "points",
+    // ②B 滤镜参数（每个算子只认自己那几键，见 `@core.filter_param_rows`；
+    // 这里要**手写字面量**是因为 `param_audit.py` 从 `check_kv_args` 的实参读键表，
+    // 读不出字面量就判这门禁有洞。与 core 表的等式由测试钉住。）
+    "angle",
+    "radius",
+    "center_x",
+    "center_y",
+    "amount",
+    "mono",
+    "size",
+    "levels",
+    "channel",
+    "level",
+    "hue",
+    "sat",
+    "light",
+    "cr",
+    "cg",
+    "cb",
+    "id",
+    "name",
+  ]
 }
 
 ///|
@@ -1024,7 +1069,32 @@ pub fn transform_keys() -> Array[String] {
 }
 
 pub fn set_adjust_keys() -> Array[String] {
-  ["op", "value", "in_lo", "in_hi", "gamma", "out_lo", "out_hi", "points"]
+  [
+    "op",
+    "value",
+    "in_lo",
+    "in_hi",
+    "gamma",
+    "out_lo",
+    "out_hi",
+    "points",
+    "angle",
+    "radius",
+    "center_x",
+    "center_y",
+    "amount",
+    "mono",
+    "size",
+    "levels",
+    "channel",
+    "level",
+    "hue",
+    "sat",
+    "light",
+    "cr",
+    "cg",
+    "cb",
+  ]
 }
 
 ///|
@@ -1447,6 +1517,13 @@ fn adjust_op_list() -> String {
       "levels(" + level_keys().map(fn(k) { "\{k}=0..1" }).join(" ") + ")"
     } else if o is @core.AdjustOp::Curves {
       "curves(points=x,y;x,y;…；x/y ∈ 0..1、x 严格递增、2..32 点)"
+    } else if @core.is_filter_op(o) {
+      // 滤镜（②B）：键与范围**从 core 的表生成**（字典是 LLM 唯一的说明书）
+      "\{name}(" +
+      @core.filter_param_rows(o).map(fn(r) {
+        "\{r.key}=\{@core.fmt_num(r.lo)}..\{@core.fmt_num(r.hi)}"
+      }).join(" ") +
+      ")"
     } else {
       // 老口径：没有可调数值的算子要**明说**（LLM 才不会给它塞 value=）
       "\{name}（无数值）"
@@ -1518,7 +1595,37 @@ fn foreign_param_error(m : Map[String, String], op : @core.AdjustOp) -> String? 
       None => ()
     }
   }
+  // ②B 滤镜键：只认**本算子**那几键。`add-adjust op=motion-blur size=5` 这种
+  // "给了别的滤镜的键"如果静默丢掉，回包 ok 而画面一点没变（本仓库反复抓的那类）。
+  let mine = @core.filter_param_keys(op)
+  for k in filter_key_universe() {
+    if m.get(k) is Some(_) && !mine.contains(k) {
+      let owners = @core.all_adjust_ops().filter(fn(o) {
+        @core.filter_param_keys(o).contains(k)
+      }).map(@core.adjust_op_name)
+      return Some(
+        "算子 \{@core.adjust_op_name(op)} 不吃 \{k}=（\{k}= 只对 op=" +
+        owners.join("/") +
+        " 有意义）",
+      )
+    }
+  }
   None
+}
+
+///|
+/// **全部**滤镜参数键的并集（从 core 的算子表算，不手抄第二份）。
+/// 用途只有一个：判"给了别的滤镜算子的键"。
+fn filter_key_universe() -> Array[String] {
+  let out : Array[String] = []
+  for o in @core.all_adjust_ops() {
+    for k in @core.filter_param_keys(o) {
+      if !out.contains(k) {
+        out.push(k)
+      }
+    }
+  }
+  out
 }
 
 fn parse_adjust(m : Map[String, String]) -> Result[@core.Adjust, String] {
@@ -1607,6 +1714,42 @@ fn parse_adjust(m : Map[String, String]) -> Result[@core.Adjust, String] {
       None => ()
     }
     return Ok({ ..@core.make_adjust(op, 0.0), curve: pts })
+  }
+  // ②B 滤镜：键表来自 core 的 `filter_param_rows`（**唯一清单**）。
+  // 与色阶同形的一条规则：**至少要给一个键**，缺的键填该键的**中性值**
+  // （中性值选"让这一维不干活"的值——缺参数不该悄悄带来看得见的效果；
+  // 全中性 = 装了不干活的层，交给 lint 报，命令面不拦）。
+  if @core.is_filter_op(op) {
+    let rows = @core.filter_param_rows(op)
+    let params : Array[(String, Double)] = []
+    let mut given = 0
+    for r in rows {
+      match m.get(r.key) {
+        Some(t) => {
+          given = given + 1
+          let v = match to_d(t) {
+            Some(x) => x
+            None => return Err("\{r.key}=\{t} 不是数字")
+          }
+          params.push((r.key, v))
+        }
+        None => params.push((r.key, r.neutral))
+      }
+    }
+    if given == 0 {
+      return Err(
+        "算子 \{opname} 至少要给一个参数（" +
+        rows.map(fn(r) {
+          "\{r.key}=\{@core.fmt_num(r.lo)}..\{@core.fmt_num(r.hi)}"
+        }).join(" ") +
+        "）——一个都不给就是一个什么都不干的层",
+      )
+    }
+    match @core.filter_param_error(op, params) {
+      Some(e) => return Err(e)
+      None => ()
+    }
+    return Ok(@core.make_filter_adjust(op, params))
   }
   // 无值算子（invert/grayscale）：到这儿就结束（下面是"必须给 value"的路径）
   if !uses_value {
@@ -1811,6 +1954,73 @@ fn cmd_set_text(s : Session, tokens : Array[String]) -> String {
 }
 
 ///|
+///|
+/// `adjust-spec` 认的键（只有 `op`）。⚠️ **必须是字面量**：`param_audit.py` 从
+/// `check_kv_args` 的第三个实参读键表，读不出就判这门禁有洞。
+pub fn adjust_spec_keys() -> Array[String] {
+  ["op"]
+}
+
+///|
+/// **参数面查询**（`adjust-spec [op=<算子>]`）：把每个算子"吃哪些键、范围多少、
+/// 中性值是什么、要不要整数"原样报出来；给了 `op=` 就只报那一个。
+///
+/// 为什么要有这条命令：前端（demo 面板）必须"由引擎报出来的参数面决定"画哪些
+/// 控件——db 里的算子名单/键名/范围抄一份就必然有一处先烂（PLAN 五十一那条）。
+/// 色阶/曲线时代面板还能靠"`adjust.levels` 在不在"猜，滤镜的键**事先不存在**
+/// （没给过参数就没有 `params`），于是"换成 pixelate 该铺哪些键的中性值"前端
+/// 无从得知，只能抄表。这条命令把那张表（`core.filter_param_rows` +
+/// `adjust_bounds`/`adjust_uses_value`）变成可读的机器接口——**没有第二张表**。
+fn cmd_adjust_spec(s : Session, tokens : Array[String]) -> String {
+  let _ = s
+  match check_kv_args(tokens, 1, adjust_spec_keys(), "adjust-spec") {
+    Ok(_) => ()
+    Err(e) => return err(e)
+  }
+  let m = kv_args(tokens, 1)
+  let ops : Array[@core.AdjustOp] = match m.get("op") {
+    Some(name) =>
+      match @core.adjust_op_from_name(name) {
+        Some(o) => [o]
+        None => return err("未知调整算子 \{name}（可选：" + adjust_op_list() + "）")
+      }
+    None => @core.all_adjust_ops()
+  }
+  let sb = StringBuilder()
+  sb.write_string("{\"ok\":true,\"spec\":[")
+  let mut first_op = true
+  for o in ops {
+    if first_op {
+      first_op = false
+    } else {
+      sb.write_string(",")
+    }
+    let uses_value = @core.adjust_uses_value(o)
+    let (lo, hi) = adjust_bounds(o)
+    sb.write_string(
+      "{\"op\":\"" + @core.adjust_op_name(o) + "\",\"uses_value\":" +
+      (if uses_value { "true" } else { "false" }) +
+      ",\"lo\":" + @core.fmt_num(lo) + ",\"hi\":" + @core.fmt_num(hi) + ",\"params\":[",
+    )
+    let mut first_p = true
+    for r in @core.filter_param_rows(o) {
+      if first_p {
+        first_p = false
+      } else {
+        sb.write_string(",")
+      }
+      sb.write_string(
+        "{\"key\":\"" + r.key + "\",\"lo\":" + @core.fmt_num(r.lo) + ",\"hi\":" +
+        @core.fmt_num(r.hi) + ",\"neutral\":" + @core.fmt_num(r.neutral) + ",\"integral\":" +
+        (if r.integral { "true" } else { "false" }) + ",\"doc\":\"" + @core.json_escape(r.doc) + "\"}",
+      )
+    }
+    sb.write_string("]}")
+  }
+  sb.write_string("]}")
+  sb.to_string()
+}
+
 fn cmd_add_adjust(s : Session, tokens : Array[String]) -> String {
   let doc = match require_doc(s) {
     Ok(d) => d
@@ -1849,7 +2059,9 @@ fn cmd_add_adjust(s : Session, tokens : Array[String]) -> String {
 /// （调整层作用于其下全部可见层）。`set-mask` 是 `add-mask` 的对偶，这里同理。
 fn cmd_set_adjust(s : Session, tokens : Array[String]) -> String {
   if tokens.length() < 2 {
-    return err("用法：set-adjust <id> [op=<算子>] [value=<数>]（原地改，层序不变；op 见 add-adjust）")
+    return err(
+      "用法：set-adjust <id> [op=<算子>] [value=<数>] [滤镜参数…]（原地改，层序不变；op 与参数键见 add-adjust）",
+    )
   }
   let doc = match require_doc(s) {
     Ok(d) => d
@@ -1876,7 +2088,7 @@ fn cmd_set_adjust(s : Session, tokens : Array[String]) -> String {
   let m = kv_args(tokens, 2)
   if m.length() == 0 {
     return err(
-      "set-adjust 至少要给一个参数（op= / value= / 色阶五键 / points=——都没给就什么都没改）",
+      "set-adjust 至少要给一个参数（op= / value= / 色阶五键 / points= / 滤镜参数键——都没给就什么都没改）",
     )
   }
   // 只给了 value 就沿用原算子（反之亦然）。注意：**新算子没有可调数值时不能
@@ -1952,6 +2164,42 @@ fn cmd_set_adjust(s : Session, tokens : Array[String]) -> String {
     !merged.contains("points") &&
     cur.op is @core.AdjustOp::Curves {
     merged.set("points", @core.curve_points_text(cur.curve))
+  }
+  // ②B 滤镜：与色阶**同形**的部分更新——缺的键沿用当前层的值（**同一个**滤镜
+  // 算子）或该键的中性值（换了算子）。`set-adjust l1 radius=20` 是最常用的动作，
+  // 逼调用方把 angle 也抄一遍才是坑；而"换成 noise 又一个键都不给"是空操作 ⇒ 拒。
+  match target_op {
+    Some(o) =>
+      if @core.is_filter_op(o) {
+        let rows = @core.filter_param_rows(o)
+        let same = @core.adjust_op_name(cur.op) == @core.adjust_op_name(o)
+        let mut touched = false
+        for r in rows {
+          if m.get(r.key) is Some(_) {
+            touched = true
+          }
+        }
+        for r in rows {
+          if !merged.contains(r.key) {
+            let v = if same {
+              match @core.filter_param_value(cur.params, r.key) {
+                Some(x) => x
+                None => r.neutral
+              }
+            } else {
+              r.neutral
+            }
+            merged.set(r.key, @core.fmt_num(v))
+          }
+        }
+        if !same && !touched {
+          return err(
+            "set-adjust 把算子换成 \{@core.adjust_op_name(o)} 时至少要给一个参数（" +
+            rows.map(fn(r) { "\{r.key}=" }).join("") + "）——一个都不给就是空操作层",
+          )
+        }
+      }
+    None => ()
   }
   let adj = match parse_adjust(merged) {
     Ok(a) => a

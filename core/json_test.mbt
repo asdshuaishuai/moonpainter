@@ -112,13 +112,30 @@ fn make_sample() -> @core.Document {
   }
   let g = @core.default_layer("l3", "frame", 40.0, 40.0, 720.0, 520.0)
   let g2 = { ..g, kind: @core.ShapeKind::Group, children: [poly2, line2] }
+  // ②B 滤镜（多参数调整层）：`params` 这个字段此前**没有任何样本**——键值表里
+  // 任意一项被读成常量（`mono` 恒 0、`channel` 恒 3）都只表现为"画面不一样"，
+  // 而 canonical 往返照样绿。参数**故意乱序给出**（构造点负责排成升序），
+  // 这样"升序"这条不变量在字节层面也被走了一遍。
+  let flt = @core.default_layer("l7", "grain", 0.0, 0.0, 800.0, 600.0)
+  let flt2 = {
+    ..flt,
+    kind: @core.ShapeKind::Adjust,
+    adjust: Some(
+      @core.make_filter_adjust(@core.AdjustOp::RadialBlur, [
+        ("radius", 18.5),
+        ("center_x", 0.25),
+        ("center_y", 0.75),
+      ]),
+    ),
+  }
   doc.layers.push(bg2)
   doc.layers.push(circle2)
   doc.layers.push(g2)
   doc.layers.push(ras2)
+  doc.layers.push(flt2)
   doc.assets.push({ hash: "abc123", width: 64, height: 48 })
   doc.params.push({ name: "palette.primary", value: "#FF7A45" })
-  doc.next_layer_no = 6
+  doc.next_layer_no = 7
   doc
 }
 
@@ -162,8 +179,8 @@ test "往返后结构与语义字段保真" {
   assert_eq(back.width, 800)
   assert_eq(back.height, 600)
   assert_eq(back.uuid, "uuid-test-0001")
-  assert_eq(back.next_layer_no, 6)
-  assert_eq(back.layers.length(), 4)
+  assert_eq(back.next_layer_no, 7)
+  assert_eq(back.layers.length(), 5)
   // 克隆笔触逐个字段保真：这几个字段"写得出、读不回"的表现是画面从克隆取样
   // 退化成一块死色（而往返字节一致照样成立——两边都错成默认值）
   match back.layers[3].dabs {

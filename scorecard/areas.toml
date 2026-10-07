@@ -122,6 +122,14 @@ must_contain = "cmd_set_adjust"
 note = "叠加式像素算子，作用于其下全部可见层；蒙版覆盖度 × α 连续生效；不参与变换/混合（入口拒）。"
 
 [[area.item]]
+id = "filter-library"
+title = "滤镜库：动感/径向模糊、噪点、像素化、海报化、阈值、色相饱和度、色彩平衡"
+status = "done"
+anchor = "core/document.mbt#filter_param_rows"
+must_contain = "pub fn filter_param_rows"
+note = "八个算子各自一张 `FilterParam` 表（键/范围/中性值/整数标记）——入口校验、`lint` 空操作判据、字典描述、`adjust-spec` 参数面、面板控件全读它一处。滤镜参数走 `adjust.params`（键名升序存储，容器位置敏感地回读），`AdjustOp` 仍是同一个枚举 ⇒ 撤销/层序/蒙版语义与老算子完全一样，每层一步。边界（诚实）：①模糊族固定 25 采样（`FILTER_BLUR_SAMPLES`），半径 > 12 时步长 > 1px、会**跳过**像素；②径向模糊只**向外**采样（不向内收缩），中心处不采样；③噪点是确定性哈希（同一份文档每次一样），**没有随机种子**、也没有颗粒大小/彩色通道各自强度（只有 mono）；④色彩平衡只有 RGB 三通道整体偏移，**没有**阴影/中间调/高光三段；⑤像素化的块均值把 α 一起平均（半透明层边缘会跟底色混）；⑥海报化按每通道等分（不是感知分位）；⑦阈值只跟单通道/亮度比，没有软过渡；⑧采样点不吸附像素中心（`floor(x+dx*t)`）⇒ 过渡像素的字节对浮点尾差敏感，判据只咬「整段落在同色块内」的格子与对称性不变量。"
+
+[[area.item]]
 id = "layer-styles"
 title = "图层样式 fx：投影 / 描边 / 外发光 / 内阴影"
 status = "done"

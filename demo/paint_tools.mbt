@@ -156,7 +156,57 @@ fn transform_arg_keys() -> Array[String] {
 /// 模型当轮就能改（这正是"入口拒绝"那条纪律要的效果：不静默）。
 /// 拼出来的**整行**由 `paint_tools_wbtest.mbt` 逐字钉住（含"没给的键一个都不拼"）。
 fn adjust_arg_keys() -> Array[String] {
-  ["value", "in_lo", "in_hi", "gamma", "out_lo", "out_hi", "points"]
+  [
+    "value",
+    "in_lo",
+    "in_hi",
+    "gamma",
+    "out_lo",
+    "out_hi",
+    "points",
+    // ②B 滤镜参数（顺序与引擎 `core.filter_param_rows` 的并集一致；拼命令行时
+    // "没给的键一个都不拼"，所以顺序只影响可读性）
+    "angle",
+    "radius",
+    "center_x",
+    "center_y",
+    "amount",
+    "mono",
+    "size",
+    "levels",
+    "channel",
+    "level",
+    "hue",
+    "sat",
+    "light",
+    "cr",
+    "cg",
+    "cb",
+  ]
+}
+
+///|
+/// 滤镜参数键的**说明**（`apply_filter` 与 `set_adjust` 两份工具定义
+/// **共用一处**）：模型只读这里，抄两份就有一份先烂。
+fn filter_arg_docs() -> Array[(String, String)] {
+  [
+    ("angle", "number:动感模糊方向 0..360 度（0=向右、90=向下）"),
+    ("radius", "number:动感/径向模糊半径 px 0..64（0=不动）"),
+    ("center_x", "number:径向模糊中心 x 0..1（画布比例，缺省 0.5）"),
+    ("center_y", "number:径向模糊中心 y 0..1（缺省 0.5）"),
+    ("amount", "number:噪点强度 0..1（0=不动；噪点是**确定性**的，同一份文档每次一样）"),
+    ("mono", "number:噪点单色程度 0..1（0=彩色噪点、1=三通道同一条噪声）"),
+    ("size", "number:像素化色块边长 px 2..256（整数）"),
+    ("levels", "number:海报化每个通道的级数 2..16（整数）"),
+    ("channel", "number:阈值跟谁比 0=R 1=G 2=B 3=luma（整数，缺省 3）"),
+    ("level", "number:阈值 0..1（≥ 阈值算白；0=全白、1=全黑）"),
+    ("hue", "number:色相偏移度 -180..180（在 OKLCh 里转）"),
+    ("sat", "number:饱和度 -1..1（-1=全灰、正=更艳）"),
+    ("light", "number:明度 -1..1（正=更亮、-1=更暗）"),
+    ("cr", "number:色彩平衡·红 -1..1（正=加红、负=加青）"),
+    ("cg", "number:色彩平衡·绿 -1..1（正=加绿、负=加品红）"),
+    ("cb", "number:色彩平衡·蓝 -1..1（正=加蓝、负=加黄）"),
+  ]
 }
 
 ///|
@@ -533,21 +583,21 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
     ),
     make_tool(
       "apply_filter",
-      "叠加调整层（非破坏，可撤销）：blur模糊/sharpen锐化/smooth磨皮/whiten美白/warm暖色(-负=冷)/vignette暗角/grayscale黑白/invert反色/brightness/contrast/saturation；levels色阶(给 in_lo/in_hi/gamma/out_lo/out_hi，0..1，gamma 1=不动)、curves曲线(给 points=x,y;x,y;…，x/y 0..1 且 x 严格递增)",
+      "叠加调整层（非破坏，可撤销）：blur模糊/sharpen锐化/smooth磨皮/whiten美白/warm暖色(-负=冷)/vignette暗角/grayscale黑白/invert反色/brightness/contrast/saturation；levels色阶(给 in_lo/in_hi/gamma/out_lo/out_hi，0..1，gamma 1=不动)、curves曲线(给 points=x,y;x,y;…，x/y 0..1 且 x 严格递增)；**滤镜** motion-blur动感模糊/radial-blur径向模糊(缩放)/noise噪点/pixelate像素化/posterize海报化/threshold阈值/hue-sat色相饱和度/color-balance色彩平衡——这八个**至少给一个参数键**（给哪一个都行，其余按中性值补；一个都不给会被引擎拒）",
       [
         ("op", "string:req:算子名"),
-        ("value", "number:强度（value 类算子必给；levels/curves 不用它）"),
+        ("value", "number:强度（value 类算子必给；levels/curves/滤镜不用它）"),
         ("in_lo", "number:色阶输入黑点 0..1（缺省 0）"),
         ("in_hi", "number:色阶输入白点 0..1（缺省 1）"),
         ("gamma", "number:色阶中间调 gamma 0.01..100（缺省 1=不动）"),
         ("out_lo", "number:色阶输出黑点 0..1（缺省 0）"),
         ("out_hi", "number:色阶输出白点 0..1（缺省 1）"),
         ("points", "string:曲线控制点 x,y;x,y;…（2..32 点）"),
-      ],
+      ] + filter_arg_docs(),
     ),
     make_tool(
       "set_adjust",
-      "改一个已有调整层的算子/参数（**原地改，层序不变**）。要微调刚才那个滤镜时用它——删了重加会把调整层推到栈顶，作用范围跟着变。色阶可以**只改一个数**（如只给 gamma=1.4），其余沿用当前值；曲线是整表替换（points=）。",
+      "改一个已有调整层的算子/参数（**原地改，层序不变**）。要微调刚才那个滤镜时用它——删了重加会把调整层推到栈顶，作用范围跟着变。色阶可以**只改一个数**（如只给 gamma=1.4），其余沿用当前值；曲线是整表替换（points=）；**滤镜参数同样是部分更新**（如只给 radius=20，其余沿用当前值；换成另一个滤镜算子则其余键按中性值补）。",
       [
         ("id", "string:req:调整层 id（list_layers 里 kind=adjust 的那个）"),
         ("op", "string:算子名（不给则沿用原算子）"),
@@ -558,7 +608,7 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
         ("out_lo", "number:色阶输出黑点（不给则沿用当前值）"),
         ("out_hi", "number:色阶输出白点（不给则沿用当前值）"),
         ("points", "string:曲线控制点整表替换 x,y;x,y;…"),
-      ],
+      ] + filter_arg_docs(),
     ),
     make_tool(
       "set_fx",

@@ -59,6 +59,26 @@ KEY_FIELD = {
     "gamma": "adjust",
     "out_lo": "adjust",
     "out_hi": "adjust",
+    # ②B 滤镜参数（core.filter_param_rows 的 16 个键）：改的都是 `adjust` 这个
+    # 字段里的 `params` 表（与色阶/曲线同一种归属）。⚠️ `radius` 是**一名两用**：
+    # 图形层上是 `corner_radius`（圆角），调整层上是 `params.radius`（拖影/缩放
+    # 半径）——这张表按**键名**登记，所以 `radius` 仍指 `corner_radius`；
+    # 两种读法由命令面自己分辨（`add-rect` vs `add-adjust`）。
+    "angle": "adjust",
+    "center_x": "adjust",
+    "center_y": "adjust",
+    "amount": "adjust",
+    "mono": "adjust",
+    "size": "adjust",
+    "levels": "adjust",
+    "channel": "adjust",
+    "level": "adjust",
+    "hue": "adjust",
+    "sat": "adjust",
+    "light": "adjust",
+    "cr": "adjust",
+    "cg": "adjust",
+    "cb": "adjust",
     # 蒙版参数（mask_keys）：改的是 `mask` 这个字段本身
     "kind": "mask",
     "feather": "mask",

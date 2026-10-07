@@ -1390,7 +1390,20 @@ fn props_html(
             )
             sb.write_string(curve_svg(adj_obj))
           }
-          None => sb.write_string(num_input("数值", adj_val, "__adj_val", gid))
+          None =>
+            match adj_obj.value("params") {
+              Some(Json::Object(ps)) => {
+                // ②B 滤镜：**每一格一个输入框**，键名与顺序都从引擎报出来的
+                // 参数面出（前端不抄算子名单、不抄键表——抄一份就有一份先烂）。
+                // 顺序按键名升序（与容器的 canonical 顺序同一条规则）。
+                for k in sort_param_keys(map_keys(ps)) {
+                  sb.write_string(
+                    num_input_key(k, map_num_str(ps, k), "__adj_key", gid, k),
+                  )
+                }
+              }
+              _ => sb.write_string(num_input("数值", adj_val, "__adj_val", gid))
+            }
         }
     }
     sb.write_string("</div>")
@@ -2445,9 +2458,104 @@ fn do_adj_op(id : String, op : String) -> Unit {
   } else if op == "curves" {
     " points=0,0;1,1"
   } else {
-    ""
+    // 数值类算子：不给参数（引擎沿用当前 value）。滤镜类：**问引擎要参数面**
+    // ——键名与中性值都从 `adjust-spec` 来，前端不抄算子名单（抄一份就有一份
+    // 先烂；"换成 pixelate 要铺哪些键"这种事实只有引擎知道）。
+    adj_op_neutral_tail(engine_exec_line("adjust-spec op=" + op), op)
   }
   let _ = do_ui_cmd("set-adjust " + id + " op=" + op + neutral)
+}
+
+///|
+/// 从 `adjust-spec` 的回包里取出"换成 `op` 时要铺的中性参数尾巴"（形如
+/// `" size=2"`）。**纯函数**：`demo_test` 直接喂一段 JSON 就能断言，
+/// 不必开浏览器；键名/中性值都来自引擎，前端一个数都不写死。
+pub fn adj_op_neutral_tail(spec : String, op : String) -> String {
+  let j = parse_json_safe(spec)
+  let items = match j.value("spec") {
+    Some(Json::Array(a)) => a
+    _ => []
+  }
+  let mut out = ""
+  for item in items {
+    if json_get_str(item, "op") == op {
+      match item.value("params") {
+        Some(Json::Array(ps)) =>
+          for p in ps {
+            let k = json_get_str(p, "key")
+            if k != "" {
+              out = out + " " + k + "=" + json_num_field(p, "neutral")
+            }
+          }
+        _ => ()
+      }
+    }
+  }
+  out
+}
+
+///|
+/// 取 `params` 里的一个数（缺字段给 "—"：面板只做显示，判据在引擎）。
+fn map_num_str(m : Map[String, Json], key : String) -> String {
+  match m.get(key) {
+    Some(Json::Number(n, ..)) => d2s(n)
+    _ => "—"
+  }
+}
+
+///|
+fn json_num_field(j : Json, key : String) -> String {
+  match j.value(key) {
+    Some(Json::Number(n, ..)) => d2s(n)
+    _ => "—"
+  }
+}
+
+///|
+fn map_keys(m : Map[String, Json]) -> Array[String] {
+  let out : Array[String] = []
+  for k in m.keys() {
+    out.push(k)
+  }
+  out
+}
+
+///|
+/// 参数键的**码位序**排序（与引擎的 canonical 顺序同一条规则）。
+/// ⚠️ 不拿 `Array::sort()` 排字符串：本仓库实测它不是字典序（core 的
+/// `param_key_less` 就是为此写的）——前端排出别的顺序会让面板与容器看起来
+/// "对不上"，而两边其实都对。
+fn sort_param_keys(keys : Array[String]) -> Array[String] {
+  let out = keys.copy()
+  let mut i = 1
+  while i < out.length() {
+    let cur = out[i]
+    let mut j = i
+    while j > 0 && param_key_less(cur, out[j - 1]) {
+      out[j] = out[j - 1]
+      j = j - 1
+    }
+    out[j] = cur
+    i = i + 1
+  }
+  out
+}
+
+///|
+fn param_key_less(a : String, b : String) -> Bool {
+  let la = a.length()
+  let lb = b.length()
+  let n = if la < lb { la } else { lb }
+  let mut i = 0
+  while i < n {
+    let ca = a[i].to_int()
+    let cb = b[i].to_int()
+    if ca != cb {
+      return ca < cb
+    }
+    i = i + 1
+  }
+  la < lb
 }
 
 ///|
@@ -2455,11 +2563,33 @@ fn do_adj_op(id : String, op : String) -> Unit {
 /// 键名白名单在**入口一处**拒（键名是从 HTML 属性拼进命令行的，多一个空格
 /// 就能塞进第二个参数——不能指望 DOM 里写的都对）。
 fn do_adj_key(id : String, key : String, v : String) -> Unit {
-  if !["in_lo", "in_hi", "gamma", "out_lo", "out_hi", "points", "value"].contains(key) {
-    js_status_bar("⚠ 不认识的调整参数：\{key}")
+  // 键名是从 HTML 属性拼进命令行的，多一个空格就能塞进第二个参数 ⇒ 入口必须卡。
+  // 但**不抄键清单**（抄一份就必然与引擎的键表漂移，`in_lo` 那份就是这么来的）：
+  // 只卡**形状**（ASCII 小写/数字/下划线、1..24 字符）。"这个键认不认得"、
+  // "这个算子吃不吃它"由引擎的 `check_kv_args` / `adjust_param_error` 说——
+  // 拒绝原话直接上状态栏（静默失败的入口比没有入口更坏）。
+  if !is_param_key(key) {
+    js_status_bar("⚠ 不合法的调整参数名：\{key}")
     return
   }
   let _ = do_ui_cmd("set-adjust " + id + " " + key + "=" + v)
+}
+
+///|
+/// 参数键的形状检查（**不是**白名单：白名单会与引擎的键表漂移）。
+fn is_param_key(key : String) -> Bool {
+  let n = key.length()
+  if n == 0 || n > 24 {
+    return false
+  }
+  for ch in key {
+    let c = ch.to_int()
+    let ok = (c >= 97 && c <= 122) || c == 95 || (c >= 48 && c <= 57)
+    if !ok {
+      return false
+    }
+  }
+  true
 }
 
 ///|
@@ -3153,7 +3283,7 @@ pub fn app_html() -> String {
       #|<button onclick='globalThis.__param_del()'>删元参数</button>
       #|</div>
       #|<div class='dbgrow'>
-      #|<input id='cmd-input' class='cmdin' placeholder='任意一行引擎命令（71 条全都能跑：render 400 overlay=1 / query-layer r1 …）'/>
+      #|<input id='cmd-input' class='cmdin' placeholder='任意一行引擎命令（72 条全都能跑：render 400 overlay=1 / query-layer r1 …）'/>
       #|<button onclick='globalThis.__cmd()'>执行</button>
       #|</div>
       #|<pre id='dbg-out' class='dbgout'>（这里显示回包 JSON。`render`/`select-preview` 这类带 PNG 的回包会在上面画布上直接铺出来。）</pre>
@@ -3612,7 +3742,7 @@ fn do_dbg_show(raw : String) -> Unit {
 }
 
 ///|
-/// 命令控制台：任意一行引擎命令（71 条全都能跑）。走 `do_ui_cmd` 那条路
+/// 命令控制台：任意一行引擎命令（72 条全都能跑）。走 `do_ui_cmd` 那条路
 /// （渲染 + 刷新界面），所以**改文档的命令也会立刻看到画面变化**；只读命令
 /// 的回包同样铺到面板上——它是"逐条手测"的兜底入口。
 fn do_console_cmd() -> Unit {
