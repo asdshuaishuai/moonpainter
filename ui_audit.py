@@ -158,6 +158,11 @@ def main():
         "人类面边界 OK（引擎 %d 条 − 人类可达 %d 条 = 声明够不着 %d 条，全部有理由）"
         % (len(cmds), len(reach), len(declared))
     )
+    # 单调地板：人类可达条数只许涨（删掉人侧入口、把 README 数字改成新的，
+    # 等号门禁照样绿——"能力倒退没人红"正是地板要堵的那半边）
+    import floors
+    floors.check("human_reachable", len(reach))
+    floors.check("unreachable_human", len(declared))
     return 0
 
 

@@ -110,6 +110,14 @@ if not d.get('clickthrough'):
         print('  -', c['name'], '|', c['extra'][:200])
     sys.exit(1)
 print('点击穿透 OK（%d 条断言：逐点形状/拖拽形状/点数下界/改名改坐标改标签/坏输入/重渲染/面板 18 颗按钮＋4 条拒控/保存导出/图层选中隐藏/编辑动作（撤销重做删除置顶置底几何透明度）/文字与蒙版与调整与滤镜/画布与裁剪/纯 UI/顶栏徽标两条）' % d['total'])
+# 单调地板：断言条数只许涨（删掉一批断言再把文档改成新数字，没人会红）
+# ⚠️ 这一段在 dist/ 里跑（上面 cd dist），所以 floors.py 在上一层；
+# ⚠️ 还是那句：本段是双引号里的 -c 脚本，**注释里不许出现反引号**
+# （bash 会把它当命令替换执行——实测写了一句「上面 cd dist」，bash 真去
+# 执行了 cd dist，往 stderr 吐了两行 No such file or directory）
+sys.path.insert(0, '..')
+import floors
+floors.check('clickthrough_assertions', d['total'])
 "
 cd ..
 
@@ -284,6 +292,9 @@ if fail:
     sys.exit(1)
 print('覆盖清单 OK（可点处理器 %d 个：driver 走过 %d 个，声明"只能靠浏览器" %d 个且每个都有原因）'
       % (len(handlers), len(driven), len(browser)))
+# 单调地板：可点处理器**消失**（处理器没了/清单被缩）只许抬不许降
+import floors
+floors.check('clickable_handlers', len(handlers))
 print('页面接线 OK（%d 个处理器引用全部有注册，且 %d 个注册的都有引用）' % (len(refs), len(regs)))
 PYW
 
@@ -310,6 +321,9 @@ if bad:
     print('FAIL: ' + '；'.join(bad))
     sys.exit(1)
 print('文档工具数 OK（README 与 AGENTS 都是 %d，与 paint_tool_defs 一致）' % n)
+# 单调地板：AI 能用的工具只许增不许减
+import floors
+floors.check('ai_tools', n)
 
 # ---- 引擎命令面 ↔ 工具面：两个方向都要对 ----
 # 方向一（工具面指着谁）：`tool_cmd` 的每条 `Some("…")` 都必须是引擎真有的
@@ -343,6 +357,8 @@ if bad:
     sys.exit(1)
 print('引擎/工具边界 OK（引擎 %d 条 − 工具面 %d 条 = 够不着 %d 条，与 README 一致）'
       % (len(eng), len(covered), len(unreach)))
+# 单调地板：够不着的名单**变长**就是能力倒退（工具面被砍、或引擎加了命令没接）
+floors.check('unreachable_ai', len(unreach))
 PYD
 
 # 人类前端是**另一条边界**：上面那块管的是「AI 工具面 ↔ 引擎」，这块管
@@ -373,6 +389,8 @@ if n < 20:
     print('FAIL: 自检清单只剩 %d 条（少于 20 条基本等于没有覆盖面）' % n)
     sys.exit(1)
 print('功能自检条数 OK（README 与实际都是 %d 条）' % n)
+import floors
+floors.check('selfcheck_items', n)
 PYD
 
 # **导入上限对账**：demo 的 `MAX_IMPORT_SIDE` 必须**正好**是引擎能建出来的最大画布边。

@@ -751,7 +751,23 @@ print('文档数字 OK（命令 %d；verify.sh %d 步 / build_demo.sh %d 步，�
       '变异 %d 中 %d 被抓住；AGENTS.md %d/%d 字节）'
       % (n, scripts['verify.sh'][0], scripts['build_demo.sh'][0],
          muts_total, muts_killed, agents_bytes, AGENTS_BUDGET))
+
+# ── 单调地板：上面这些数字"只许抬不许降"（等号门禁只管"写没写对"，管不住退化）──
+# 谁测量谁核对：这里核对的是**这一步自己测出来的**四个数。其余指标由各自的
+# 测量点核对（`ui_audit.py` / `build_demo.sh` / `panic_hunt.py`）。
+import floors
+floors.check('engine_commands', n)
+floors.check('tests_native', int(os.environ['NATIVE_N']))
+floors.check('tests_wasm', int(os.environ['WASM_N']))
+floors.check('mutations', muts_total)
+floors.check('mutations_killed', muts_killed)
 PYD
+
+echo "== 单调地板（只许抬不许降） =="
+# 「数字是承诺」缺的那一半：删掉一条命令/一个入口/一条变异，再把文档数字改成新的，
+# 等号门禁照旧全绿。地板是**另一份数据**（floors.toml），下调必须在同一次提交里
+# 配一条 [[retired]] 写明理由，这里拿工作树与 HEAD 逐项比。
+python3 floors.py --check-history
 
 # 性能数字是**唯一一处**此前只靠人自觉的承诺：`bench_perf.py` 量的是墙钟时间，
 # 不许进门禁（换机器就红），于是"文档里的性能数字"没有任何东西对账——实测一句

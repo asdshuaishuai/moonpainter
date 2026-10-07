@@ -398,28 +398,28 @@
                                 # 的 0-warning 不分 target；warning 会让 moon check
                                 # 返回非零，set -e 直接停在第一步） /
                                 # CLI 子进程 e2e / 独立 unzip 验证 / open→save 字节一致 /
-                                # MVSL 编辑表命令面 + 渲染管线闭环（安装→
-                                # render≡impact 同一张图→断言→软过渡带不
-                                # 算泄漏→lint 空操作/违约→容器往返→预览
-                                # 走编辑表）；渐变端点单位等静默失败也在此拦
-                                # verify.sh#catalog 命令字典与分发一致：list-tools 吐出的每个
-                                # 命令都逐个真实调用，必须不报"未知命令"（铁律 6）
-                                # verify.sh#arg-lower-bound 命令参数下界自检：每个 cmd_* 读 tokens[N]
-                                # 之前必须先卡住 N。下界写小了**不报用法错、
-                                # 而是越界 panic**（实测 `set-text l1` 把 CLI
-                                # 干掉了）
+                                # MVSL 编辑表命令面 + 渲染闭环（安装→render≡impact
+                                # 同一张图→断言→软边界不算泄漏→lint 空操作/违约→
+                                # 容器往返→预览走编辑表）；渐变端点单位也在此拦
+                                # verify.sh#catalog 命令字典一致：list-tools 每条都真实
+                                # 调用，不许报"未知命令"（铁律 6）
+                                # verify.sh#arg-lower-bound 参数下界自检：每个 cmd_*
+                                # 读 tokens[N] 前先卡 N——写小了**不报用法错、越界
+                                # panic**（实测 `set-text l1` 干掉过 CLI）
                                 # **剥注释**：实测扫描器被自己写的注释骗过（注释里
                                 # 一句 tokens[2] 被当成真读）；判据改完要注入反例自证
-                                # verify.sh#anchors 变异锚点自检：每个变异锚点必须唯一命中 1 处
-                                # （秒级）。锚点失效 = 那块覆盖被悄悄拿掉，
-                                # 而汇总里的「N 个变异全部通过」照旧好看——实测
-                                # 踩过，两个变异静静失效了一轮
+                                # verify.sh#anchors 变异锚点自检：每个锚点必须唯一命中
+                                # 1 处（秒级）——锚点失效 = 那块覆盖被悄悄拿掉，而
+                                # 汇总里的「变异全部通过」照旧好看（实测踩过）
                                 # verify.sh#params 字典 ↔ 解析器 参数对账：字典承诺的
                                 # key= 必须真的认（双向）。读不出键表/命令名
                                 # 不是字面量 → 判失败，别静默跳过
-                                # verify.sh#catalog 还顺带核对**文档里的数字**（命令条数/变异条数/步数，
-                                # 步骤引用是不是有效 slug、步骤编号自洽）与**性能数字**
-                                # （`bench_ledger.py` 对账 `bench/ledger.json`）
+                                # verify.sh#catalog 还核对**文档里的数字**（命令/变异/
+                                # 步数、slug 引用）与**性能数字**（bench_ledger.py
+                                # 对账 bench/ledger.json）
+                                # verify.sh#catalog 还有**单调地板**（floors.toml）：
+                                # 命令/测试/变异/入口/断言只许抬不许降，下调要配
+                                # [[retired]] 写明理由——等号门禁管不住"改文档追平退化"
                                 # verify.sh#deps 依赖方向门禁（铁律 5）：内部边全部朝前、
                                 # pixel 不依赖 render、引擎包零第三方、FFI 只在
                                 # cli/demo、demo 不 import 引擎包（只走 wasm ABI）；

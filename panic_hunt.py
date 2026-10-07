@@ -190,6 +190,9 @@ def main():
     lines, plan = corpus(tools)
     banner('语料：%d 条命令 × 敌意参数 → %d 行（固定、可复现）'
            % (len(plan), len(lines)))
+    # 单调地板：语料行数只许涨（新命令必须被轰到；缩语料 = 悄悄少测一片）
+    import floors
+    floors.check('panic_lines', len(lines))
     ok, msg, bad = check_batch(lines)
     if ok:
         banner('对抗性参数 OK（%s）' % msg)

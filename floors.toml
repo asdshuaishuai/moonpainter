@@ -1,0 +1,35 @@
+# 单调地板（AGENTS 铁律 3「数字也是承诺」缺的那一半）。
+#
+# 这些数字**只许往上抬**。往下调的唯一合法姿势：改这里的值，**并在同一次提交里**
+# 加一条 `[[retired]]` 写明理由——`python3 floors.py --check-history` 拿工作树与
+# HEAD 逐项比，任何"悄悄降一点、回头补"当场非零退出。
+#
+# 每个指标由**测量它的那个门禁**自己核对（不在别处重算一遍）：
+#   engine_commands / tests_* / mutations*  → verify.sh#catalog
+#   human_reachable / unreachable_human     → ui_audit.py（build_demo.sh#doc-tools）
+#   ai_tools / unreachable_ai / clickthrough_assertions /
+#   clickable_handlers / selfcheck_items    → build_demo.sh
+#   panic_lines                             → panic_hunt.py（verify.sh#panic-hunt）
+#
+# 什么时候抬：新能力落地、覆盖变宽的那**同一次提交**里改。忘了抬不红（地板是
+# 下界），但"能力倒退"会红——这正是它存在的意义。
+
+[floors]
+engine_commands = 70
+tests_native = 430
+tests_wasm = 428
+mutations = 285
+mutations_killed = 282
+human_reachable = 70
+unreachable_human = 0
+ai_tools = 60
+unreachable_ai = 10
+selfcheck_items = 30
+clickthrough_assertions = 106
+clickable_handlers = 82
+panic_lines = 5577
+
+# 有意下调时的申报区（每条：metric + amount + reason，写成 `[[retired]]` 表）。
+# 例：变异退休（它守的行为变成正确行为）时，floor 减 1 并在**同一次提交**里写一条。
+# 判据要求"本次提交新加的条目"才能抵扣——老条目不能反复用来给新的下调背书。
+# 目前没有下调过任何一项，所以这里没有 `[[retired]]` 块。
