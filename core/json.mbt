@@ -576,6 +576,30 @@ fn adjust_json(a : Adjust?) -> String {
 }
 
 ///|
+/// 图层样式的写出端：**只在该层真的有 fx 时写这个字段**（`None` 时整个字段
+/// 不出现）——老文档的 canonical 字节一个字节都不变，与 `handles` 同一条思路。
+/// 字段名与读入端（`fx_of`）逐字对应，16 个字段**全写**（不是"只写非默认"：
+/// 样式是一整件东西，半个对象读回来只能靠默认值猜，改一个开关时容易把别的
+/// 参数悄悄退回默认）。
+fn fx_json(f : LayerFx?) -> String {
+  match f {
+    None => ""
+    Some(fx) => {
+      let sb = StringBuilder()
+      sb.write_string(",\"fx\":{")
+      sb.write_string("\"shadow\":\{fx.shadow},\"shadow_dx\":\{fmt_num(fx.shadow_dx)},\"shadow_dy\":\{fmt_num(fx.shadow_dy)}")
+      sb.write_string(",\"shadow_blur\":\{fmt_num(fx.shadow_blur)},\"shadow_color\":\"\{@codec.color_to_hex(fx.shadow_color)}\"")
+      sb.write_string(",\"outline\":\{fx.outline},\"outline_w\":\{fmt_num(fx.outline_w)},\"outline_color\":\"\{@codec.color_to_hex(fx.outline_color)}\"")
+      sb.write_string(",\"glow\":\{fx.glow},\"glow_radius\":\{fmt_num(fx.glow_radius)},\"glow_color\":\"\{@codec.color_to_hex(fx.glow_color)}\"")
+      sb.write_string(",\"inner\":\{fx.inner},\"inner_dx\":\{fmt_num(fx.inner_dx)},\"inner_dy\":\{fmt_num(fx.inner_dy)}")
+      sb.write_string(",\"inner_blur\":\{fmt_num(fx.inner_blur)},\"inner_color\":\"\{@codec.color_to_hex(fx.inner_color)}\"")
+      sb.write_string("}")
+      sb.to_string()
+    }
+  }
+}
+
+///|
 fn layer_json(l : Layer) -> String {
   let sb = StringBuilder()
   sb.write_string("{\"id\":\"\{l.id}\",\"name\":\"")
@@ -590,6 +614,8 @@ fn layer_json(l : Layer) -> String {
   sb.write_string(mask_json(l.mask))
   sb.write_string(",\"adjust\":")
   sb.write_string(adjust_json(l.adjust))
+  // 样式**只在有 fx 时写**（见 `fx_json` 的注释）：没有样式的层字节不变。
+  sb.write_string(fx_json(l.fx))
   sb.write_string(",\"points\":")
   sb.write_string(points_json(l.points))
   // 控制柄**只写非空**：非 Path 层逐位不变（老 golden 不动），Path 层全 0 控制柄
@@ -1037,6 +1063,65 @@ fn adjust_of(v : JValue) -> Result[Adjust?, String] {
 }
 
 ///|
+/// 图层样式的读入端（与 `fx_json` 逐字对应）。
+///
+/// 缺字段按 `default_fx()` 补齐（手改容器/将来加字段时不至于读不出来），
+/// 但**取值不在这里判**：越界/负值由 `fx_param_error` 一句说了算，入口拒、
+/// lint 报（同 `mask_of` 那条分工——容器里的坏值要能被"看见"，而不是打不开）。
+fn fx_of(v : JValue) -> Result[LayerFx?, String] {
+  let raw = match v.get("fx") {
+    Some(fv) => fv
+    None => return Ok(None)
+  }
+  if raw is JNull {
+    return Ok(None)
+  }
+  let d = default_fx()
+  // 颜色：字典/命令面走 `parse_color`（#RRGGBB / #RRGGBBAA），这里同一个
+  // `@codec.color_from_hex`——两处各写一份 hex 解析必然分叉。
+  let color = fn(key : String, dflt : Int) -> Int {
+    match str_field(raw, key) {
+      Some(s) => @codec.color_from_hex(s)
+      None => dflt
+    }
+  }
+  Ok(
+    Some(
+      {
+        shadow: bool_field(raw, "shadow"),
+        shadow_dx: num_f(raw, "shadow_dx"),
+        shadow_dy: num_f(raw, "shadow_dy"),
+        shadow_blur: match raw.get("shadow_blur") {
+          Some(_) => num_f(raw, "shadow_blur")
+          None => d.shadow_blur
+        },
+        shadow_color: color("shadow_color", d.shadow_color),
+        outline: bool_field(raw, "outline"),
+        outline_w: match raw.get("outline_w") {
+          Some(_) => num_f(raw, "outline_w")
+          None => d.outline_w
+        },
+        outline_color: color("outline_color", d.outline_color),
+        glow: bool_field(raw, "glow"),
+        glow_radius: match raw.get("glow_radius") {
+          Some(_) => num_f(raw, "glow_radius")
+          None => d.glow_radius
+        },
+        glow_color: color("glow_color", d.glow_color),
+        inner: bool_field(raw, "inner"),
+        inner_dx: num_f(raw, "inner_dx"),
+        inner_dy: num_f(raw, "inner_dy"),
+        inner_blur: match raw.get("inner_blur") {
+          Some(_) => num_f(raw, "inner_blur")
+          None => d.inner_blur
+        },
+        inner_color: color("inner_color", d.inner_color),
+      },
+    ),
+  )
+}
+
+///|
 fn dab_of(v : JValue) -> Result[Dab, String] {
   let x = num_of(v, "x")
   let y = num_of(v, "y")
@@ -1094,6 +1179,10 @@ fn layer_of(v : JValue) -> Result[Layer, String] {
   }
   let adjust = match adjust_of(v) {
     Ok(a) => a
+    Err(e) => return Err(e)
+  }
+  let fx = match fx_of(v) {
+    Ok(f) => f
     Err(e) => return Err(e)
   }
   let fill = match v.get("fill") {
@@ -1198,6 +1287,7 @@ fn layer_of(v : JValue) -> Result[Layer, String] {
         font_size: fs,
         mask,
         adjust,
+        fx,
         points,
         handles,
         dabs,

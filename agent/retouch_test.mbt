@@ -703,9 +703,14 @@ test "仿制图章：命令面收下克隆笔触、报告面报得出源偏移�
   let _ = run(s, "brush layer=plain pts=30,30;60,30 r=6 color=#000000FF")
   let qp = run(s, "query-layer plain")
   // 段长 30、spacing = 2.7 ⇒ 段内 11 个点 + 末点 = 12 个 dab。
-  // 锚点要连**紧跟其后的字符**一起锚：这层的 `dabs` 是最后一个字段（后面是 `}`），
-  // 没有克隆字段时它后面不会是逗号——写成 `"dabs":12,` 就是一个永远为假的锚。
-  assert_true(qp.contains("\"dabs\":12}"), msg=qp)
+  // ⚠️ 别再用 `contains("\"dabs\":12}")` 这种"连紧随字符一起锚"的写法：它把
+  // 断言绑死在"`dabs` 是回包的最后一个字段"上——本轮在它后面加了 `fx`，锚点当场
+  // 变成永远为假（铁律 11：数值一律精确解析，别拿回包的字段顺序当判据）。
+  let nd = match adj_field(qp, ["layer", "dabs"]).as_num() {
+    Some(n) => n
+    None => abort("dabs 不是数字：\{qp}")
+  }
+  assert_eq(nd, 12.0, msg=qp)
   assert_true(!qp.contains("clone_dabs"), msg="普通笔触不许报出克隆字段：" + qp)
   // 克隆真的改画面（不是收了不干活）：取色处从白变成红块的颜色
   let before = run(s, "sample 140 60")

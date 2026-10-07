@@ -127,6 +127,17 @@ SPEC = {
                                   'out_lo': {'op': 'levels', 'out_lo': '0.0'},
                                   'out_hi': {'op': 'levels', 'out_hi': '1.0'},
                                   'points': {'op': 'curves', 'points': '0,0;1,1'}}),
+    # 图层样式（fx）：**四件全开**当骨架，于是每一个参数键的探针都真的改画面
+    # （只开一件的话，另外三件的参数改了只动指纹不动像素——"收了却没人读"
+    # 这条判据会漏掉一半）。
+    # `clear` 得单独给一套上下文：`clear=1` 与别的键**不能同时给**（摘掉 vs 改），
+    # 所以它的基线是 `clear=0`（合法且什么都不摘），而 prep 里先把样式装上。
+    'set-fx': dict(pos='l1',
+                   skel={'shadow': 'true', 'shadow_dx': '6',
+                         'outline': 'true', 'glow': 'true', 'inner': 'true'},
+                   prep=['add-rect w=20 h=20'],
+                   prep_over={'clear': ['add-rect w=20 h=20', 'set-fx l1 shadow=true']},
+                   skel_over={'clear': {'clear': '0'}}),
     'set-mask': dict(pos='l1', skel={'x': '0', 'y': '0', 'w': '10', 'h': '10'},
                      prep=['add-rect w=20 h=20',
                            'add-mask l1 kind=rect x=0 y=0 w=10 h=10'],
@@ -168,6 +179,25 @@ PROBE = {
     'overlay': '1', 'within': SEL_B64, 'components': '1', 'max': '8',
     'in_lo': '0.9', 'in_hi': '0.2', 'gamma': '2.0', 'out_lo': '0.3', 'out_hi': '0.7',
     'b64': RED,
+    # 图层样式（fx，`set-fx`）：每个参数键都给一个"四件全开"骨架下**真的改像素**
+    # 的探针（-9 与 9 之类是为了让偏移/宽度在 20×20 的层上看得见）。
+    'clear': '1',
+    'shadow': 'false',
+    'shadow_dx': '9',
+    'shadow_dy': '-9',
+    'shadow_blur': '0',
+    'shadow_color': '#FF0000FF',
+    'outline': 'false',
+    'outline_w': '9',
+    'outline_color': '#00FF00FF',
+    'glow': 'false',
+    'glow_radius': '14',
+    'glow_color': '#0000FFFF',
+    'inner': 'false',
+    'inner_dx': '-9',
+    'inner_dy': '-9',
+    'inner_blur': '0',
+    'inner_color': '#FFFFFF80',
 }
 # 同一个键在不同命令上需要不同探针（形状不同、上下文不同）
 PROBE_OVERRIDE = {

@@ -61,7 +61,7 @@ TABLE_RE = re.compile(r"<!-- bench-table: (\w+) -->(.*?)<!-- bench-table:end -->
 TABLE_OPEN_RE = re.compile(r"<!-- bench-table: \w+ -->")
 # 哪些实验的**当前**数字必须出现在文档表里。加了新实验就登记在这里——
 # 于是"漏写/删掉/改名"都会红，而不是静静少对一块账。
-REQUIRED_TABLE_EXPS = ["m2", "m4"]
+REQUIRED_TABLE_EXPS = ["m2", "m4", "m5"]
 VALUE_RE = re.compile(r"(\d+\.\d+)\s*s")
 MARGINAL_RE = re.compile(r"每层边际\s*[≈=]\s*(\d+\.\d+)\s*s")
 # 软蒙版边际：一行里可能出现历史值（`0.53 s → 0.07 s`），取**最后一个**数字。

@@ -133,21 +133,154 @@ fn box_mean(f : Field, r : Int) -> Field {
     }
     y = y + 1
   }
-  let mut y2 = 0
-  while y2 < f.h {
+  // ⚠️ 第二趟是**竖着滑**：固定一列、窗口沿 y 滑；第一趟那个写法（固定一行、
+  // 窗口沿 x 滑）**不能**照抄过来——窗口的"滑动方向"与"写出的方向"必须正交。
+  // 实测照抄版（`acc` 只在第 0 列里滑、却写遍所有 x）会给出**负的均值**与斜向
+  // 拖尾：`field_set` 一个 1.0 经它一遍变成一片 -0.11/0.11 的斜纹。这是
+  // `box_mean` 自己的 bug（与调用方无关），所以修在**这一处**。
+  let mut x2 = 0
+  while x2 < f.w {
     let mut acc = 0.0
     let mut i = -r
     while i <= r {
-      acc = acc + field_get(tmp, 0, y2 + i)
+      acc = acc + field_get(tmp, x2, i)
       i = i + 1
     }
-    let mut x = 0
-    while x < f.w {
-      out.v[y2 * f.w + x] = acc / wd
-      acc = acc - field_get(tmp, x, y2 - r) + field_get(tmp, x, y2 + r + 1)
-      x = x + 1
+    let mut y2 = 0
+    while y2 < f.h {
+      out.v[y2 * f.w + x2] = acc / wd
+      acc = acc - field_get(tmp, x2, y2 - r) + field_get(tmp, x2, y2 + r + 1)
+      y2 = y2 + 1
     }
-    y2 = y2 + 1
+    x2 = x2 + 1
+  }
+  out
+}
+
+///|
+/// 场的**整数位移**（`out(p) = in(p − (dx,dy))`，窗外取 0）。
+///
+/// 为什么在 pixel 而不是 render：投影/内阴影的"偏移"是**场**上的操作，与模糊
+/// 同族；写在两处（模糊一处、位移一处）就先烂一处。四舍五入取最近的整数像素
+/// （亚像素位移会让结果依赖浮点尾数，而"投影偏 4.5 还是 4 像素"没人分得出来）。
+pub fn field_shift(f : Field, dx : Double, dy : Double) -> Field {
+  let out = field_new(f.w, f.h)
+  let ox = iround(dx)
+  let oy = iround(dy)
+  if ox == 0 && oy == 0 {
+    return field_copy(f)
+  }
+  let mut y = 0
+  while y < f.h {
+    let sy = y - oy
+    if sy >= 0 && sy < f.h {
+      let mut x = 0
+      while x < f.w {
+        let sx = x - ox
+        if sx >= 0 && sx < f.w {
+          out.v[y * f.w + x] = f.v[sy * f.w + sx]
+        }
+        x = x + 1
+      }
+    }
+    y = y + 1
+  }
+  out
+}
+
+///|
+/// 场的一份拷贝（位移量为 0 / 膨胀半径为 0 时的恒等路径，同时也是"别在调用方
+/// 手搓逐元素循环"的那一处）。
+fn field_copy(f : Field) -> Field {
+  let out = field_new(f.w, f.h)
+  let mut i = 0
+  let total = f.w * f.h
+  while i < total {
+    out.v[i] = f.v[i]
+    i = i + 1
+  }
+  out
+}
+
+///|
+/// 四舍五入到最近整数（**远离 0** 那一侧；负数不许借 `to_int` 的截断语义）。
+fn iround(v : Double) -> Int {
+  if v >= 0.0 {
+    trunc_pos(v + 0.5)
+  } else {
+    -trunc_pos(0.0 - v + 0.5)
+  }
+}
+
+///|
+/// 场的**膨胀**（最大值滤波，半径 r 像素：窗口 `2r+1`，窗外取 0）。
+///
+/// 可分离 + **单调队列**（每趟 O(N)）：朴素窗口是 `(2r+1)²`，r=64 时在
+/// 4096×4096 画布上是几十亿次比较。最大/最小滤波不能像盒均值那样用"加减
+/// 前缀和"，但可以用单调队列把每趟压到 O(N)——这是它该有的复杂度，不是优化。
+pub fn field_dilate(f : Field, r : Double) -> Field {
+  let ri = trunc_pos(r)
+  if ri < 1 {
+    return field_copy(f)
+  }
+  let tmp = max_axis(f, ri, true)
+  max_axis(tmp, ri, false)
+}
+
+///|
+/// 单趟（水平/垂直）最大值滤波。
+fn max_axis(f : Field, r : Int, horizontal : Bool) -> Field {
+  let out = field_new(f.w, f.h)
+  let n = if horizontal { f.w } else { f.h }
+  let lines = if horizontal { f.h } else { f.w }
+  // 单调队列：队列里存下标，值从队头到队尾**递减**。窗口大小 2r+1，
+  // 所以队列最多装 2r+1 个（队头是最小的下标，出窗即弹）。
+  let dq : FixedArray[Int] = FixedArray::make(2 * r + 2, 0)
+  let idx = fn(a : Int, b : Int) -> Int {
+    if horizontal {
+      a * f.w + b
+    } else {
+      b * f.w + a
+    }
+  }
+  let mut line = 0
+  while line < lines {
+    let mut head = 0
+    let mut tail = 0
+    // 预填窗口的**左半边** [0, r]：`i=0` 时窗口是 `[-r, r]`，窗外取 0，
+    // 所以只需要这一半（先 add 后 out 的写法会把 `i=0` 自己漏掉——实测角上的
+    // 点被自己吃掉：3×3 的 (0,0) 膨胀后 (0,0) 是 0）。
+    let mut k = 0
+    while k <= r && k < n {
+      let kv = f.v[idx(line, k)]
+      while tail > head && f.v[idx(line, dq[tail - 1])] <= kv {
+        tail = tail - 1
+      }
+      dq[tail] = k
+      tail = tail + 1
+      k = k + 1
+    }
+    let mut i = 0
+    while i < n {
+      if i > 0 {
+        let add = i + r
+        if add < n {
+          let av = f.v[idx(line, add)]
+          while tail > head && f.v[idx(line, dq[tail - 1])] <= av {
+            tail = tail - 1
+          }
+          dq[tail] = add
+          tail = tail + 1
+        }
+      }
+      let drop = i - r - 1
+      if drop >= 0 && head < tail && dq[head] == drop {
+        head = head + 1
+      }
+      out.v[idx(line, i)] = if head < tail { f.v[idx(line, dq[head])] } else { 0.0 }
+      i = i + 1
+    }
+    line = line + 1
   }
   out
 }

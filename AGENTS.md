@@ -472,7 +472,7 @@ python3 mutation_scan.py R3 R4  # 按 id 只跑指定的变异（改完测试想
 # INVALID（锚点失效 **或变异本身编译不过**）与 UNKNOWN 都**退出码 1**：
 # 它们不是"通过"，是"这条变异压根没在测试任何东西"——静默排除在统计之外
 # 会让每次汇总照旧印 PASS（经过见 PLAN 四十）。
-moon run --target native cli    # stdin 行协议；help 查看全部 70 个命令
+moon run --target native cli    # stdin 行协议；help 查看全部 71 个命令
 ```
 
 ## demo/agent 层附加纪律（demo 包不适用"零第三方依赖"铁律）
@@ -496,7 +496,7 @@ moon run --target native cli    # stdin 行协议；help 查看全部 70 个命�
   **但引擎从未实现还原**，于是用户输入 "Hello World"，存进去和渲染出来的
   都是 `Hello_World`。现在 `_` 保持**字面下划线**（历史行为完全不变），
   含空格靠引号。新增自由文本参数时，走 `quote_arg`（demo/main.mbt）拼串。
-- demo 工具面是 agent 命令面的**手写子集**（当前 60 个）：引擎新增命令后，
+- demo 工具面是 agent 命令面的**手写子集**（当前 61 个）：引擎新增命令后，
   要用到就该同步加进 `paint_tools.mbt` 的 `paint_tool_defs` + `tool_cmd` +
   `catalog.mbt` 的 system prompt，否则"引擎有能力"不等于"产品里的 AI 用得上"。
   模型侧只写 JSON，base64 由 SDK 的 `b64_text` 转。

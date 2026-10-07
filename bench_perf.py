@@ -458,6 +458,56 @@ def m4(reps=3):
           "现在只清/只扫落笔窗口。")
 
 
+# ---------------------------------------------------------------------------
+# 实验五：图层样式（fx）的代价
+# ---------------------------------------------------------------------------
+
+def m5(reps=3):
+    """图层样式（fx）要**先整层栅格化到自己的透明缓冲**、再在这张缓冲的覆盖度上算
+    四件套的场。场的工作窗按"这一层真的有像素的范围 + 扩散量"裁（不是整画布），
+    但"这一层自己的栅格化"仍按画布面积——所以代价 = 画布面积的一份拷贝
+    + 这一层面积（+扩散量）的几趟场运算。
+
+    这个实验量 m2 同一张 12MP 画布上「200×200 的样式层」（常见）与「整幅样式层」
+    （上界）的差别，并把"没有样式"的同款层当对照。数字进 `bench/ledger.json`，
+    DESIGN §8 只许引用账本里的数。
+    """
+    W, H = 4000, 3000
+    FX = ("set-fx {id} shadow=1 shadow_dx=8 shadow_dy=8 shadow_blur=8 "
+          "glow=1 glow_radius=10 outline=1 outline_w=4 "
+          "inner=1 inner_dx=3 inner_dy=3 inner_blur=6")
+
+    def build_small(n, fx):
+        s = f"session-open full_image\nnew {W} {H}\n"
+        for i in range(n):
+            s += f"add-rect id=l{i} x={100 + i * 250} y=200 w=200 h=200 fill=#FF0000\n"
+            if fx:
+                s += FX.format(id=f"l{i}") + "\n"
+        return s
+
+    def build_full():
+        s = (f"session-open full_image\nnew {W} {H}\n"
+             f"add-rect id=l1 x=0 y=0 w={W} h={H} fill=#FF0000\n")
+        return s + FX.format(id="l1") + "\n"
+
+    print(f"实验五：图层样式（fx）的代价（{W}×{H}，四件套全开：影+发光+描边+内影）")
+    b1, _ = bench(lambda: build_small(1, False), "render 4000\n",
+                  "1 个普通层 200×200（对照）", reps, "m5")
+    s1, _ = bench(lambda: build_small(1, True), "render 4000\n",
+                  "1 个样式层 200×200", reps, "m5")
+    s5, _ = bench(lambda: build_small(5, True), "render 4000\n",
+                  "5 个样式层 200×200", reps, "m5")
+    sf, _ = bench(build_full, "render 4000\n",
+                  "1 个样式层 整幅 4000×3000", reps, "m5")
+    if b1 and s1 and s5:
+        print(f"  样式层的整层栅格化开销（1 层）：≈ {(s1 - b1) * 1000:.0f}ms"
+              f"（对照层 {b1:.2f}s → 样式层 {s1:.2f}s）")
+        print(f"  每层边际（1→5 层）：≈ {(s5 - s1) / 4 * 1000:.0f}ms")
+    if sf:
+        print(f"  上界（整幅样式层）：{sf:.2f}s —— 这一条说明代价随**层自己的面积**"
+              "增长，不是随画布上「有没有样式」增长。")
+
+
 if __name__ == "__main__":
     which = sys.argv[1] if len(sys.argv) > 1 else "all"
     if which in ("all", "selfcheck"):
@@ -474,6 +524,9 @@ if __name__ == "__main__":
         print()
     if which in ("all", "m4"):
         m4()
+        print()
+    if which in ("all", "m5"):
+        m5()
     if LEDGER:
         print()
         write_ledger()

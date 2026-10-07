@@ -997,9 +997,9 @@ MUTS = [
     ),
     (
         "Q3",
-        "set-mask 的布尔解析退回静默：认不出的值当成 false（改了没反应却报 ok）",
-        "agent/session.mbt",
-        r"""    Some(other) => Err("蒙版 invert 应为 true|false，got \{other}")""",
+        "布尔解析退回静默：认不出的值当成 false（改了没反应却报 ok）",
+        "agent/fx.mbt",
+        r"""    Some(other) => Err("\{ctx} 应为 true|false（也收 1/0），got \{other}")""",
         r"""    Some(_) => Ok(false)""",
         "killed",
     ),
@@ -3042,17 +3042,68 @@ MUTS = [
         "R69",
         "契约档只看第一层（毛边(2)+套索(3) 并存时报 2，老引擎照样打开）",
         "core/document.mbt",
-        """  for l in doc.layers {
+        """  for l in all_layers(doc.layers) {
     // 贝塞尔路径：老引擎不认这个 kind（整层不画）⇒ 必须升档
     if l.kind is ShapeKind::Path && rc < RENDER_CONTRACT_PATH {
       rc = RENDER_CONTRACT_PATH
     }""",
-        """  for l in doc.layers {
+        """  for l in all_layers(doc.layers) {
     // 贝塞尔路径：老引擎不认这个 kind（整层不画）⇒ 必须升档
     if l.kind is ShapeKind::Path && rc < RENDER_CONTRACT_PATH {
       rc = RENDER_CONTRACT_PATH
     }
     break""",
+        "killed",
+    ),
+    (
+        "R120",
+        "fx 栅格化时把层不透明度先烤进内容缓冲（半透明层的样式被算两次/描边消失）",
+        "render/scene.mbt",
+        """          let style_src = { ..l, opacity: 1.0, fx: None }""",
+        """          let style_src = { ..l, opacity: eff_opacity, fx: None }""",
+        "killed",
+    ),
+    (
+        "R121",
+        "投影不位移（影画在层的正下方，dx/dy 只改指纹不改画面）",
+        "render/scene.mbt",
+        """      fx.shadow_dx,
+      fx.shadow_dy,""",
+        """      0.0,
+      0.0,""",
+        "killed",
+    ),
+    (
+        "R122",
+        "内阴影丢掉乘 A（影画到层外的背景上）",
+        "render/scene.mbt",
+        """      let v = @pixel.field_get(a, i % ww, i / ww) *
+        (1.0 - @pixel.field_get(b, i % ww, i / ww))""",
+        """      let v = 1.0 - @pixel.field_get(b, i % ww, i / ww)""",
+        "killed",
+    ),
+    (
+        "R123",
+        "场的位移不四舍五入（截断；0.6 像素的偏移静默变成 0）",
+        "pixel/edit.mbt",
+        """  if v >= 0.0 {
+    trunc_pos(v + 0.5)
+  } else {
+    -trunc_pos(0.0 - v + 0.5)
+  }""",
+        """  if v >= 0.0 {
+    trunc_pos(v)
+  } else {
+    -trunc_pos(0.0 - v)
+  }""",
+        "killed",
+    ),
+    (
+        "R124",
+        "全 off 的 fx 也抬契约档（没画任何东西却要求新渲染器）",
+        "core/document.mbt",
+        """      Some(f) => if fx_any_on(f) && rc < RENDER_CONTRACT_FX {""",
+        """      Some(_f) => if rc < RENDER_CONTRACT_FX {""",
         "killed",
     ),
     ]

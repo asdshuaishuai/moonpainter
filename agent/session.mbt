@@ -298,6 +298,7 @@ pub fn exec(s : Session, line : String) -> String {
     "sample" => cmd_sample(s, tokens)
     "add-adjust" => cmd_add_adjust(s, tokens)
     "set-adjust" => cmd_set_adjust(s, tokens)
+    "set-fx" => cmd_set_fx(s, tokens)
     "add-mask" => cmd_add_mask(s, tokens)
     "set-mask" => cmd_set_mask(s, tokens)
     "remove-mask" => cmd_remove_mask(s, tokens)
@@ -660,6 +661,11 @@ fn layer_summary(l : @core.Layer) -> String {
     }
     None => ()
   }
+  // 图层样式：**能打上就要能读回来**（同 radius/flip/adjust 那条）。
+  // 只报**开着的**那几件（`none` = 压根没有样式；`all-off` = 挂着一份但
+  // 四个开关全关，画面逐位不变）——两者必须区分得开，否则"装了却什么都不干"
+  // 在报告面看不见。
+  sb.write_string(",\"fx\":\"\{fx_report(l.fx)}\"")
   match l.mask {
     Some(m) =>
       sb.write_string(
@@ -2047,12 +2053,9 @@ fn mask_arg_points_keep(
 ///|
 /// 蒙版 invert 的读取器：**认不出就报错**（`invert=maybe` 不许悄悄当 false）。
 fn mask_arg_bool(m : Map[String, String], cur : Bool) -> Result[Bool, String] {
-  match m.get("invert") {
-    None => Ok(cur)
-    Some("true") | Some("1") => Ok(true)
-    Some("false") | Some("0") => Ok(false)
-    Some(other) => Err("蒙版 invert 应为 true|false，got \{other}")
-  }
+  // 布尔参数的读法**只有一处**（`kv_bool_arg`）：蒙版 invert 与图层样式的四个
+  // 开关共用它——两处各写一份 `true|false|1|0` 的名单就必然有一处先烂。
+  kv_bool_arg(m, "invert", cur, "蒙版 invert")
 }
 
 ///|

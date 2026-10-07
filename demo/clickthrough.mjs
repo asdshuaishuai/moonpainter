@@ -728,6 +728,53 @@ check(
 );
 await globalThis.__sel('tfr');
 
+// ⑪d 图层样式（fx，人侧面板）：四件套开关 → 参数原地改 → 摘掉；影**真的**
+// 落在画布上（取一个层外、只有影能盖到的点，三态各取一次色）。
+// 这里先开一张干净画布（后面 ⑫ 本来也会重开），免得靶子落在别的层上。
+exec('new 60 40 uuid=ctfx');
+exec('add-rect id=fxb x=10 y=10 w=30 h=20 fill=#3366FFFF');
+await globalThis.__refresh();
+await flush();
+// 影往右下偏 12、不模糊 ⇒ 层右下那一条带子被影**整块**盖住（覆盖度恒 1），
+// 于是"改颜色"能断言**精确值**，不是"看起来变了"
+const FXP = { x: 46, y: 36 };
+const fxPlain = exec(`probe x=${FXP.x} y=${FXP.y}`).color;
+await globalThis.__sel('fxb');
+await globalThis.__fx_sw('fxb', 'shadow', '1');
+const fx1 = layer('fxb').fx;
+await globalThis.__fx_key('fxb', 'shadow_dx', '12');
+await globalThis.__fx_key('fxb', 'shadow_dy', '12');
+await globalThis.__fx_key('fxb', 'shadow_blur', '0');
+const fx2 = layer('fxb').fx;
+const fxShadow = exec(`probe x=${FXP.x} y=${FXP.y}`).color;
+await globalThis.__fx_key('fxb', 'shadow_color', '#FF0000FF');
+const fx3 = layer('fxb').fx;
+const fxRed = exec(`probe x=${FXP.x} y=${FXP.y}`).color;
+// 面板：开着的那一件要给出参数框与"点一下关"的开关，另有「清除全部」
+const propsFx = String(globalThis.document.getElementById('pprops').innerHTML || '');
+if (!propsFx.includes('__fx_key')) {
+  console.log('FXPROPS-FULL>>>' + propsFx.replace(/\s+/g, ' ') + '<<<');
+}
+await globalThis.__fx_clear('fxb');
+const fx4 = layer('fxb').fx;
+const fxCleared = exec(`probe x=${FXP.x} y=${FXP.y}`).color;
+// 负控：调整层没有自己的像素 ⇒ 引擎的 caps 里没有 fx、面板一个样式控件都不画
+exec('add-adjust id=adjx op=brightness value=0.2');
+await globalThis.__sel('adjx');
+const propsAdjFx = String(globalThis.document.getElementById('pprops').innerHTML || '');
+check(
+  '图层样式（fx）：人侧开关装得上 → 参数原地改 → 影真的落到画布上 → 摘得掉回到原样',
+  fx1 === 'shadow(4,4,4,#00000080)' && fx2 === 'shadow(12,12,0,#00000080)' &&
+    fx3 === 'shadow(12,12,0,#FF0000FF)' && fx4 === 'none' &&
+    fxPlain === '#FFFFFFFF' && fxShadow !== fxPlain && fxRed === '#FF0000FF' &&
+    fxCleared === fxPlain &&
+    propsFx.includes('__fx_sw(\"fxb\",\"shadow\",\"0\")') &&
+    propsFx.includes('__fx_key(\"fxb\",\"shadow_dx\",this.value)') &&
+    propsFx.includes('__fx_clear(\"fxb\")') &&
+    !(layer('adjx').caps || []).includes('fx') && !propsAdjFx.includes('__fx_sw'),
+  `装=${fx1} 偏=${fx2} 色=${fx3} 摘=${fx4}｜点(${FXP.x},${FXP.y}) ${fxPlain} → 有影 ${fxShadow} → 改色 ${fxRed} → 摘后 ${fxCleared}｜rect 面板开关=${propsFx.includes('__fx_sw')} 参数框=${propsFx.includes('__fx_key')}｜adjust caps=${(layer('adjx').caps || []).join(',')} 面板开关=${propsAdjFx.includes('__fx_sw')}`,
+);
+
 // ⑫ 画笔：`__stroke` 落笔（人画的那条链），画面与文档都要变
 const fpPaint0 = exec('fingerprint').fingerprint;
 await globalThis.__stroke('draw', '10,10 14,12 18,16');
@@ -1180,7 +1227,7 @@ check(
 // ⑯ 覆盖清单（机器对账用，格式由 `build_demo.sh#html-wiring` 解析）：
 // driver 走不到的处理器必须在这儿**写明原因**，否则"没覆盖"会静默变成"覆盖了"。
 /* coverage:begin
-driven: __selfcheck __dbg_lint __dbg_edits __dbg_census __dbg_probe __dbg_help __dbg_tools __dbg_schema __dbg_preview __mvsl_set __mvsl_show __mvsl_impact __mvsl_assert __mvsl_clear __param_list __param_set __param_del __cmd __build_badge __save __export __run __sel __vis __front __back __setx __sety __setw __seth __move_delta __rotate __flip __op __del __undo __redo __rename __tag_add __tag_del __reparent __ungroup_sel __text_at __text_add __text_set __text_font __mask_ready __mask_invert __mask_clear __adj_op __adj_val __adj_key __blend __tf_ready __tf_hint __af __stroke __new __set_canvas __crop_ready __crop_apply __crop_cancel __zoom __refresh __stats __optip __toggle_ai __tool __poly_click __poly_finish __poly_cancel __shape_ready __group_sel __pick_at __clone_src __goto __pen_handle __bool_op
+driven: __selfcheck __dbg_lint __dbg_edits __dbg_census __dbg_probe __dbg_help __dbg_tools __dbg_schema __dbg_preview __mvsl_set __mvsl_show __mvsl_impact __mvsl_assert __mvsl_clear __param_list __param_set __param_del __cmd __build_badge __save __export __run __sel __vis __front __back __setx __sety __setw __seth __move_delta __rotate __flip __op __del __undo __redo __rename __tag_add __tag_del __reparent __ungroup_sel __text_at __text_add __text_set __text_font __mask_ready __mask_invert __mask_clear __adj_op __adj_val __adj_key __blend __fx_sw __fx_key __fx_clear __tf_ready __tf_hint __af __stroke __new __set_canvas __crop_ready __crop_apply __crop_cancel __zoom __refresh __stats __optip __toggle_ai __tool __poly_click __poly_finish __poly_cancel __shape_ready __group_sel __pick_at __clone_src __goto __pen_handle __bool_op
 browser-only: __drop=拒绝路径已被 driver 走过（没字节时明说）；成功路径要真的 File+Image 解码，壳里造一个等于把"读文件"假装测了; __file_sel=同上（driver 走的是"没选到文件"那条）; __mpd_sel=要真的 .mpd 文件字节，壳里没有 FileReader; __img_swap=换图必须先有一张真图进来
 coverage:end */
 

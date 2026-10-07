@@ -152,6 +152,11 @@ pub fn list_tools() -> Array[AgentTool] {
     "meta",
   )
   add("remove-mask", "remove-mask <id>：移除蒙版（层不存在、或本来没有蒙版 → 报错，不静默成功）", "meta")
+  add(
+    "set-fx",
+    "set-fx <id> " + fx_key_doc() + "：图层样式（投影/描边/外发光/内阴影，PSD 语义）。**部分更新**：只改给的参数、其余沿用当前值（层上还没有样式时以缺省样式为底）。样式作用在**这一层自己的像素**上（先栅格化再整块按 blend/opacity 合成），**调整层没有自己的像素、装不了**。半径/宽度上限 64px（超过按上限算：不会更大、只是更慢）。clear=1 摘掉整份样式",
+    "meta",
+  )
   // 修图操作
   add(
     "add-paint",

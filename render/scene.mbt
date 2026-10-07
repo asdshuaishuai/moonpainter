@@ -944,6 +944,44 @@ fn paint_layer(
   if eff_opacity <= 0.0 {
     return
   }
+  // 图层样式（fx）：**这一层先栅格化到自己的透明缓冲 → 加四件套 → 再整块按
+  // opacity/blend 混进目标**（DESIGN §8 写死的产品决定）。
+  //
+  // 为什么要另开一条路而不是"就地往 buf 上画"：影/发光会溢出层的盒子、描边画在
+  // 层的上面——它们都属于**这一层的像素**，先被下面那些层看见就等于样式不跟着层走
+  // （换层序就变样子）。所以必须先拿到"这一层自己的画面"。
+  //
+  // `opacity` 在**最后一步**才乘（`compose_src(…, eff_opacity)`）：若先烤进
+  // 内容缓冲，半透明层的描边会算出 `dilate(A) − A = 0` —— 样式凭空消失。
+  // 内容按 opacity=1 栅格化，样式作用在"形状的覆盖度"上，最后整块打折。
+  //
+  // `Adjust` 层没有自己的像素（它的画面是**它下面那张底图**），样式无从谈起：
+  // 入口拒、lint 报，渲染器这里直接不认（于是"caps 说没有 ⇒ 逐位相同"成立）。
+  if !(l.kind is @core.ShapeKind::Adjust) {
+    match l.fx {
+      Some(f) =>
+        if @core.fx_any_on(f) {
+          let style_src = { ..l, opacity: 1.0, fx: None }
+          let content = @codec.rgba_new(buf.width, buf.height)
+          @codec.fill_rect_rgba(content, 0, 0, buf.width, buf.height, 0x00000000)
+          paint_layer(style_src, content, env, 1.0, frames)
+          let styled = apply_fx(content, f)
+          let total = buf.width * buf.height
+          let mut i = 0
+          while i < total {
+            let p = styled.pixels[i]
+            if (p & 0xFF000000) != 0 {
+              // `compose_src` 是"层不透明度并入源 alpha"的唯一一处实现
+              let src = compose_src(255, p, 1.0, eff_opacity)
+              buf.pixels[i] = composite_pixel(buf.pixels[i], src, l.blend)
+            }
+            i = i + 1
+          }
+          return
+        }
+      None => ()
+    }
+  }
   match l.kind {
     @core.ShapeKind::Group => {
       // 组 α=1：逐子层直接叠到底图（与"没有这一层组"逐位相同的快路径）
@@ -2334,10 +2372,293 @@ pub fn rasterize_layer(
   h : Int,
   env : RenderEnv,
 ) -> @codec.RgbaBuf {
+  rasterize_layer_in(l, w, h, env, [])
+}
+
+///|
+/// 同上，但带上**祖先变换链**（`paint_layer` 那个 `frames` 参数）。
+///
+/// 为什么必须有它：`rasterize_layer` 只有"画布坐标系"这一种口径，而组里的层
+/// 要经过组的旋转/翻转。样式那条路（`paint_layer` 的 fx 分支）是在**任意深度**
+/// 上被调用的，拿不到链就会把组里的层画成没转过的样子——"同一个判断两处实现
+/// 就必然有一处先烂"的那个老坑。
+fn rasterize_layer_in(
+  l : @core.Layer,
+  w : Int,
+  h : Int,
+  env : RenderEnv,
+  frames : Transform,
+) -> @codec.RgbaBuf {
   let buf = @codec.rgba_new(w, h)
   @codec.fill_rect_rgba(buf, 0, 0, w, h, 0x00000000)
-  paint_layer(l, buf, env, 1.0, [])
+  paint_layer(l, buf, env, 1.0, frames)
   buf
+}
+
+///|
+/// **图层样式的四件套**：把影/发光/描边/内影加到"这一层自己的像素"上。
+///
+/// `buf` = 只画了这一层（透明底）的缓冲；`A` = 它的 alpha = 这一层的覆盖度
+/// （含蒙版/变换/笔触/子层）。返回**新缓冲**（不改入参，调用方拿它去合成）：
+/// 于是"层自己的像素"与"带样式的像素"是两个不会互相污染的概念。
+///
+/// 顺序（产品决定，见 DESIGN §8）：投影 → 外发光 → **层自己** → 内阴影 → 描边。
+/// 四个覆盖度场：
+///   * 投影 `S = shift(blur(A, shadow_blur), shadow_dx, shadow_dy)`（画在层下面）
+///   * 发光 `G = blur(A, glow_radius)`（不位移，画在层下面）
+///   * 内影 `I = A × (1 − shift(blur(A, inner_blur), inner_dx, inner_dy))`（层上面）
+///   * 描边 `O = dilate(A, outline_w) − A`（取 max 0，画在层上面）
+/// 模糊走 `@pixel.field_box_blur`、膨胀走 `@pixel.field_dilate`、位移走
+/// `@pixel.field_shift`——三件事都只有一处实现，render 里不许再抄一份。
+pub fn apply_fx(buf : @codec.RgbaBuf, fx : @core.LayerFx) -> @codec.RgbaBuf {
+  let w = buf.width
+  let h = buf.height
+  let out = @codec.rgba_new(w, h)
+  @codec.fill_rect_rgba(out, 0, 0, w, h, 0x00000000)
+  if !@core.fx_any_on(fx) {
+    // 全 off：逐位等于入参（"装了却不干活"的画面那一半判据靠它）
+    let mut i = 0
+    let total = w * h
+    while i < total {
+      out.pixels[i] = buf.pixels[i]
+      i = i + 1
+    }
+    return out
+  }
+  // **工作窗**：这一层**真的有像素**的范围（读数据，不是拿模型猜），再按四件套
+  // 的最大扩散量往外扩一圈。窗外的覆盖度恒为 0 ⇒ 只算窗内与整画布算**逐位相同**，
+  // 而代价从"画布面积"降到"这一层的面积 + 扩散量"。
+  //
+  // 为什么不另写一条"窗口判据"（`paint_window` 那种模型预测）：数据说的范围
+  // 一定覆盖得住（组里的旋转子层、伸出盒子的多边形都算得进去），而预测型判据
+  // 只能靠"保守上界"活着——两条判据迟早分叉。
+  let (wx0, wy0, wx1, wy1) = match fx_work_window(buf, fx) {
+    Some(win) => win
+    None => {
+      // 这一层一个像素都没画（空组/全透明/完全在画布外）：样式也无从谈起
+      return out
+    }
+  }
+  let a = fx_alpha_field(buf, wx0, wy0, wx1, wy1)
+  let ww = wx1 - wx0
+  let wh = wy1 - wy0
+  if @core.fx_shadow_on(fx) {
+    let s = @pixel.field_shift(
+      @pixel.field_box_blur(a, fx_radius(fx.shadow_blur)),
+      fx.shadow_dx,
+      fx.shadow_dy,
+    )
+    fx_under(out, s, fx.shadow_color, wx0, wy0, wx1, wy1)
+  }
+  if @core.fx_glow_on(fx) {
+    let g = @pixel.field_box_blur(a, fx_radius(fx.glow_radius))
+    fx_under(out, g, fx.glow_color, wx0, wy0, wx1, wy1)
+  }
+  // 层自己压在影/发光之上（只扫工作窗；窗外这些缓冲本来就是空的）
+  blend_buffer_window(out, buf, @core.BlendMode::Normal, wx0, wy0, wx1, wy1)
+  if @core.fx_inner_on(fx) {
+    let b = @pixel.field_shift(
+      @pixel.field_box_blur(a, fx_radius(fx.inner_blur)),
+      fx.inner_dx,
+      fx.inner_dy,
+    )
+    let i_field = @pixel.field_new(ww, wh)
+    let mut i = 0
+    let total = ww * wh
+    while i < total {
+      // 内影**只在层的里面**（乘 A）：不乘 A 就会把影画到层外的背景上
+      let v = @pixel.field_get(a, i % ww, i / ww) *
+        (1.0 - @pixel.field_get(b, i % ww, i / ww))
+      @pixel.field_set(i_field, i % ww, i / ww, v)
+      i = i + 1
+    }
+    fx_under(out, i_field, fx.inner_color, wx0, wy0, wx1, wy1)
+  }
+  if @core.fx_outline_on(fx) {
+    let d = @pixel.field_dilate(a, fx_radius(fx.outline_w))
+    let o = @pixel.field_new(ww, wh)
+    let mut i = 0
+    let total = ww * wh
+    while i < total {
+      let x = i % ww
+      let y = i / ww
+      let v = @pixel.field_get(d, x, y) - @pixel.field_get(a, x, y)
+      @pixel.field_set(o, x, y, if v > 0.0 { v } else { 0.0 })
+      i = i + 1
+    }
+    // 描边画在层的**上面**：此时 out 里已经有"层自己"，描边覆盖在它之外的那圈
+    fx_under(out, o, fx.outline_color, wx0, wy0, wx1, wy1)
+  }
+  out
+}
+
+///|
+/// `apply_fx` 的**工作窗**（左闭右开）：这一层真的有像素的外接盒（读数据，
+/// 不是拿模型猜）再按四件套的最大扩散量往外扩、最后夹进画布。
+///
+/// 空（这一层一个像素都没画 / 完全在画布外）时返回 `None`——调用方据此
+/// **什么都不做**（不是"照常走一遍再得到空结果"）。
+///
+/// 为什么这不是"第二条判据"：窗只决定**算了哪块区域**，逐件的语义判据仍在
+/// `@core.fx_*_on` 一处；窗外覆盖度恒为 0，所以裁与不裁**逐位相同**
+/// （`render/fx_wbtest.mbt` 断言"窗外逐位等于入参"）。
+fn fx_work_window(
+  buf : @codec.RgbaBuf,
+  fx : @core.LayerFx,
+) -> (Int, Int, Int, Int)? {
+  let (bx0, by0, bx1, by1) = fx_content_bounds(buf)
+  if bx1 <= bx0 || by1 <= by0 {
+    return None
+  }
+  let reach = fx_reach(fx)
+  let wx0 = if bx0 - reach > 0 { bx0 - reach } else { 0 }
+  let wy0 = if by0 - reach > 0 { by0 - reach } else { 0 }
+  let wx1 = if bx1 + reach < buf.width { bx1 + reach } else { buf.width }
+  let wy1 = if by1 + reach < buf.height { by1 + reach } else { buf.height }
+  Some((wx0, wy0, wx1, wy1))
+}
+
+///|
+/// 这一层**真的有像素**的范围（左闭右开）：内容缓冲里 alpha ≠ 0 的最小外接盒。
+/// 空（一个像素都没有）时返回 `bx1 <= bx0`。
+fn fx_content_bounds(buf : @codec.RgbaBuf) -> (Int, Int, Int, Int) {
+  let mut x0 = buf.width
+  let mut y0 = buf.height
+  let mut x1 = 0
+  let mut y1 = 0
+  let mut y = 0
+  while y < buf.height {
+    let mut x = 0
+    while x < buf.width {
+      if (buf.pixels[y * buf.width + x] & 0xFF000000) != 0 {
+        if x < x0 {
+          x0 = x
+        }
+        if y < y0 {
+          y0 = y
+        }
+        if x + 1 > x1 {
+          x1 = x + 1
+        }
+        if y + 1 > y1 {
+          y1 = y + 1
+        }
+      }
+      x = x + 1
+    }
+    y = y + 1
+  }
+  (x0, y0, x1, y1)
+}
+
+///|
+/// 四件套在这张画布上的**最大扩散量**（像素）：模糊半径 + 偏移 + 1px 取整余量。
+///
+/// 这是**代价上界**（多扩一圈只是慢一点），不是语义判据——所以用浮点直接算、
+/// 不去复刻 `field_shift` 的四舍五入（复刻就是第二份判据）。
+fn fx_reach(fx : @core.LayerFx) -> Int {
+  let absd = fn(v : Double) -> Double { if v < 0.0 { 0.0 - v } else { v } }
+  let mut reach = 0.0
+  if @core.fx_shadow_on(fx) {
+    let r = fx_radius(fx.shadow_blur) + absd(fx.shadow_dx) + absd(fx.shadow_dy)
+    if r > reach {
+      reach = r
+    }
+  }
+  if @core.fx_glow_on(fx) {
+    let r = fx_radius(fx.glow_radius)
+    if r > reach {
+      reach = r
+    }
+  }
+  if @core.fx_inner_on(fx) {
+    let r = fx_radius(fx.inner_blur) + absd(fx.inner_dx) + absd(fx.inner_dy)
+    if r > reach {
+      reach = r
+    }
+  }
+  if @core.fx_outline_on(fx) {
+    let r = fx_radius(fx.outline_w)
+    if r > reach {
+      reach = r
+    }
+  }
+  reach.to_int() + 1
+}
+
+///|
+/// 半径/宽度的**能力上限**（`@core.FX_MAX_RADIUS`）：超过它的部分按上限算。
+/// 夹在唯一一处，与 `fx_param_error` 报出的上限是同一个常量——错误提示里那句
+/// "超过上限的部分不会让效果更大"因此是真的（护栏 = 能力上限，PLAN 十九）。
+fn fx_radius(v : Double) -> Double {
+  if v > @core.FX_MAX_RADIUS {
+    @core.FX_MAX_RADIUS
+  } else {
+    v
+  }
+}
+
+///|
+/// 从"这一层自己的像素"里取覆盖度场（alpha/255），只在工作窗
+/// `[wx0,wx1) × [wy0,wy1)` 上取（场的局部坐标 = 画布坐标 − 窗原点）。
+fn fx_alpha_field(
+  buf : @codec.RgbaBuf,
+  wx0 : Int,
+  wy0 : Int,
+  wx1 : Int,
+  wy1 : Int,
+) -> @pixel.Field {
+  let f = @pixel.field_new(wx1 - wx0, wy1 - wy0)
+  let mut y = wy0
+  while y < wy1 {
+    let mut x = wx0
+    while x < wx1 {
+      let p = @codec.rgba_get(buf, x, y)
+      @pixel.field_set(f, x - wx0, y - wy0, ((p >> 24) & 0xFF).to_double() / 255.0)
+      x = x + 1
+    }
+    y = y + 1
+  }
+  f
+}
+
+///|
+/// 把"某个覆盖度场 × 某个颜色"以 source-over 叠到 `dst` 上（四件套共用的唯一
+/// 一处合成：影/发光/内影/描边都只是"场 + 颜色"）。
+fn fx_under(
+  dst : @codec.RgbaBuf,
+  f : @pixel.Field,
+  color : Int,
+  wx0 : Int,
+  wy0 : Int,
+  wx1 : Int,
+  wy1 : Int,
+) -> Unit {
+  let ca = (color >> 24) & 0xFF
+  if ca <= 0 {
+    return
+  }
+  let mut y = wy0
+  while y < wy1 {
+    let mut x = wx0
+    while x < wx1 {
+      let cov = @pixel.field_get(f, x - wx0, y - wy0)
+      if cov > 0.0 {
+        let a255 = (ca.to_double() * cov + 0.5).to_int()
+        if a255 > 0 {
+          let src = (a255 << 24) + (color & 0x00FFFFFF)
+          @codec.rgba_set(
+            dst,
+            x,
+            y,
+            composite_pixel(@codec.rgba_get(dst, x, y), src, @core.BlendMode::Normal),
+          )
+        }
+      }
+      x = x + 1
+    }
+    y = y + 1
+  }
 }
 
 ///|
@@ -2349,12 +2670,32 @@ fn blend_buffer(
   src : @codec.RgbaBuf,
   mode : @core.BlendMode,
 ) -> Unit {
-  let w = if dst.width < src.width { dst.width } else { src.width }
-  let h = if dst.height < src.height { dst.height } else { src.height }
-  let mut y = 0
-  while y < h {
-    let mut x = 0
-    while x < w {
+  blend_buffer_window(dst, src, mode, 0, 0, dst.width, dst.height)
+}
+
+///|
+/// 同 `blend_buffer`，但只扫 `[x0,x1) × [y0,y1)` 那块矩形（画布外的部分照样
+/// 会按两个缓冲的较小尺寸夹住）。
+///
+/// 住在同一处是为了**不出现第二份合成判据**：样式那条路（`apply_fx`）只需要
+/// 它的工作窗，而"怎么把一个缓冲叠到另一个上"只有这一个循环说了算。
+fn blend_buffer_window(
+  dst : @codec.RgbaBuf,
+  src : @codec.RgbaBuf,
+  mode : @core.BlendMode,
+  x0 : Int,
+  y0 : Int,
+  x1 : Int,
+  y1 : Int,
+) -> Unit {
+  let cw = if dst.width < src.width { dst.width } else { src.width }
+  let ch = if dst.height < src.height { dst.height } else { src.height }
+  let ex = if x1 < cw { x1 } else { cw }
+  let ey = if y1 < ch { y1 } else { ch }
+  let mut y = if y0 > 0 { y0 } else { 0 }
+  while y < ey {
+    let mut x = if x0 > 0 { x0 } else { 0 }
+    while x < ex {
       let fg = @codec.rgba_get(src, x, y)
       if (fg & 0xFF000000) != 0 {
         let bg = @codec.rgba_get(dst, x, y)

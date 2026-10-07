@@ -47,7 +47,7 @@ macOS 原生类 Photoshop 编辑器。对本工程最有价值的三块遗产：
 
 ```
 宿主    cli（native 行协议 + 文件 FFI + 原子落盘）
-交互    agent（70 命令 · vision 闸 · undo/redo · 步骤历史 history/goto · P0–P2 lint · MVSL 闭环 · 工具字典）
+交互    agent（71 命令 · vision 闸 · undo/redo · 步骤历史 history/goto · P0–P2 lint · MVSL 闭环 · 工具字典）
 容器    mpd（pack/unpack · manifest/params/agent/mvsl · 指纹对账 · 限额 · 预览生成）
 渲染    render（RGBA 画布 · 2×2 子采样 AA · W3C 混合 · 旋转 · 取景 · pick · stats）
 核心    core（IR 层树 · canonical JSON 双向 · 指纹 · 层定位原语 · MVSL 编辑表 IR）
@@ -83,8 +83,8 @@ macOS 原生类 Photoshop 编辑器。对本工程最有价值的三块遗产：
 - 层属性（`Layer` 字段，与代码**逐字对账**）：
   <!-- layer-fields:begin -->
   `id` `name` `kind` `visible` `opacity` `blend` `x` `y` `w` `h` `rotation_deg`
-  `corner_radius` `flip_h` `flip_v` `text` `font_size` `mask` `adjust` `points`
-  `handles` `dabs` `fill` `stroke` `asset_hash` `tags` `children`
+  `corner_radius` `flip_h` `flip_v` `text` `font_size` `mask` `adjust` `fx`
+  `points` `handles` `dabs` `fill` `stroke` `asset_hash` `tags` `children`
   <!-- layer-fields:end -->
   ——`opacity` 0..1；`rotation_deg` 顺时针绕层中心；`flip_h/flip_v` 先翻转后旋转；
   部分字段只对特定 kind 有意义，那一面由 `agent/ops.mbt` 的 `kind_only_fields`
@@ -282,7 +282,7 @@ manifest 的 `mvsl` 版本块 pin 住四个独立版本号（`render_contract` /
   **空断言**即保护断言的选择子零命中（P1——恒真，比"被违反"更坏，因为它给的是虚假的安心）。
   空编辑表是合法状态，不报条目——lint 不该对「我还没改任何东西」报警。
 
-## 6. 命令集（70 个；字典 = agent/tools.mbt 单一事实源）
+## 6. 命令集（71 个；字典 = agent/tools.mbt 单一事实源）
 
 会话：`session-open` `list-tools` `help`；文档：`new` `set-canvas` `list-layers` `query-layer` `lint`；
 绘制：`add-rect/ellipse/polygon/line` `add-path` `path-preview` `bool-op`（两个形状 → 一个新路径层）`add-image`（b64）`set-image`（原地换图，只换像素）`set-style` `move` `resize` `rotate` `transform`（自由变换：位置+盒子+旋转**一次**写完 = 一步历史）`rename` `tag` `delete` `visible` `reorder` `group` `ungroup` `group-add` `group-remove`（成员增删）；
@@ -947,11 +947,57 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
   "装的时候合法、渲染时才变贵"的那条路（有测试专门守这条）。`lint` 经
   `impact_stages` 自动以 P0 报出同一句话，不另设判据。
 
+- **图层样式（fx）**：投影 / 描边 / 外发光 / 内阴影是"**这一层自己像素的一部分**"
+  （读点矩阵里它属于"有自己像素的层"：几何/路径/文本/位图/笔触/组；
+  **调整层没有自己的像素**，装不了——入口拒、`lint` 兜）。渲染口径只有一处
+  （`render.apply_fx`）：先把这一层按 `opacity=1` 栅格化到它**自己的透明缓冲**
+  （**祖先变换一路带着**，组里的层走同一条路），在"这一层的覆盖度场"上依次加
+  **投影 → 外发光 → 层自己 → 内阴影 → 描边**，最后把整块按这一层的
+  `opacity` 与 `blend` **合成一次**。
+  * 顺序不是口味：影/发光在层的**下面**、内影/描边在层的**上面**；
+    `opacity` 必须留到**最后一步**乘——先烤进内容缓冲的话 `dilate(A) − A` 会把
+    半透明层的描边算成 0，样式**凭空消失**。
+  * **能力上限 64px**（`@core.FX_MAX_RADIUS`，判据一处 `fx_param_error`）：模糊
+    半径/描边宽度超过它**按上限算**——画面不会更大，只是更慢。入口拒绝并把这句
+    话写在错误里，`lint` 用手改容器兜底（PLAN 十九：护栏只要会改输出就必须报出来）。
+  * **"开关开着却画不出像素"**（不模糊也不偏移 / 颜色全透明 / 宽度取整为 0）
+    由 `@core.fx_*_on` **一处**判：渲染器跳过它、`lint` 逐件报出。这一档
+    **不抬渲染契约档**——老引擎画出来**逐位相同**，抬档等于撒谎。
+  * **渲染契约档 7**（`RENDER_CONTRACT_FX`）：`required_render_contract` 扫
+    **整棵层树**（`all_layers`，本轮顺带修掉一个真 bug：组里的路径/蒙版/克隆
+    此前不抬档）并取最高档；旧引擎对内层的新语义会静默错渲，所以必须拒绝打开。
+  * **工作窗**：样式本来就要溢出层的盒子（影/发光），场的运算只在"这一层**真的
+    有像素**的外接盒 + 最大扩散量"上做（`fx_work_window`，**读数据**而不是拿模型
+    预测窗）。窗外覆盖度恒为 0 ⇒ 裁与不裁**逐位相同**（白盒判据：窗外逐位等于
+    入参）。**代价随层自己的面积走**，不随画布上"有没有样式"走——
+    12MP 画布、四件套全开、`python3 bench_perf.py m5`（3 次取中位）：
+
+  <!-- bench-table: m5 -->
+  | 文档 | 端到端 |
+  | :-- | --: |
+  | 1 个普通层 200×200（对照） | 0.59 s |
+  | 1 个样式层 200×200 | 0.71 s |
+  | 5 个样式层 200×200 | 1.04 s |
+  | 1 个样式层 整幅 4000×3000 | 2.95 s |
+  <!-- bench-table:end -->
+
+  即小样式层每层边际 ≈ 84 ms；整幅样式层 2.95 s 是这条路的**上界**。
+  每层那份与画布同尺寸的离屏缓冲**去不掉**——"样式属于这一层的像素"这个语义
+  本身就要求先有"这一层自己的画面"。
+  * **声明边界**（做多少写多少）：①**不做多层样式叠加**（一层一份样式，
+    没有"再叠一道描边"）；②fx **没有自己的混合模式**（整块用层的 `blend`）；
+    ③**不做渐变描边**（描边是纯色）；④组上装样式时作用于**组栅格化之后的整块**
+    （不是逐子层——逐子层会让子层之间的接缝也长出一道描边）；⑤fx 与
+    编辑表/MVSL 算子互不影响（算子作用在合成底图上，样式作用在层自己的像素上）。
+  * **已知错位**（备查，不做）：样式会画到层的盒子**外**（影/发光），而
+    `pick`/`sample` 仍按层的支撑窗判定 ⇒ **点在影上选不中那一层**——
+    与"线段描边伸出渲染窗被裁"同一类：看得见、但点不着。
+
 - **能力边界的权威清单是 `docs/scorecard.md`**（由 `scorecard.py` 从
   `scorecard/areas.toml` 生成、`verify.sh#scorecard` 逐字节核对）：8 个域 63 条，
   每条一个状态三档（**已做 / 部分+声明边界 / 未做**）与一个**唯一命中**的源码锚点。
-  它存在的理由是一条现场教训：**接线计数不是能力**——"70 条命令 / 60 个工具 /
-  70 条人类可达"说的全是**入口存在**，而一个入口背后可能只是"回一个错误"，
+  它存在的理由是一条现场教训：**接线计数不是能力**——"71 条命令 / 61 个工具 /
+  71 条人类可达"说的全是**入口存在**，而一个入口背后可能只是"回一个错误"，
   或者更坏：参数收下了、一个像素都没读（这一类现在由 `key_effect_audit.py`
   现场数：187 个（命令, 键）配对，死键目标 0，"测不出来"单列不许算通过）。
   ⚠️ 锚点与门禁列保证的是"这条依据还在、那条门禁还在守"，**保证不了"依据说的话

@@ -442,3 +442,100 @@ test "属性面板：布尔运算段 —— 有「上一个选中的层」时给
   let h3 = props_html(r, roots, "l1", "底")
   assert_true(lacks_sub(h3, "__bool_op"), msg=h3)
 }
+
+///|
+test "属性面板：图层样式（fx）四件套开关，只给开着的那几件画参数框" {
+  // 值**只来自引擎 `query-layer` 报的 `fx` 串**（引擎只报开着的）：面板不编
+  // 第二份缺省值——编了就是"同一件事两个事实源"，改了引擎面板就静悄悄画错。
+  let roots = panel_layers()
+  let caps = "\"caps\":[\"move\",\"resize\",\"opacity\",\"blend\",\"rotate\",\"flip\",\"mask\",\"fx\"]"
+  // ① 有 fx 能力、样式全关：四个开关都画（点了是用缺省参数打开），
+  //    一个参数框、一个"清除全部"都不画
+  let off = parse_json_safe(
+    "{\"id\":\"l1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"fx\":\"all-off\"," +
+    caps + "}",
+  )
+  let ho = props_html(off, roots, "", "")
+  for k in ["shadow", "outline", "glow", "inner"] {
+    assert_true(
+      has_sub(ho, "globalThis.__fx_sw(\"l1\",\"" + k + "\",\"1\")"),
+      msg="全关时缺 \{k} 的开关（点了发 set-fx …=\{k}=1）：\{ho}",
+    )
+  }
+  assert_true(lacks_sub(ho, "__fx_key"), msg="全关时不该画参数框（引擎没报那些参数）：\{ho}")
+  assert_true(lacks_sub(ho, "__fx_clear"), msg="没有样式就不该有「清除全部」：\{ho}")
+  // ② 四件套全开：每件的每个参数一个框、值按引擎报的填；开关变成"点一下关"；
+  //    出现「清除全部」
+  let on = parse_json_safe(
+    "{\"id\":\"l1\",\"name\":\"底\",\"kind\":\"rect\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"fx\":\"shadow(-9,4,4,#00000080),outline(7.5,#FF0000FF),glow(12,#FFD70080),inner(3,-3,6,#00000080)\"," +
+    caps + "}",
+  )
+  let hn = props_html(on, roots, "", "")
+  for k in [
+    "shadow_dx",
+    "shadow_dy",
+    "shadow_blur",
+    "shadow_color",
+    "outline_w",
+    "outline_color",
+    "glow_radius",
+    "glow_color",
+    "inner_dx",
+    "inner_dy",
+    "inner_blur",
+    "inner_color",
+  ] {
+    assert_true(
+      has_sub(hn, "globalThis.__fx_key(\"l1\",\"" + k + "\",this.value)"),
+      msg="开着的那一件缺 \{k} 的输入框：\{hn}",
+    )
+  }
+  // 当前值要回显（否则人一改就把别的分量写丢——部分更新只发自己那一格，
+  // 但回显错了人看到的就是假状态）
+  assert_true(has_sub(hn, "value='-9'"), msg="投影 dx 要回显：\{hn}")
+  assert_true(has_sub(hn, "value='#FFD70080'"), msg="发光的颜色要按引擎报的填：\{hn}")
+  // 开关方向：开着 ⇒ 再点发 0（关掉，参数留着）
+  assert_true(has_sub(hn, "globalThis.__fx_sw(\"l1\",\"shadow\",\"0\")"), msg=hn)
+  assert_true(has_sub(hn, "globalThis.__fx_clear(\"l1\")"), msg=hn)
+  // ③ 能力表里没有 fx（调整层：它没有自己的像素）：一个 fx 控件都不画——
+  //    两头都要咬：只查"矩形上有"会漏掉"给调整层画了没用的控件"
+  let adj = parse_json_safe(
+    "{\"id\":\"a1\",\"name\":\"调亮\",\"kind\":\"adjust\",\"adjust\":{\"op\":\"brightness\",\"value\":0.3},\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"fx\":\"none\",\"caps\":[\"opacity\",\"mask\",\"adjust\"]}",
+  )
+  let ha = props_html(adj, roots, "", "")
+  assert_true(lacks_sub(ha, "__fx_sw"), msg="调整层不该有样式开关：\{ha}")
+  assert_true(lacks_sub(ha, "__fx_key"), msg="调整层不该有样式参数框：\{ha}")
+  // ④ 解析器本身：none / all-off / 空串 ⇒ 空表；单件与多件按件切
+  assert_eq(fx_parse("none").length(), 0)
+  assert_eq(fx_parse("all-off").length(), 0)
+  assert_eq(fx_parse("").length(), 0)
+  let one = fx_parse("outline(3,#000000FF)")
+  assert_eq(one.length(), 1)
+  assert_eq(one[0].0, "outline")
+  assert_eq(one[0].1.join(","), "3,#000000FF")
+  let four = fx_parse("shadow(4,4,4,#00000080),outline(3,#000000FF),glow(6,#FFD70080),inner(2,2,4,#00000080)")
+  assert_eq(four.length(), 4, msg="四件要切成四项：\{four.length()}")
+  assert_eq(four[2].0, "glow")
+  assert_eq(four[3].1.length(), 4)
+  // ⑤ **开着的那件必须画出参数框**——这一格守的是一次真实事故：解析先按 `,`
+  // 切再找括号，于是 `shadow(4,4,4,#00000080)` 被切碎、解析结果为空，四个开关
+  // 全画成"关"、参数框一个都没有（引擎明明报着开着）。只看"关"的那半是照不到的。
+  let on = fx_html("l1", "shadow(4,4,4,#00000080),outline(3,#FF0000FF)")
+  assert_true(
+    on.contains("__fx_sw(\"l1\",\"shadow\",\"0\")"),
+    msg="开着的投影要给一个\"关\"按钮（值 0）：\{on}",
+  )
+  assert_true(
+    on.contains("__fx_key(\"l1\",\"shadow_dx\",this.value)"),
+    msg="开着的投影要画 dx 参数框：\{on}",
+  )
+  assert_true(
+    on.contains("__fx_key(\"l1\",\"outline_w\",this.value)"),
+    msg="开着的描边要画宽度参数框：\{on}",
+  )
+  assert_true(on.contains("__fx_clear(\"l1\")"), msg="有样式时要有「清除全部」：\{on}")
+  // 负控：一件都没开时，上述三样一个都不许出现（否则上面几条可以被"永远画出来"满足）
+  let off = fx_html("l1", "none")
+  assert_true(!off.contains("__fx_key"), msg="没有样式时不该画参数框：\{off}")
+  assert_true(!off.contains("__fx_clear"), msg="没有样式时不该画「清除全部」：\{off}")
+}

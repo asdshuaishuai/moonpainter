@@ -77,21 +77,21 @@ test "caps：逐 kind 的完整能力表（人类面板据此画控件）" {
   // 死数据 ⇒ 入口拒、`lint` 兜、人类面板画只读回显）
   for id in ["r1", "e1", "g1", "l1"] {
     assert_true(
-      caps_str(s, id) == "move,resize,opacity,blend,rotate,flip,mask",
+      caps_str(s, id) == "move,resize,opacity,blend,rotate,flip,mask,fx",
       msg="\{id} 的能力表：\{caps_str(s, id)}",
     )
   }
   // 文本：位置读、盒子不参与渲染（`resize` 改不动画面 ⇒ 不报）、
   // `rotate`/`flip` 从 PLAN 六十一起读（字形逐点过完整变换链，绕自己的盒子中心）
   assert_true(
-    caps_str(s, "t1") == "move,opacity,rotate,flip,mask,text,font_size",
+    caps_str(s, "t1") == "move,opacity,rotate,flip,mask,text,font_size,fx",
     msg="文本层的能力表：\{caps_str(s, "t1")}",
   )
   // 笔触：位置挪笔触、`rotate`/`flip` 从本轮起也读（绕**落笔范围中心**转，
   // 见 PLAN 六十）；盒子（resize）不参与渲染——它是**派生**的，`resize` 只改
   // 那份没人读的快照
   assert_true(
-    caps_str(s, "p1") == "move,opacity,rotate,flip,mask",
+    caps_str(s, "p1") == "move,opacity,rotate,flip,mask,fx",
     msg="笔触层：\{caps_str(s, "p1")}",
   )
   // 组：`move` 是"搬后代"（组自己没画面，后代里有读位置的层才算有能力——
@@ -99,14 +99,14 @@ test "caps：逐 kind 的完整能力表（人类面板据此画控件）" {
   // 祖先链、子层的 `to_local` 会经过它，见 PLAN 五十六）；另有 `children`；
   // 盒子（resize）不读，`mask` 也不读（渲染器对组不看 mask）
   assert_true(
-    caps_str(s, "grp") == "move,opacity,rotate,flip,children",
+    caps_str(s, "grp") == "move,opacity,rotate,flip,fx,children",
     msg="组的能力表：\{caps_str(s, "grp")}",
   )
   // 调整层：只有蒙版与算子；位置/盒子/旋转/翻转都不读
   assert_true(caps_str(s, "a1") == "opacity,mask,adjust", msg="调整层：\{caps_str(s, "a1")}")
   // 位图：换图是一条能力（`set-image`）
   assert_true(
-    caps_str(s, "i1") == "move,resize,opacity,blend,rotate,flip,mask,asset",
+    caps_str(s, "i1") == "move,resize,opacity,blend,rotate,flip,mask,fx,asset",
     msg="位图的能力表：\{caps_str(s, "i1")}",
   )
   // 正控的反面：`list-layers` 也报同一张表（两处报同一件事，别只报一条路）

@@ -64,6 +64,25 @@ KEY_FIELD = {
     "feather": "mask",
     "roughen": "mask",
     "invert": "mask",
+    # 图层样式（fx，set-fx）：16 个参数 + clear 改的都是 `fx` 这一个字段
+    # （它是 `LayerFx` 整份样式；`clear=1` = 把整份摘掉，仍改这个字段）
+    "clear": "fx",
+    "shadow": "fx",
+    "shadow_dx": "fx",
+    "shadow_dy": "fx",
+    "shadow_blur": "fx",
+    "shadow_color": "fx",
+    "outline": "fx",
+    "outline_w": "fx",
+    "outline_color": "fx",
+    "glow": "fx",
+    "glow_radius": "fx",
+    "glow_color": "fx",
+    "inner": "fx",
+    "inner_dx": "fx",
+    "inner_dy": "fx",
+    "inner_blur": "fx",
+    "inner_color": "fx",
     # brush / erase（位置参数是层 id + 一串点，其余走键）
     "pts": "dabs",
     "r": "dabs",
@@ -99,6 +118,7 @@ CMD_FIELD = {
     "remove-mask": ["mask"],
     "add-adjust": ["adjust"],
     "set-adjust": ["adjust"],
+    "set-fx": ["fx"],
     "set-text": ["text", "font_size", "w", "h"],
     "set-style": [
         "fill",

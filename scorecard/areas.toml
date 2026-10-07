@@ -124,10 +124,10 @@ note = "叠加式像素算子，作用于其下全部可见层；蒙版覆盖度
 [[area.item]]
 id = "layer-styles"
 title = "图层样式 fx：投影 / 描边 / 外发光 / 内阴影"
-status = "missing"
-anchor = "render/scene.mbt#paint_layer"
-must_contain = "paint_layer"
-note = "渲染器逐层只画自己的面，没有 fx 阶段；`Layer` 里也没有样式字段——这是本轮之后的第一优先能力。"
+status = "done"
+anchor = "render/scene.mbt#apply_fx"
+must_contain = "pub fn apply_fx"
+note = "层自己像素的一部分：先整层栅格化到自己的缓冲 → 在覆盖度场（`Field`）上做四件套 → 最后**一步**乘 opacity/blend（先乘会把半透明层的描边算没）。场的工作窗按层**实际范围 + 扩散量**裁（`fx_reach`），与整画布逐位相同；半径上限 64 由 `fx_param_error` 一处判、渲染器显式夹住。边界：不做样式各自的混合模式/渐变描边/多重叠影，`Adjust` 层没有样式（入口拒、lint 报）。"
 
 [[area.item]]
 id = "free-brush"
@@ -468,10 +468,10 @@ note = "手柄画不画由 `caps` 说了算（文本/笔触/调整层只画框�
 [[area.item]]
 id = "fx-panel"
 title = "图层样式 fx 的属性面板（投影/描边/发光/内阴影）"
-status = "missing"
+status = "done"
 anchor = "demo/main.mbt#props_html"
 must_contain = "props_html"
-note = "面板按引擎报出的参数面画控件；引擎还没有 fx 参数面，面板自然也画不出来。"
+note = "四件套的开关与参数都由 `props_html` 按 `query-layer` 报出的样式面画控件，点击走 `do_ui_cmd`（同一条 `set-fx` 命令，没有旁路）；`panel_html_wbtest` 直接调纯函数断言控件存在，`clickthrough` 用哑 DOM 调处理器再从引擎读回。"
 [[area.item]]
 id = "text-panel"
 title = "文本排版面板（对齐/行距/字距/换行）"

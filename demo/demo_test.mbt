@@ -181,6 +181,111 @@ async test "AI 修图端到端：mock 模型 × wasm 引擎 × 全程可见 × u
   assert_true(t1.contains("\"visible\":false"), msg="visible 工具未生效：\{t1}")
   assert_eq(renders - renders_before4, 1, msg="文字回合的图像附件数")
   assert_true(summary4.contains("标题"), msg=summary4)
+  // ── 回合 5：图层样式（fx）──
+  // 两个面都要真：①人类面板的 fx 控件与**引擎报的串**逐件对齐（面板的
+  // `fx_effect_rows` 是画控件用的表，"哪一件有哪些参数"的判据在引擎那边——
+  // 所以这里拿真引擎报回来的串喂 `@demo.fx_parse`，个数/值对不上就红，
+  // 不靠人眼比对两处）；②样式真的改画面（render sha256 变）。
+  let _ = @demo.engine_exec_line("new 60 40")
+  let _ = @demo.engine_exec_line("add-rect id=r1 x=10 y=10 w=30 h=20 fill=#3366FFFF")
+  let sha_plain = fx_sha(@demo.engine_exec_line("render"))
+  let on = @demo.engine_exec_line(
+    "set-fx r1 shadow=1 shadow_dx=-9 outline=1 outline_w=7.5 glow=1 glow_radius=12 inner=1 inner_dy=-3",
+  )
+  assert_true(on.contains("\"ok\":true"), msg=on)
+  let rep = fx_report_of(@demo.engine_exec_line("query-layer r1"))
+  let parsed = @demo.fx_parse(rep)
+  assert_eq(parsed.length(), 4, msg="四件套全开要报四项：\{rep}")
+  for row in @demo.fx_effect_rows() {
+    let (name, _label, params) = row
+    let got : Array[String] = {
+      let mut hit : Array[String] = []
+      for e in parsed {
+        if e.0 == name {
+          hit = e.1
+        }
+      }
+      hit
+    }
+    assert_eq(
+      got.length(),
+      params.length(),
+      msg="引擎报的 \{name} 参数个数与面板控件表不一致（面板会画错格子）：\{rep}",
+    )
+    // 值也要对上：面板第一格显示的就该是引擎报的第一个值
+    let mut i = 0
+    for v in got {
+      assert_true(v != "", msg="\{name} 第 \{i} 个参数是空的：\{rep}")
+      i = i + 1
+    }
+  }
+  assert_eq(fx_param(parsed, "shadow", 0), "-9", msg="投影 dx：\{rep}")
+  assert_eq(fx_param(parsed, "outline", 0), "7.5", msg="描边宽：\{rep}")
+  assert_eq(fx_param(parsed, "glow", 0), "12", msg="发光半径：\{rep}")
+  assert_eq(fx_param(parsed, "inner", 1), "-3", msg="内阴影 dy：\{rep}")
+  assert_true(
+    fx_sha(@demo.engine_exec_line("render")) != sha_plain,
+    msg="装了样式而画面逐位不变（样式没人读）",
+  )
+  // 摘掉：回包说 none、解析器给空表（面板于是回到"四件全关"的形态）
+  let off = @demo.engine_exec_line("set-fx r1 clear=1")
+  assert_true(off.contains("\"fx\":\"none\""), msg=off)
+  assert_eq(
+    @demo.fx_parse(fx_report_of(@demo.engine_exec_line("query-layer r1"))).length(),
+    0,
+    msg="clear 之后面板还画着参数格子",
+  )
+  assert_eq(
+    fx_sha(@demo.engine_exec_line("render")),
+    sha_plain,
+    msg="摘掉样式后画面该回到原样（逐位）",
+  )
+}
+
+///|
+/// `render` 回包里的 `render_sha256`（缺字段/不是 JSON 就 abort——静默取空串
+/// 会让"两次渲染不同"这种断言对什么都成立）。
+/// ⚠️ 字段名是**渲染产物**的 sha（`render_sha256`）：`sha256` 这个键不存在，
+/// 写成它会让整条 e2e 在 abort 上炸（实测踩过）。
+fn fx_sha(text : String) -> String {
+  match @demo.parse_json_safe(text) {
+    Json::Object(m) =>
+      match m.get("render_sha256") {
+        Some(Json::String(s)) => s
+        _ => abort("render 没报 render_sha256：\{text}")
+      }
+    _ => abort("render 回包不是 JSON：\{text}")
+  }
+}
+
+///|
+/// `query-layer` 回包里的 `layer.fx` 串。
+fn fx_report_of(text : String) -> String {
+  match @demo.parse_json_safe(text) {
+    Json::Object(m) =>
+      match m.get("layer") {
+        Some(Json::Object(l)) =>
+          match l.get("fx") {
+            Some(Json::String(s)) => s
+            _ => abort("query-layer 没报 layer.fx：\{text}")
+          }
+        _ => abort("query-layer 没报 layer：\{text}")
+      }
+    _ => abort("query-layer 回包不是 JSON：\{text}")
+  }
+}
+
+///|
+/// 面板解析出来的某一件的第 i 个参数（不在就 abort）。
+fn fx_param(parsed : Array[(String, Array[String])], name : String, i : Int) -> String {
+  for e in parsed {
+    if e.0 == name {
+      if i < e.1.length() {
+        return e.1[i]
+      }
+    }
+  }
+  abort("没有 \{name} 的第 \{i} 个参数")
 }
 
 ///|
@@ -392,6 +497,58 @@ test "调整层要能改值：set_adjust 原地改、不丢层序" {
     @demo.parse_json_safe("{\"id\":\"l2\",\"op\":\"contrast\",\"value\":\"0.2\"}"),
   )
   assert_eq(p3, "set-adjust l2 op=contrast value=0.2")
+}
+
+///|
+test "图层样式工具行：set_fx 拼得出 set-fx（部分更新、clear 与别的键互斥由引擎拒）" {
+  // 两张表都得接上：`tool_cmd`（工具名→命令名，`undispatched_tools()` 守）
+  // 与 `tool_line`（参数→整行）。这里测第二张：键表 `fx_arg_keys` 一处，
+  // 顺序固定，**只拼给了的键**（缺键 = 不改那一格，引擎按部分更新处理）。
+  assert_eq(
+    @demo.tool_line("set_fx", @demo.parse_json_safe("{\"id\":\"l1\",\"shadow\":true}")),
+    "set-fx l1 shadow=1",
+  )
+  assert_eq(
+    @demo.tool_line("set_fx", @demo.parse_json_safe("{\"id\":\"l1\",\"clear\":true}")),
+    "set-fx l1 clear=1",
+  )
+  assert_eq(@demo.tool_line("set_fx", @demo.parse_json_safe("{\"id\":\"l1\"}")), "set-fx l1")
+  // 多键按**键表顺序**（不是模型给的顺序）：同一组参数永远拼出同一行
+  assert_eq(
+    @demo.tool_line(
+      "set_fx",
+      @demo.parse_json_safe(
+        "{\"id\":\"l1\",\"outline_w\":3,\"shadow\":true,\"shadow_dy\":-4,\"glow\":true}",
+      ),
+    ),
+    "set-fx l1 shadow=1 shadow_dy=-4 outline_w=3 glow=1",
+  )
+  // 值里的 `#` 不是注释、数字负数不被吃掉（`fmt_arg_num` 一处）
+  assert_eq(
+    @demo.tool_line(
+      "set_fx",
+      @demo.parse_json_safe("{\"id\":\"l1\",\"outline_color\":\"#FF0000FF\"}"),
+    ),
+    "set-fx l1 outline_color=#FF0000FF",
+  )
+  // 面板的解析器与工具面的键表是**同一份名字**：`fx_arg_keys` 里每个键都能被
+  // `fx_effect_rows` 认领（少一个 = 那个参数人类侧改不动而 AI 侧改得动）
+  let declared : Array[String] = []
+  for row in @demo.fx_effect_rows() {
+    for p2 in row.2 {
+      declared.push(p2.0)
+    }
+  }
+  assert_eq(declared.length(), 12, msg="四件套的参数键数（2+4+2+4）：\{declared.join(",")}")
+  let mut dup = ""
+  let seen : Array[String] = []
+  for k in declared {
+    if seen.contains(k) {
+      dup = dup + k + ","
+    }
+    seen.push(k)
+  }
+  assert_eq(dup, "", msg="参数键重复了：\{dup}（全表 \{declared.join(",")}）")
 }
 
 ///|

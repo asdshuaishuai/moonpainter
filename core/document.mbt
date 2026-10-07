@@ -230,7 +230,10 @@ pub fn mask_param_error(m : LayerMask) -> String {
 /// 于是老引擎打开它、把套索画成方框。
 pub fn required_render_contract(doc : Document) -> Int {
   let mut rc = 1
-  for l in doc.layers {
+  // ⚠️ 扫**整棵层树**（不是只看顶层层）：组里的层带新语义时，老引擎照样会
+  // 打开、照样会静默错渲——而"组里装了什么"不影响"这份文档要求哪个渲染器"。
+  // （此前这里只遍历 `doc.layers`，于是组内的套索蒙版/贝塞尔/克隆笔触都不抬档。）
+  for l in all_layers(doc.layers) {
     // 贝塞尔路径：老引擎不认这个 kind（整层不画）⇒ 必须升档
     if l.kind is ShapeKind::Path && rc < RENDER_CONTRACT_PATH {
       rc = RENDER_CONTRACT_PATH
@@ -244,6 +247,15 @@ pub fn required_render_contract(doc : Document) -> Int {
           rc < RENDER_CONTRACT_ADJUST_PARAMS {
           rc = RENDER_CONTRACT_ADJUST_PARAMS
         }
+      None => ()
+    }
+    // 图层样式（fx）：老引擎根本不读 `Layer.fx`（投影/描边/外发光/内阴影
+    // 一件都不画），而"加了样式"与"没有样式"的画面差别极大 ⇒ 必须升档。
+    // 全 off 的 fx 不算（它本来就什么都不画，画面与没有 fx 逐位相同）。
+    match l.fx {
+      Some(f) => if fx_any_on(f) && rc < RENDER_CONTRACT_FX {
+        rc = RENDER_CONTRACT_FX
+      }
       None => ()
     }
     // 克隆笔触：老引擎会把它画成普通笔色（整笔一块死色）⇒ 必须升档
@@ -604,6 +616,182 @@ pub fn adjust_param_error(adj : Adjust) -> String? {
 }
 
 ///|
+/// **图层样式（fx）**：投影 / 描边 / 外发光 / 内阴影 四件套。
+///
+/// 语义（**层自己像素的一部分**，DESIGN §8 写死）：先把这一层栅格化到它自己的
+/// 透明缓冲、在**这张缓冲上**加四件套，再整块按层的 opacity/blend 混进目标。
+/// 于是样式跟着层走（移动/旋转/换蒙版都跟着），也**不会被下面那一层看见**。
+///
+/// 四个开关各带自己的参数：`shadow`（投影，向下/右各偏移 dx/dy、先按 blur 模糊）、
+/// `outline`（描边，`dilate(A, outline_w) − A`，画在层的**上面**）、
+/// `glow`（外发光，`blur(A, glow_radius)`，不位移，画在层的**下面**）、
+/// `inner`（内阴影，`A × (1 − shift(blur(A, inner_blur), inner_dx, inner_dy))`，
+/// 画在层的**上面**）。
+///
+/// `Layer.fx == None` = 这层没有样式（**历史行为**，老容器的字节与画面都不变）；
+/// `Some(fx)` 但四个开关全 off = "装了却什么都不干"——**入口不拦、lint 报**
+/// （同色阶的 value=0 那格：合法但不干活的层归 lint）。
+pub(all) struct LayerFx {
+  shadow : Bool
+  shadow_dx : Double
+  shadow_dy : Double
+  shadow_blur : Double
+  shadow_color : Int // 0xAARRGGBB（容器里写 #RRGGBBAA）
+  outline : Bool
+  outline_w : Double
+  outline_color : Int
+  glow : Bool
+  glow_radius : Double
+  glow_color : Int
+  inner : Bool
+  inner_dx : Double
+  inner_dy : Double
+  inner_blur : Double
+  inner_color : Int
+}
+
+///|
+/// 一件样式的**半径/宽度上限**（像素）。
+///
+/// 这是**能力上限**（PLAN 十九）：入口拒绝超过它的值、lint 兜住手改容器，
+/// 渲染器把超出的部分**显式夹到这里**（夹在哪一句只有这一个常量说了算）——
+/// 于是错误提示里那句"超过 64 的部分不会让效果更大"是真的，不是安慰话。
+pub const FX_MAX_RADIUS : Double = 64.0
+
+///|
+/// 图层样式的缺省值：全 off + 影/描边/发光/内影的常用参数。
+///
+/// `set-fx` 在这一层还没有 `fx` 时从这里起步（部分更新的底座）。
+///
+/// ⚠️ 颜色是 **ARGB**（`0xAARRGGBB`，与 `Fill`/`Stroke`/`Dab` 同一个口径），
+/// 而命令面/容器里写的是 `#RRGGBBAA`：两者是**同一批值**的两种写法——
+/// `0x80000000` ↔ `#00000080`（黑 50%）、`0x000000FF` ↔ `#000000FF`、
+/// `0x80FFD700` ↔ `#FFD70080`。写成 `0x00000080` 就变成"蓝=0x80、**全透明**"
+/// 的隐形颜色了（实测：默认投影一个像素都不落，而 `query-layer` 报得挺好看）。
+pub fn default_fx() -> LayerFx {
+  {
+    shadow: false,
+    shadow_dx: 4.0,
+    shadow_dy: 4.0,
+    shadow_blur: 4.0,
+    shadow_color: 0x80000000,
+    outline: false,
+    outline_w: 3.0,
+    outline_color: 0xFF000000,
+    glow: false,
+    glow_radius: 6.0,
+    glow_color: 0x80FFD700,
+    inner: false,
+    inner_dx: 2.0,
+    inner_dy: 2.0,
+    inner_blur: 4.0,
+    inner_color: 0x80000000,
+  }
+}
+
+///|
+/// 「参数真的会扩散/位移吗」——**与 `pixel.field_box_blur` 的门槛逐字对齐**：
+/// `trunc_pos(b) >= 1 ⟺ b >= 1`。
+pub fn fx_blur_draws(b : Double) -> Bool {
+  b >= 1.0
+}
+
+///|
+/// 「偏移真的会动吗」——**与 `pixel.field_shift` 的四舍五入逐字对齐**：
+/// `iround(d) != 0 ⟺ |d| >= 0.5`。这两处门槛必须同一个数：判据说"不画"而
+/// 渲染器画了 1 像素，就是"装了却什么都不干"这条 lint 谎报。
+pub fn fx_shift_draws(d : Double) -> Bool {
+  d >= 0.5 || d <= -0.5
+}
+
+///|
+/// 一件样式**到底会不会落像素**：开关 on、参数真会扩散/位移、颜色不是全透明。
+///
+/// 这是"这一件画不出东西"的**唯一判据**（lint 报它、渲染器据此跳过、契约档
+/// 据此决定要不要抬）；反过来也成立：四件都 `false` ⇒ 渲染器走**原来那条**
+/// 路径 ⇒ 画面与"没有 fx"**逐位相同**（铁律 7 的确定性由此有一处机器判据）。
+pub fn fx_shadow_on(fx : LayerFx) -> Bool {
+  fx.shadow &&
+  (fx_blur_draws(fx.shadow_blur) ||
+    fx_shift_draws(fx.shadow_dx) ||
+    fx_shift_draws(fx.shadow_dy)) &&
+  ((fx.shadow_color >> 24) & 0xFF) > 0
+}
+
+///|
+/// 描边：宽度 ≥1 且颜色不全透明（`outline_w=0` ⇒ `dilate(A,0) − A = 0`，
+/// 一个像素都不落）。
+pub fn fx_outline_on(fx : LayerFx) -> Bool {
+  fx.outline &&
+  fx_blur_draws(fx.outline_w) &&
+  ((fx.outline_color >> 24) & 0xFF) > 0
+}
+
+///|
+/// 外发光：半径 ≥1 且颜色不全透明（`glow_radius=0` 时 `blur(A,0) = A`，
+/// 压在自己底下＝看不见）。
+pub fn fx_glow_on(fx : LayerFx) -> Bool {
+  fx.glow &&
+  fx_blur_draws(fx.glow_radius) &&
+  ((fx.glow_color >> 24) & 0xFF) > 0
+}
+
+///|
+/// 内阴影：会扩散或会位移、且颜色不全透明。
+pub fn fx_inner_on(fx : LayerFx) -> Bool {
+  fx.inner &&
+  (fx_blur_draws(fx.inner_blur) ||
+    fx_shift_draws(fx.inner_dx) ||
+    fx_shift_draws(fx.inner_dy)) &&
+  ((fx.inner_color >> 24) & 0xFF) > 0
+}
+
+///|
+/// 四件套里**有没有一件真的会落像素**。`None` / 全 off / "开关开着但画不出
+/// 东西" ⇒ 渲染器走原来那条路径，画面逐位不变（`required_render_contract`
+/// 也据此决定要不要抬档：**不抬档 ⇔ 老引擎渲染结果逐位相同**）。
+pub fn fx_any_on(fx : LayerFx) -> Bool {
+  fx_shadow_on(fx) || fx_outline_on(fx) || fx_glow_on(fx) || fx_inner_on(fx)
+}
+
+///|
+/// 图层样式的**取值判据**（一处实现，入口与 lint 共用）。
+///
+/// `None` = 合法；`Some(为什么)` = 这层装不上/装了也白装。三件事：
+///   * **blur / glow_radius / outline_w 不许为负**：模糊半径与膨胀宽度是"扩散
+///     多少像素"，负值在渲染器里只能折成 0（给了参数但不生效）。
+///   * **dx/dy 允许为负**：投影/内阴影的偏移是**方向**（往左上打就是负的）。
+///   * **三个半径有上限 `FX_MAX_RADIUS`**：超过它的部分被渲染器显式夹住，
+///     与其静默夹紧不如在入口说清。
+/// NaN 也在这里被抓住：判据写成 `!(v >= 0.0)` 而不是 `v < 0.0`。
+pub fn fx_param_error(fx : LayerFx) -> String? {
+  let radius_err = fn(name : String, v : Double) -> String? {
+    if !(v >= 0.0) {
+      Some("\{name} 不能为负：\{fmt_num(v)}（0 = 这一件不扩散）")
+    } else if v > FX_MAX_RADIUS {
+      Some(
+        "\{name} 上限 \{fmt_num(FX_MAX_RADIUS)}：收到 \{fmt_num(v)}（超过上限的部分不会让效果更大，只是更慢——渲染器按上限算）",
+      )
+    } else {
+      None
+    }
+  }
+  match radius_err("shadow_blur", fx.shadow_blur) {
+    Some(e) => return Some(e)
+    None => ()
+  }
+  match radius_err("inner_blur", fx.inner_blur) {
+    Some(e) => return Some(e)
+    None => ()
+  }
+  match radius_err("glow_radius", fx.glow_radius) {
+    Some(e) => return Some(e)
+    None => ()
+  }
+  radius_err("outline_w", fx.outline_w)
+}
+
+///|
 /// 层记录：结构事实源的原子单元。
 pub(all) struct Layer {
   id : String
@@ -624,6 +812,7 @@ pub(all) struct Layer {
   font_size : Double // Text 层字号（像素，5x7 点阵缩放基准 7）
   mask : LayerMask? // 矢量蒙版（与层同变换；None=无）
   adjust : Adjust? // Adjust 层的算子参数；其余恒 None
+  fx : LayerFx? // 图层样式（投影/描边/外发光/内阴影）；None = 没有样式（历史行为）
   points : Array[(Double, Double)] // Line/Polygon 顶点、Path 的**锚点**（局部坐标，0..w / 0..h）
   /// Path 的贝塞尔控制柄**偏移**（相对锚点，局部坐标；长度恒为 2×锚点数，
   /// 依次为 `[in0,out0,in1,out1,…]`）。其余 kind 恒空。
@@ -720,6 +909,7 @@ pub fn default_layer(
     font_size: 16.0,
     mask: None,
     adjust: None,
+    fx: None,
     points: [],
     handles: [],
     dabs: [],

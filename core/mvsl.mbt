@@ -48,6 +48,9 @@ pub const MVSL_IR_VERSION : Int = 1
 ///         两种都是静默错渲。
 ///   * 6 = **色阶/曲线**（调整层的 `levels`/`curve` 参数）：老引擎读不出这两个
 ///         字段，整层被丢掉或按空操作施加 ⇒ 静默错渲。
+///   * 7 = **图层样式**（`Layer.fx`：投影/描边/外发光/内阴影）：老引擎根本不读
+///         这个字段，四件套一件都不画 ⇒ "加了样式"与"没加"两张画面差别极大，
+///         而回包一切正常。
 pub const RENDER_CONTRACT_ROUGHEN : Int = 2
 
 ///|
@@ -67,9 +70,14 @@ pub const RENDER_CONTRACT_PATH : Int = 5
 pub const RENDER_CONTRACT_ADJUST_PARAMS : Int = 6
 
 ///|
+/// 7 = **图层样式**（`Layer.fx` + `fx_any_on`）：老引擎不读 `fx`，加了投影/
+/// 发光/描边/内影的层在它那里**与没加一模一样** ⇒ 必须让老引擎拒绝打开。
+pub const RENDER_CONTRACT_FX : Int = 7
+
+///|
 /// 引擎支持的**最高**档（读入端：`render_contract > 它` 一律拒绝打开，
 /// 见 `mpd/mpd.mbt`）。
-pub const RENDER_CONTRACT_VERSION : Int = 6
+pub const RENDER_CONTRACT_VERSION : Int = 7
 
 ///|
 /// 选择子算法版本（kernel/window/环距约定都属于算法的一部分）。

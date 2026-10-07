@@ -918,6 +918,25 @@ fn kind_only_fields() -> Array[KindOnly] {
         if l.children.length() > 0 { "\{l.children.length()} 个子层" } else { "" }
       },
     },
+    {
+      field: "fx",
+      reader: "**除调整层以外**的层（样式作用在这一层**自己的像素**上）",
+      hint: "调整层没有自己的像素（它的画面是它下面那张底图），样式无从谈起——要给局部加样式请用真正画像素的层（几何/文本/位图/笔触/组）",
+      // 九个"有自己像素"的 kind。调整层不在名单里（它的画面是底图）；
+      // 名单与 `render.paint_layer` 那条分派一致（`Adjust` 在上面就被拦掉了）。
+      kinds: [
+        "rect",
+        "ellipse",
+        "polygon",
+        "line",
+        "path",
+        "image",
+        "text",
+        "raster",
+        "group",
+      ],
+      dead: fn(l) { if l.fx is Some(_) { "fx 字段" } else { "" } },
+    },
     // ↓ 下面五行是「变换/混合/蒙版」的**读点矩阵**：实测（非退化探针：非白底 +
     //   左右不对称的位图 + 30° 旋转）它们在 text/adjust 上**不被读**——写进去回
     //   ok、指纹变、画面逐位不变。（`group` 与 `raster` 都曾是这一格：组的变换、
@@ -1393,6 +1412,7 @@ pub fn layer_caps(l : @core.Layer) -> Array[String] {
     ("text", "text"),
     ("font_size", "font_size"),
     ("adjust", "adjust"),
+    ("fx", "fx"),
     ("asset", "asset_hash"),
     ("children", "children"),
   ] {
@@ -1623,6 +1643,41 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
         v.push(
           "P2 noop 层 \{l.id} 是 \{kind_str(l.kind)} 却带着 \{why}（渲染器只对 \{c.reader} 读 \{c.field}，纯粹改变指纹）",
         )
+      }
+    }
+    // 图层样式（fx）：三句人话 + 一格 kind 表（第四种"kind 不符"走上表，不在这里）。
+    //   ①取值不合法（**与入口同一句** `@core.fx_param_error`，兜手改容器/旧产物）；
+    //   ②某个开关开着却画不出任何像素（判据与渲染器跳过它的那句是**同一处**
+    //     `@core.fx_*_on`）——"装了却什么都不干"在这里有四种面孔，一种一句；
+    //   ③四个开关全关：画面逐位不变，但字段与指纹都在。
+    // 合法性优先（同调整层那条）：参数本身不合法时只报那一句，否则同一件事会
+    // 报出两句自相矛盾的话。
+    if !(l.kind is @core.ShapeKind::Adjust) {
+      match l.fx {
+        Some(f) => {
+          match @core.fx_param_error(f) {
+            Some(e) => v.push("P2 style 层 \{l.id} 的图层样式取值不合法：\{e}")
+            None => {
+              let mut on_any = false
+              for row in fx_effects() {
+                if (row.2)(f) {
+                  on_any = true
+                  if !(row.3)(f) {
+                    v.push(
+                      "P2 noop 层 \{l.id} 的\{row.1}开关开着却画不出任何像素（\{(row.4)(f)}）：画面逐位不变",
+                    )
+                  }
+                }
+              }
+              if !on_any {
+                v.push(
+                  "P2 noop 层 \{l.id} 装了图层样式但四个开关全关着（画面逐位不变；要摘掉它用 set-fx \{l.id} clear=1）",
+                )
+              }
+            }
+          }
+        }
+        None => ()
       }
     }
     // 描边把整层盖满 / 线段的描边被渲染窗裁掉：两条都是"护栏改了输出却没人报"

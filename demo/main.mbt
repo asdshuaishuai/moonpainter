@@ -880,6 +880,142 @@ fn num_input_key(label : String, val : String, handler : String, id : String, ke
 }
 
 ///|
+/// 图层样式（fx）的**四件套表**：`(报串里的名字, 人话标签, [(参数键, 输入框标签)])`。
+///
+/// ⚠️ 这是**前端画控件**用的表，不是"哪一件有哪些参数"的判据——判据在引擎
+/// （`agent.fx_effects()` 一处，渲染器与 `lint` 都读它）。这里的顺序必须与
+/// 引擎 `fx_report` 报出来的**参数顺序逐字对齐**（报串里没有键名，只有值），
+/// 所以 `demo_test.mbt` 有一条断言：真的开四件套、拿引擎报回来的串喂
+/// `fx_parse`，每件的值个数与这张表一致——对不上就红（不是靠人眼比对两处）。
+pub fn fx_effect_rows() -> Array[(String, String, Array[(String, String)])] {
+  [
+    ("shadow", "投影", [("shadow_dx", "dx"), ("shadow_dy", "dy"), ("shadow_blur", "模糊"), ("shadow_color", "色")]),
+    ("outline", "描边", [("outline_w", "宽"), ("outline_color", "色")]),
+    ("glow", "外发光", [("glow_radius", "半径"), ("glow_color", "色")]),
+    ("inner", "内阴影", [("inner_dx", "dx"), ("inner_dy", "dy"), ("inner_blur", "模糊"), ("inner_color", "色")]),
+  ]
+}
+
+///|
+/// 把引擎报的 fx 串拆成 `(效果名, 参数值表)`：
+/// `none` / `all-off` ⇒ 空；`shadow(4,4,4,#00000080),outline(3,#000000FF)` ⇒ 两项。
+/// **只解析、不补默认值**：引擎只报开着的那些（关着那几件的参数面板不知道，
+/// 前端也不该编一份——编了就是第二个事实源，PLAN 那课）。
+pub fn fx_parse(rep : String) -> Array[(String, Array[String])] {
+  let out : Array[(String, Array[String])] = []
+  if rep == "none" || rep == "all-off" || rep == "" {
+    return out
+  }
+  // ⚠️ **不许先按 `,` 切**：参数之间就是逗号（`shadow(4,4,4,#00000080)`），先切
+  // 会把一件拆成好几段、还让每段缺一半括号——于是"开着"被读成"关着"（实测：
+  // 引擎明明报着 `shadow(4,4,4,#00000080)`，面板四个开关**全画成关**，
+  // 参数框一个都没有；`panel_html_wbtest` 与 `clickthrough` 各抓住一次）。
+  // 按 `)` 分段：每段里最多一个 `(`；段首可能残留上一件后面的 `,`。
+  for seg in rep.split(")") {
+    let it = seg.to_string()
+    match it.find("(") {
+      Some(a) => {
+        let mut name = it.unsafe_substring(start=0, end=a)
+        while name.length() > 0 &&
+              (name.unsafe_substring(start=0, end=1) == "," ||
+                name.unsafe_substring(start=0, end=1) == " ") {
+          name = name.unsafe_substring(start=1, end=name.length())
+        }
+        let inner = it.unsafe_substring(start=a + 1, end=it.length())
+        let vals : Array[String] = []
+        if inner != "" {
+          for v in inner.split(",") {
+            vals.push(v.to_string())
+          }
+        }
+        out.push((name, vals))
+      }
+      None => ()
+    }
+  }
+  out
+}
+
+///|
+/// 面板要的 fx 块：四件套各一个开关；**开着的那几件**才画参数输入框
+/// （关着的那件参数引擎不报 ⇒ 面板不知道，画成一句"打开＝按当前参数"的说明，
+/// 不编缺省值）。值全部来自引擎 `query-layer` 的 `fx` 串。
+fn fx_html(gid : String, rep : String) -> String {
+  let parsed = fx_parse(rep)
+  let sb = StringBuilder()
+  sb.write_string("<div class='pedit'><span class='pk'>样式</span>")
+  for row in fx_effect_rows() {
+    let (name, label, params) = row
+    let cur : Array[String]? = {
+      let mut hit : Array[String]? = None
+      for e in parsed {
+        if e.0 == name {
+          hit = Some(e.1)
+        }
+      }
+      hit
+    }
+    let on = match cur {
+      Some(_) => true
+      None => false
+    }
+    let nxt = if on { "0" } else { "1" }
+    let mark = if on { "✓" } else { "＋" }
+    sb.write_string("<button class='ghost' title='")
+    sb.write_string(
+      if on {
+        "关掉这" + label + "（参数留着，再打开还是这些）"
+      } else {
+        label + "：打开＝按当前参数画（缺省见工具字典）"
+      },
+    )
+    sb.write_string("' onclick='globalThis.__fx_sw(\"")
+    sb.write_string(gid)
+    sb.write_string("\",\"")
+    sb.write_string(name)
+    sb.write_string("\",\"")
+    sb.write_string(nxt)
+    sb.write_string("\")'>")
+    sb.write_string(label)
+    sb.write_string(mark)
+    sb.write_string("</button>")
+    match cur {
+      Some(vals) => {
+        // 参数个数以**引擎报的**为准：多出来的值照样显示（前端不假装自己知道
+        // 有几格），少了谁就少画谁——两边不一致会由 demo_test 那条断言抓住。
+        let mut i = 0
+        for v in vals {
+          let (key, lab) = if i < params.length() {
+            params[i]
+          } else {
+            ("", "?")
+          }
+          if key != "" {
+            if key.contains("color") {
+              sb.write_string(txt_input_key(lab, v, "__fx_key", gid, key))
+            } else {
+              sb.write_string(num_input_key(lab, v, "__fx_key", gid, key))
+            }
+          }
+          i = i + 1
+        }
+      }
+      None =>
+        sb.write_string(
+          "<span class='pv' title='关着：这一件的参数引擎不报（也就没有第二个事实源），打开后按当前参数画'>关</span>",
+        )
+    }
+  }
+  if parsed.length() > 0 {
+    sb.write_string("<button class='ghost' title='摘掉整份样式（参数一起没）' onclick='globalThis.__fx_clear(\"")
+    sb.write_string(gid)
+    sb.write_string("\")'>清除全部</button>")
+  }
+  sb.write_string("</div>")
+  sb.to_string()
+}
+
+///|
 /// 带**键名**的文本输入框（曲线的点表：`points=x,y;x,y;…`）。
 fn txt_input_key(ph : String, val : String, handler : String, id : String, key : String) -> String {
   "<input class='pin' value='" + html_attr(val) + "' placeholder='" + html_attr(ph) +
@@ -1258,6 +1394,11 @@ fn props_html(
         }
     }
     sb.write_string("</div>")
+  }
+  // 图层样式（fx）：能力表里 `fx` 这一格（几何/文本/位图/笔触/组有，调整层没有
+  // ——它没有自己的像素）。面板不抄 kind 名单，只问 caps。
+  if can("fx") {
+    sb.write_string(fx_html(gid, json_get_str(l, "fx")))
   }
   sb.write_string("<div class='pedit'>")
   sb.write_string(txt_input("加标签", "", "__tag_add", gid))
@@ -2322,6 +2463,28 @@ fn do_adj_key(id : String, key : String, v : String) -> Unit {
 }
 
 ///|
+/// 样式开关：`set-fx <id> <key>=0|1`（四件套的键就是 `shadow`/`outline`/
+/// `glow`/`inner`，与工具面、引擎字典同一个名字）。
+fn do_fx_sw(id : String, key : String, v : String) -> Unit {
+  let _ = do_ui_cmd("set-fx " + id + " " + key + "=" + v)
+}
+
+///|
+/// 样式参数：`set-fx <id> <key>=<v>`。空串 = 用户把输入框清空了 ⇒ **不拼**，
+/// 否则引擎会回"空值"（那是给调用方的错，人类只是清空了一个框）。
+fn do_fx_key(id : String, key : String, v : String) -> Unit {
+  if v == "" {
+    return
+  }
+  let _ = do_ui_cmd("set-fx " + id + " " + key + "=" + v)
+}
+
+///|
+fn do_fx_clear(id : String) -> Unit {
+  let _ = do_ui_cmd("set-fx " + id + " clear=1")
+}
+
+///|
 /// 把选中层的**自由变换框**推给画布（`window.__MP_TF`）：几何来自引擎的
 /// `query-layer`，**能力**（能不能挪 / 能不能缩放）来自同一份 `caps`——
 /// 前端不猜 kind（PLAN 五十一：判断两处实现必然先烂）。框的格式
@@ -2990,7 +3153,7 @@ pub fn app_html() -> String {
       #|<button onclick='globalThis.__param_del()'>删元参数</button>
       #|</div>
       #|<div class='dbgrow'>
-      #|<input id='cmd-input' class='cmdin' placeholder='任意一行引擎命令（70 条全都能跑：render 400 overlay=1 / query-layer r1 …）'/>
+      #|<input id='cmd-input' class='cmdin' placeholder='任意一行引擎命令（71 条全都能跑：render 400 overlay=1 / query-layer r1 …）'/>
       #|<button onclick='globalThis.__cmd()'>执行</button>
       #|</div>
       #|<pre id='dbg-out' class='dbgout'>（这里显示回包 JSON。`render`/`select-preview` 这类带 PNG 的回包会在上面画布上直接铺出来。）</pre>
@@ -3220,6 +3383,9 @@ pub fn register_globals() -> Unit {
   js_reg1("__tf_ready", fn(box : String) { do_tf_ready(box) })
   js_reg1("__tf_hint", fn(_x : String) { js_status_bar("⚠ 自由变换：先在图层列表里选中一个图层（框没画出来时按下不会动任何东西）") })
   js_reg3s("__adj_key", fn(id : String, k : String, v : String) { do_adj_key(id, k, v) })
+  js_reg3s("__fx_sw", fn(id : String, k : String, v : String) { do_fx_sw(id, k, v) })
+  js_reg3s("__fx_key", fn(id : String, k : String, v : String) { do_fx_key(id, k, v) })
+  js_reg1("__fx_clear", fn(id : String) { do_fx_clear(id) })
   js_reg2s("__adj_val", fn(id : String, v : String) { do_adj(id, "value", v) })
   js_reg2s("__tag_add", fn(id : String, v : String) { do_tag_add(id, v) })
   js_reg2s("__tag_del", fn(id : String, v : String) { do_tag_del(id, v) })
@@ -3446,7 +3612,7 @@ fn do_dbg_show(raw : String) -> Unit {
 }
 
 ///|
-/// 命令控制台：任意一行引擎命令（70 条全都能跑）。走 `do_ui_cmd` 那条路
+/// 命令控制台：任意一行引擎命令（71 条全都能跑）。走 `do_ui_cmd` 那条路
 /// （渲染 + 刷新界面），所以**改文档的命令也会立刻看到画面变化**；只读命令
 /// 的回包同样铺到面板上——它是"逐条手测"的兜底入口。
 fn do_console_cmd() -> Unit {

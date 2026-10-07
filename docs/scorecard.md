@@ -7,35 +7,35 @@
 | 域 | 条目 | 已做 | 部分 | 未做 |
 | :-- | --: | --: | --: | --: |
 | 画布与文档 | 5 | 4 | 0 | 1 |
-| 绘制与图层 | 10 | 7 | 1 | 2 |
+| 绘制与图层 | 10 | 8 | 1 | 1 |
 | 路径、文本与蒙版 | 8 | 4 | 1 | 3 |
 | MVSL 编辑表 | 9 | 6 | 3 | 0 |
 | 命令面与工程纪律 | 9 | 9 | 0 | 0 |
 | 容器与互操作 | 6 | 4 | 0 | 2 |
-| 人类界面（AI 修图 demo） | 9 | 7 | 0 | 2 |
+| 人类界面（AI 修图 demo） | 9 | 8 | 0 | 1 |
 | 性能、确定性与可复现 | 7 | 7 | 0 | 0 |
-| **合计** | **63** | **48** | **5** | **10** |
+| **合计** | **63** | **50** | **5** | **8** |
 
 ## 现场量的数字（现算，不手写）
 
 | 指标 | 值 | 来源 |
 | :-- | --: | :-- |
-| 引擎命令面（字典条数） | 70 | floors.toml ← verify.sh#catalog |
-| native 测试条数 | 430 | floors.toml ← verify.sh#catalog |
-| wasm-gc 测试条数 | 428 | floors.toml ← verify.sh#catalog |
-| 变异条数 | 288 | floors.toml ← verify.sh#catalog |
-| 被抓住的变异 | 285 | floors.toml ← verify.sh#catalog |
-| 人类可达命令 | 70 | floors.toml ← ui_audit.py |
+| 引擎命令面（字典条数） | 71 | floors.toml ← verify.sh#catalog |
+| native 测试条数 | 462 | floors.toml ← verify.sh#catalog |
+| wasm-gc 测试条数 | 460 | floors.toml ← verify.sh#catalog |
+| 变异条数 | 293 | floors.toml ← verify.sh#catalog |
+| 被抓住的变异 | 290 | floors.toml ← verify.sh#catalog |
+| 人类可达命令 | 71 | floors.toml ← ui_audit.py |
 | 人类够不着的命令（目标 0） | 0 | floors.toml ← ui_audit.py |
-| AI 工具面条数 | 60 | floors.toml ← build_demo.sh#doc-tools |
+| AI 工具面条数 | 61 | floors.toml ← build_demo.sh#doc-tools |
 | AI 刻意够不着的命令 | 10 | floors.toml ← build_demo.sh#doc-tools |
-| （命令, 键）配对 | 187 | floors.toml ← key_effect_audit.py |
-| 有读取点的配对 | 187 | floors.toml ← key_effect_audit.py |
+| （命令, 键）配对 | 204 | floors.toml ← key_effect_audit.py |
+| 有读取点的配对 | 204 | floors.toml ← key_effect_audit.py |
 | **收了却没人读的键（目标 0）** | 0 | key_effect_audit.py 现场量 |
-| 对抗性参数 fuzz 行数 | 5577 | floors.toml ← panic_hunt.py |
+| 对抗性参数 fuzz 行数 | 5761 | floors.toml ← panic_hunt.py |
 | 浏览器自检项 | 30 | floors.toml ← build_demo.sh#selfcheck |
-| 点击贯通断言 | 106 | floors.toml ← build_demo.sh#clickthrough |
-| 可点处理器 | 82 | floors.toml ← build_demo.sh#clickthrough |
+| 点击贯通断言 | 107 | floors.toml ← build_demo.sh#clickthrough |
+| 可点处理器 | 85 | floors.toml ← build_demo.sh#clickthrough |
 
 > **别把接线计数当能力**：AI 工具 60 条 / 人类可达 70 条说的是「有没有入口」，一个入口背后可能只是"回一个错误"；行为由`verify.sh` 与 `build_demo.sh` 的各步钉住，而"参数收了没人读"这类空壳由 `key_effect_audit.py` 现场数。
 
@@ -68,7 +68,7 @@
 | PNG 位图导入 + 原地换图（`set-image`） | 已做 | `agent/session.mbt#cmd_set_image` | 盒子跟着内容走（不给 w/h 时盒 = 资产像素尺寸）；换图不动层序/蒙版/标签/透明度/翻转/旋转。 |
 | 布尔运算（并/差/交/异或 → 新路径层，洞用反选蒙版） | 已做 | `agent/bool_cmds.mbt#cmd_bool_op` | 操作数被结果替换（留着会让洞看不见）；共线部分重叠明确拒绝；每个岛最多一个洞。 |
 | 调整层：亮度/对比度/饱和度/模糊/锐化/色阶/曲线… + 原地改 | 已做 | `agent/session.mbt#cmd_set_adjust` | 叠加式像素算子，作用于其下全部可见层；蒙版覆盖度 × α 连续生效；不参与变换/混合（入口拒）。 |
-| 图层样式 fx：投影 / 描边 / 外发光 / 内阴影 | 未做 | `render/scene.mbt#paint_layer` | 渲染器逐层只画自己的面，没有 fx 阶段；`Layer` 里也没有样式字段——这是本轮之后的第一优先能力。 |
+| 图层样式 fx：投影 / 描边 / 外发光 / 内阴影 | 已做 | `render/scene.mbt#apply_fx` | 层自己像素的一部分：先整层栅格化到自己的缓冲 → 在覆盖度场（`Field`）上做四件套 → 最后**一步**乘 opacity/blend（先乘会把半透明层的描边算没）。场的工作窗按层**实际范围 + 扩散量**裁（`fx_reach`），与整画布逐位相同；半径上限 64 由 `fx_param_error` 一处判、渲染器显式夹住。边界：不做样式各自的混合模式/渐变描边/多重叠影，`Adjust` 层没有样式（入口拒、lint 报）。 |
 | 自由笔刷（笔压、形状动态、笔尖贴图） | 未做 | `agent/session.mbt#cmd_brush` | `brush` 只有圆头、恒定半径与浓度；没有笔压/动态/贴图，也没有画笔预设。 |
 
 
@@ -148,7 +148,7 @@
 | 属性面板只按引擎 `caps` 画控件（不抄 kind 名单） | 已做 | `demo/main.mbt#caps_of` | 没有的能力画成带理由的只读回显；`caps` 缺失时一个能力控件都不画并明说。 |
 | 步骤历史面板（点一行 `goto` 跳回，未来步骤画成灰行可重做） | 已做 | `agent/session.mbt#cmd_goto` | 跳回复用 undo/redo 原语；跳回后再操作会丢掉后面的步骤（PS 语义）。 |
 | 画布上的自由变换（Ctrl+T：一个手势 = 一条 `transform` = 一步历史） | 已做 | `agent/session.mbt#cmd_transform` | 手柄画不画由 `caps` 说了算（文本/笔触/调整层只画框、不画缩放手柄）。 |
-| 图层样式 fx 的属性面板（投影/描边/发光/内阴影） | 未做 | `demo/main.mbt#props_html` | 面板按引擎报出的参数面画控件；引擎还没有 fx 参数面，面板自然也画不出来。 |
+| 图层样式 fx 的属性面板（投影/描边/发光/内阴影） | 已做 | `demo/main.mbt#props_html` | 四件套的开关与参数都由 `props_html` 按 `query-layer` 报出的样式面画控件，点击走 `do_ui_cmd`（同一条 `set-fx` 命令，没有旁路）；`panel_html_wbtest` 直接调纯函数断言控件存在，`clickthrough` 用哑 DOM 调处理器再从引擎读回。 |
 | 文本排版面板（对齐/行距/字距/换行） | 未做 | `demo/main.mbt#refresh_props` | 现在面板只给文本层画内容与字号两个控件。 |
 | 浏览器内自检（30 项）：工具面 + MVSL 闭环真的可达 | 已做 | `demo/selfcheck.mbt#selfcheck_cases` · `build_demo.sh#node-headless` | 自检项是浏览器里真跑一遍引擎的清单（工具面/MVSL 闭环/分析出口），不是接线计数。 |
 

@@ -123,6 +123,7 @@ fn tool_cmd(name : String) -> String? {
     "clone_stroke" => Some("clone")
     "apply_filter" => Some("add-adjust")
     "set_adjust" => Some("set-adjust")
+    "set_fx" => Some("set-fx")
     "crop_canvas" => Some("crop")
     "sample_color" => Some("sample")
     "undo" => Some("undo")
@@ -156,6 +157,32 @@ fn transform_arg_keys() -> Array[String] {
 /// 拼出来的**整行**由 `paint_tools_wbtest.mbt` 逐字钉住（含"没给的键一个都不拼"）。
 fn adjust_arg_keys() -> Array[String] {
   ["value", "in_lo", "in_hi", "gamma", "out_lo", "out_hi", "points"]
+}
+
+///|
+/// 图层样式（fx）的**参数键清单**（工具定义与 `set_fx` 那条工具行共用一处；
+/// 键名与引擎 `agent.fx_keys()` 逐字相同——两处各写一份就会漂移，而漂移的
+/// 那一半正是模型唯一的说明书）。
+fn fx_arg_keys() -> Array[String] {
+  [
+    "clear",
+    "shadow",
+    "shadow_dx",
+    "shadow_dy",
+    "shadow_blur",
+    "shadow_color",
+    "outline",
+    "outline_w",
+    "outline_color",
+    "glow",
+    "glow_radius",
+    "glow_color",
+    "inner",
+    "inner_dx",
+    "inner_dy",
+    "inner_blur",
+    "inner_color",
+  ]
 }
 
 ///|
@@ -534,6 +561,30 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
       ],
     ),
     make_tool(
+      "set_fx",
+      "图层样式（fx，PSD 语义）：投影/描边/外发光/内阴影。**部分更新**——只给要改的参数，其余沿用当前值（缺省样式：四件全关）。样式作用在**这一层自己的像素**上：先按不透明度 1 栅格化这一层、加四件套，最后整块按层的 opacity 与 blend 合成一次，所以影/发光会溢出层的盒子、描边压在层上面、半透明层的描边不会消失。**调整层装不了**（它没有自己的像素）。半径/宽度上限 64px，超过按上限算（不会更大、只是更慢）。",
+      [
+        ("id", "string:req:图层 id"),
+        ("clear", "boolean:true 则摘掉整份样式（不能与其它参数同时给）"),
+        ("shadow", "boolean:投影开关。影在**层的下面**，往 (shadow_dx,shadow_dy) 方向偏"),
+        ("shadow_dx", "number:投影水平偏移 px（可负=往左，缺省 4）"),
+        ("shadow_dy", "number:投影垂直偏移 px（可负=往上，缺省 4）"),
+        ("shadow_blur", "number:投影模糊半径 px 0..64（缺省 4；0=硬边，且不偏移时画不出东西）"),
+        ("shadow_color", "string:投影像素色 #RRGGBB 或 #RRGGBBAA（缺省 #00000080 半透明黑）"),
+        ("outline", "boolean:描边开关。描边画在层的**外面一圈**、压在层上面"),
+        ("outline_w", "number:描边宽度 px 0..64（缺省 3）"),
+        ("outline_color", "string:描边颜色 #RRGGBB 或 #RRGGBBAA（缺省 #000000FF 不透明黑）"),
+        ("glow", "boolean:外发光开关。发光在**层的下面**、四周糊开"),
+        ("glow_radius", "number:发光半径 px 0..64（缺省 6；取整为 0 时画不出东西）"),
+        ("glow_color", "string:发光颜色 #RRGGBB 或 #RRGGBBAA（缺省 #FFD70080 金色半透明）"),
+        ("inner", "boolean:内阴影开关。影只画在**层的里面**（层的覆盖度 × (1 − 偏移后的覆盖度)）"),
+        ("inner_dx", "number:内阴影水平偏移 px（可负，缺省 2）"),
+        ("inner_dy", "number:内阴影垂直偏移 px（可负，缺省 2）"),
+        ("inner_blur", "number:内阴影模糊半径 px 0..64（缺省 4）"),
+        ("inner_color", "string:内阴影颜色 #RRGGBB 或 #RRGGBBAA（缺省 #00000080）"),
+      ],
+    ),
+    make_tool(
       "crop_canvas",
       "裁剪画布到区域（全部层同步平移）",
       [
@@ -909,6 +960,17 @@ pub fn tool_line(name : String, args : Json) -> String {
         cmd = cmd + " \{tail}"
       }
       cmd
+    }
+    "set_fx" => {
+      // `arg_of` 对缺键返回空串；这些参数都不可能是合法空串 ⇒ "空 = 没给"
+      // （没给就让引擎沿用当前值）。键表与工具定义**共用一处**。
+      let id = arg_of(args, "id")
+      let tail = args_to_tail(args, fx_arg_keys())
+      if tail == "" {
+        "set-fx \{id}"
+      } else {
+        "set-fx \{id} \{tail}"
+      }
     }
     "crop_canvas" => "crop \{arg_of(args, "x")} \{arg_of(args, "y")} \{arg_of(args, "w")} \{arg_of(args, "h")}"
     "sample_color" => "sample \{arg_of(args, "x")} \{arg_of(args, "y")}"
