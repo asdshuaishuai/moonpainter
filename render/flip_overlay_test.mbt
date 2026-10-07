@@ -78,3 +78,33 @@ test "render overlay：bbox 线框与序号色可从渲染结果中检出" {
   assert_eq(plain.width, marked.width)
 }
 
+///|
+/// **盒子巨大的层不许把 overlay 画卡死**（PLAN 七十五）。
+///
+/// `add-rect w=99999999999999999999` 是**入口收下**的合法文档（Double 有限），
+/// 层填充被 `paint_window` 裁到画布、秒回；而 overlay 要给每个可见层画 bbox
+/// 线框，线框走 Bresenham——**迭代次数由线段长度决定**，于是"越界由
+/// `rgba_set` 丢弃"这句话对写成立、对循环不成立，渲染整条进程卡死。
+/// 这条测试的判据是**能跑完**（修好之前它自己会挂住）+ 线框仍出现在画布里。
+test "overlay：层盒子巨大（1e20）也必须画得完，且线框仍落在画布内" {
+  let doc = @core.new_document("u-huge", 40, 40)
+  let l = @core.default_layer("l1", "huge", 0.0, 0.0, 1.0e20, 1.0e20)
+  doc.layers.push({ ..l, fill: @core.Fill::Solid(0xFF000000) })
+  let env = @render.RenderEnv::new()
+  let marked = match @render.render_view_overlay(doc, env, 0.0, 0.0, 1.0, 1.0, 40) {
+    Ok(b) => b
+    Err(e) => abort("overlay 渲染失败: \{e}")
+  }
+  assert_eq(marked.width, 40)
+  assert_eq(marked.height, 40)
+  // 线框色（序号 1 = palette[0]）必须真的出现在画布里：裁过头 = 线框没了
+  let mut found = 0
+  for y in 0..<marked.height {
+    for x in 0..<marked.width {
+      if @codec.rgba_get(marked, x, y) == 0xFFFF3355 {
+        found = found + 1
+      }
+    }
+  }
+  assert_true(found > 0, msg="巨大盒子的线框仍要画出来（被裁掉的只是框外那部分）")
+}

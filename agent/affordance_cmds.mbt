@@ -79,8 +79,10 @@ fn cmd_census(s : Session, tokens : Array[String]) -> String {
     Err(e) => return err(e)
   }
   let mut max_comp = 16
+  let mut comp_given = false
   for t in tokens {
     if t.has_prefix("components=") {
+      comp_given = true
       // `components=0` 此前被**静默忽略**（保留默认 16）——"我要 0 个
       // 连通域"不是个能办到的请求，静默换成 16 就是另一种意思了。
       let v = match to_i(t[11:].to_owned()) {
@@ -92,6 +94,14 @@ fn cmd_census(s : Session, tokens : Array[String]) -> String {
       }
       max_comp = v
     }
+  }
+  // `components=` **只在给了 within= 时有意义**：不给选区时全图普查只出色相/
+  // 饱和度桶，连通域事实根本不产出——于是 `components=` 会被**静默收下而一个
+  // 字段都不影响**（实测：`census components=1` 与 `census` 回包逐字节相同）。
+  // 这与 `op=invert value=…` 是同一类：用不上的参数在**入口**就拒，
+  // 别让调用方自己比对回包才发现"我给的参数没生效"。
+  if comp_given && within is None {
+    return err("components= 只在给了 within=<base64 选区> 时有意义：不给选区时连通域事实不产出（全图普查只有色相/饱和度桶）")
   }
   let base = match mvsl_base(s) {
     Ok(b) => b

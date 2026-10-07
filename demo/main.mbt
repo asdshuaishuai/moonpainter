@@ -2990,7 +2990,7 @@ pub fn app_html() -> String {
       #|<button onclick='globalThis.__param_del()'>删元参数</button>
       #|</div>
       #|<div class='dbgrow'>
-      #|<input id='cmd-input' class='cmdin' placeholder='任意一行引擎命令（63 条全都能跑：render 400 overlay=1 / query-layer r1 …）'/>
+      #|<input id='cmd-input' class='cmdin' placeholder='任意一行引擎命令（70 条全都能跑：render 400 overlay=1 / query-layer r1 …）'/>
       #|<button onclick='globalThis.__cmd()'>执行</button>
       #|</div>
       #|<pre id='dbg-out' class='dbgout'>（这里显示回包 JSON。`render`/`select-preview` 这类带 PNG 的回包会在上面画布上直接铺出来。）</pre>
@@ -3446,7 +3446,7 @@ fn do_dbg_show(raw : String) -> Unit {
 }
 
 ///|
-/// 命令控制台：任意一行引擎命令（63 条全都能跑）。走 `do_ui_cmd` 那条路
+/// 命令控制台：任意一行引擎命令（70 条全都能跑）。走 `do_ui_cmd` 那条路
 /// （渲染 + 刷新界面），所以**改文档的命令也会立刻看到画面变化**；只读命令
 /// 的回包同样铺到面板上——它是"逐条手测"的兜底入口。
 fn do_console_cmd() -> Unit {

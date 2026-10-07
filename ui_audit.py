@@ -144,7 +144,21 @@ def main():
     # ③ 理由不许空
     if nopr:
         bad.append("名单里有没写理由的条目：%s" % "、".join(sorted(nopr)))
-    # ④ 散文里的数字
+    # ④ 界面文案里的数字：demo 的命令行输入框写着「N 条全都能跑」。
+    # 它是**用户看得见的承诺**，而没人对账时它当场烂了（实测写着 63 而引擎 70）。
+    # 判据：文案里的数必须等于人类可达条数（"全都能跑"这句就是可达性声明）。
+    prose = []
+    for path in sorted(ROOT.glob('demo/*.mbt')):
+        src = path.read_text(encoding='utf-8')
+        for m in re.finditer(r'(\d+) 条全都能跑', src):
+            prose.append((path, int(m.group(1))))
+    for path, n in prose:
+        if n != len(reach):
+            bad.append(
+                "%s 写着「%d 条全都能跑」，人类可达实际 %d 条" % (path.name, n, len(reach))
+            )
+
+    # ⑤ 散文里的数字
     if stated is None:
         bad.append("标记块里没写「人类前端直接可达 **N** 条命令」")
     elif stated != len(reach):

@@ -2993,27 +2993,37 @@ fn cmd_render(s : Session, tokens : Array[String]) -> String {
     Ok(_) => ()
     Err(e) => return err(e)
   }
-  // render [width] [vx0 vy0 vx1 vy1]
+  // render [width] [vx0 vy0 vx1 vy1] [overlay=1]
+  //
+  // 位置参数只认**不含 `=` 的 token**：字典写的是 `render [width] … [overlay=1]`，
+  // 也就是 `overlay=` 可以单独出现。此前 `render overlay=1` 通过了键名校验、
+  // 却掉进 `to_i("overlay=1")`，报出 "width=overlay=1 不是整数"——**字典承诺的
+  // 写法用不了**（实测；这个判据由 `key_effect_audit.py` 的（命令,键）配对发现）。
+  let pos : Array[String] = []
+  for t in tokens {
+    if !t.contains("=") {
+      pos.push(t)
+    }
+  }
   let mut width = 1024
   let mut vx0 = 0.0
   let mut vy0 = 0.0
   let mut vx1 = 1.0
   let mut vy1 = 1.0
-  let mut i = 1
-  if tokens.length() >= 2 {
-    match to_i(tokens[1]) {
+  if pos.length() >= 2 {
+    match to_i(pos[1]) {
       Some(w) => width = w
-      None => return err("width=\{tokens[1]} 不是整数")
+      None => return err("width=\{pos[1]} 不是整数")
     }
   }
-  if tokens.length() >= 6 {
+  if pos.length() >= 6 {
     // 取景四元组
     let nums : Array[Double] = []
     let mut k = 2
     while k < 6 {
-      match to_d(tokens[k]) {
+      match to_d(pos[k]) {
         Some(v) => nums.push(v)
-        None => return err("viewport 参数 \{tokens[k]} 不是数字")
+        None => return err("viewport 参数 \{pos[k]} 不是数字")
       }
       k = k + 1
     }
@@ -3021,9 +3031,7 @@ fn cmd_render(s : Session, tokens : Array[String]) -> String {
     vy0 = nums[1]
     vx1 = nums[2]
     vy1 = nums[3]
-    i = 6
   }
-  let _ = i
   let env = match session_env(s) {
     Ok(e) => e
     Err(e) => return err(e)

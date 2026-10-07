@@ -1,7 +1,7 @@
 # MoonPainter — Agent 驱动的图层绘制引擎
 
 > 状态：**0.1.0（.mpd 容器 v2 + 参数化绘制 + AI 修图 demo + MVSL 确定性编辑 IR 引擎已落地：
-> native 430 项 / wasm-gc 428 项测试全绿；`./verify.sh` 十四步验证门全过）**。
+> native 435 项 / wasm-gc 433 项测试全绿；`./verify.sh` 十五步验证门全过）**。
 > 设计书 [DESIGN.md](./DESIGN.md) · 方案与验收 [PLAN.md](./PLAN.md) ·
 > MVSL 规划与评审对照 [PLAN-MVSL.md](./PLAN-MVSL.md) · AI 修图 demo 见下节。
 
@@ -28,6 +28,13 @@
 ```
 
 ## 能力（0.1.0 实测口径）
+
+> **能力边界的权威清单是 [docs/scorecard.md](docs/scorecard.md)**（由
+> `scorecard.py` 从 [`scorecard/areas.toml`](scorecard/areas.toml) 生成，`verify.sh#scorecard`
+> 逐字节核对）：8 个域 63 条，每条一个状态（**已做 / 部分+声明边界 / 未做**）+
+> 一个唯一命中的源码锚点。下表是"已做"那部分的展开；**未做的 10 条就是 roadmap**。
+> ⚠️ 表里的条数是**入口计数**，不是能力计数——"参数收下了却没人读"由
+> `key_effect_audit.py` 现场数（当前 187 个配对 / 死键 0）。
 
 | 域 | 内容 |
 | :-- | :-- |
@@ -334,7 +341,7 @@ EOF
   ToolProvider / Observer 三端口扩展；Observer 即"全程可见"的官方通道）。
   评估记录：moonllm（DC-Z-lab）锁 `+native` 不适用浏览器，弃用。
 
-## 一键验证门（`./verify.sh` 14 步，任何一步失败即非零退出）
+## 一键验证门（`./verify.sh` 15 步，任何一步失败即非零退出）
 
 > 散文里引用步骤**一律写 slug**（`verify.sh#anchors`），**不写编号**：
 > 编号会随插入步骤错位——实测这里曾把锚点自检写成过一个当时的步号，插入
@@ -357,6 +364,7 @@ EOF
 12. **依赖方向门禁**（铁律 5）：内部边全部朝前、`pixel` 不依赖 `render`、引擎包零第三方、FFI 只在 cli/demo、demo 不 import 引擎包；外加 DESIGN §3 ↔ `core/document.mbt` 逐字对账（层类型/层属性/填充/混合，双向）；
 13. **字段面门禁**（`field_audit.py`）：`Layer` 的每个字段都必须有"建层之后改得动"的归属，改不动的要显式声明为身份字段——「改得动吗」这一面**不许靠手走**（手走三处就下了"到此走完"的结论，实测漏掉位图换图与位图盒子两处）；
 14. **对抗性参数 fuzz**（`panic_hunt.py`）：全部命令 × 固定敌意语料（位置参数形态 + 字典里**声明过的每个键** × 敌意值）喂给一个 CLI 进程，断言**只回错、不崩**——退出码 0、每行输入恰好一行 JSON 回包（静默与崩溃一样是 bug）、stderr 无 `PanicError`；红了按前缀二分指名那一行（当年的真 bug 是 `set-text l1` 越界读 `tokens[2]` 把 CLI 干掉）。
+15. **记分卡 + 键效果**（`key_effect_audit.py` + `scorecard.py --check`）：①**行为式**问"字典承诺的每个键真的被读了吗"——每个（命令, 键）配对在同一进程里跑两遍（基线值 vs 探针值），比四个可观测出口（命令回包 / `fingerprint` / `list-layers` / `render` sha256），四个全都没变就是**收了却没人读的键**（目标 0；"测不出来"单列，不许算成通过）；②`scorecard/areas.toml` 每条必须有一个**唯一命中**的源码锚点（腐烂就红）+ 合法 slug，生成 `docs/scorecard.md` 并与提交的那份逐字节比较（过期只许重新生成）。文件不一致 = 文档在撒谎。
 
 ## 变异测试门（`python3 mutation_scan.py`，本机约 42 分钟）
 
@@ -376,7 +384,7 @@ EOF
 - **P3 manifest 的 `counts` 无人校验**：把 `layers` 和 `assets` 计数互换全部测试通过——
   而 `counts` 正是工具/审阅者据以判断"容器里有什么"的对外事实。
 
-当前 285 个变异中 282 个被抓住；三条**已确认的等价变异**（M2、R66、Q65）
+当前 288 个变异中 285 个被抓住；三条**已确认的等价变异**（M2、R66、Q65）
 是"改了也逐位相同"的同义改写，不算漏网——⚠️ **名单也要跟着退役走**：
 Q33 曾在名单里，它在一次重构后变成**真判据**（重指后能被抓住），名单当时
 没同步；现在这一行由 `mutation_scan.py --check-anchors` 的静态对账 +

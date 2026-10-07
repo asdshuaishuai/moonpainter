@@ -2662,7 +2662,83 @@ fn stroke_poly_1px(buf : @codec.RgbaBuf, pts : Array[(Int, Int)], color : Int) -
 }
 
 ///|
-/// 1px 直线段（Bresenham，含两个端点）。
+/// 线段 → 缓冲区矩形 的裁剪（Liang–Barsky）。返回 `(可见, x0', y0', x1', y1')`。
+///
+/// ⚠️ **这不是"优化"，是防卡死**：`rgba_set` 丢弃的是**越界写入**，而 Bresenham 的
+/// **迭代次数由线段长度决定**——只画得下 1px，却要跑 1e20 步。
+/// 实测：`add-rect w=99999999999999999999`（合法 Double，入口收下）之后
+/// `render overlay=1`（overlay 给每个可见层画 bbox 线框）**渲染卡死**，
+/// 同一份文档**不带** overlay 秒回（层填充被 `paint_window` 裁到画布）。
+/// 两句真相：①"越界由 `rgba_set` 丢弃"只对**写**成立、对**循环**不成立；
+/// ②**错误会挡住更深的问题**——`render overlay=1` 此前掉进 `to_i("overlay=1")`
+/// 直接报错，于是这条线框路径在 fuzz 语料里**从来没被走到过**；一旦修好那个
+/// 参数解析 bug（①C），同一个语料立刻把卡死暴露出来。判据只有这一处：
+/// `stroke_line_1px` 的 Bresenham 只敢在裁完的段上跑。
+fn clip_seg(
+  buf : @codec.RgbaBuf,
+  x0 : Int,
+  y0 : Int,
+  x1 : Int,
+  y1 : Int,
+) -> (Bool, Int, Int, Int, Int) {
+  let dx = (x1 - x0).to_double()
+  let dy = (y1 - y0).to_double()
+  let xmin = 0.0
+  let ymin = 0.0
+  let xmax = (buf.width - 1).to_double()
+  let ymax = (buf.height - 1).to_double()
+  let mut t0 = 0.0
+  let mut t1 = 1.0
+  // 四条边各一次：p 是"参数增大会不会走进这条边"的符号，q 是当前点到该边的距离。
+  let edges = [
+    (0.0 - dx, x0.to_double() - xmin),
+    (dx, xmax - x0.to_double()),
+    (0.0 - dy, y0.to_double() - ymin),
+    (dy, ymax - y0.to_double()),
+  ]
+  for e in edges {
+    let p = e.0
+    let q = e.1
+    if p == 0.0 {
+      if q < 0.0 {
+        return (false, 0, 0, 0, 0)
+      }
+    } else {
+      let r = q / p
+      if p < 0.0 {
+        if r > t1 {
+          return (false, 0, 0, 0, 0)
+        }
+        if r > t0 {
+          t0 = r
+        }
+      } else {
+        if r < t0 {
+          return (false, 0, 0, 0, 0)
+        }
+        if r < t1 {
+          t1 = r
+        }
+      }
+    }
+  }
+  (true, round_i(x0.to_double() + t0 * dx), round_i(y0.to_double() + t0 * dy),
+   round_i(x0.to_double() + t1 * dx), round_i(y0.to_double() + t1 * dy))
+}
+
+///|
+/// 四舍五入到整数（负数对称）。裁剪端点必须取整，否则 Bresenham 的起点会偏一个
+/// 像素——**在边界上的**线框会与"不裁剪"时差一格，而 golden 锁的是像素。
+fn round_i(v : Double) -> Int {
+  if v >= 0.0 {
+    (v + 0.5).to_int()
+  } else {
+    0 - ((0.0 - v + 0.5).to_int())
+  }
+}
+
+///|
+/// 1px 直线段（Bresenham，含两个端点）。**先把线段裁到缓冲区**（见 `clip_seg`）。
 fn stroke_line_1px(
   buf : @codec.RgbaBuf,
   x0 : Int,
@@ -2671,6 +2747,14 @@ fn stroke_line_1px(
   y1 : Int,
   color : Int,
 ) -> Unit {
+  let (vis, cx0, cy0, cx1, cy1) = clip_seg(buf, x0, y0, x1, y1)
+  if !vis {
+    return
+  }
+  let x0 = cx0
+  let y0 = cy0
+  let x1 = cx1
+  let y1 = cy1
   let dx = if x1 > x0 { x1 - x0 } else { x0 - x1 }
   let dy = if y1 > y0 { y1 - y0 } else { y0 - y1 }
   let sx = if x0 < x1 { 1 } else { -1 }

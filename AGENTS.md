@@ -430,21 +430,22 @@
                                 # 语料喂一个 CLI 进程，断言"只回错、不崩"（退出码 0、
                                 # 每行恰好一行 JSON 回包、stderr 无 PanicError），
                                 # 红了二分指名那一行——**裸命令名戳不出参数 bug**
+                                # verify.sh#scorecard 记分卡 + 键效果：行为式问"字典
+                                # 承诺的键真被读了吗"（配对跑两遍比回包/指纹/层表/render
+                                # sha，都没变 = 收了却没人读，目标 0；"测不出来"单列）；
+                                # 清单锚点唯一命中 → docs/scorecard.md 逐字节比对
 ./build_demo.sh                 # AI 修图 demo 构建 + Node headless 自检 + npm SDK 冒烟
                                 # （含 save→open 往返）+ 页面接线源码核对 + demo 测试
                                 # （工具面与 MVSL 闭环可达，需 Node；
                                 # 含 undispatched_tools 工具面自检、HTML 接线自检）
-                                # **页面接线的四层**：demo_test 拿真的拼出来的
-                                # 骨架 HTML 查处理器与 id；`panel_html_wbtest` 直接调
-                                # `layers_html`/`props_html`（这两段已提成**纯函数**）
-                                # 断言动态拼出来的列表/面板里有该出现的按钮与选中态
-                                # ——纯函数里**不许再调引擎**，一调测试就 panic；
+                                # **页面接线的四层**：demo_test 拿真拼出来的骨架
+                                # HTML 查处理器与 id；`panel_html_wbtest` 直接调纯函数
+                                # `layers_html`/`props_html`（**纯函数里不许再调引擎**）；
                                 # build_demo.sh#html-wiring 兜名字都已注册；
-                                # build_demo.sh#clickthrough 用哑 DOM 壳加载真的
-                                # demo.js 调处理器，再从引擎读回状态断言
-                                # （**DOM 本身仍需浏览器**，壳只保证跑得下去）；
-                                # 驱动器必须先走页面初始化——**验收工具与被验对象
-                                # 状态不同时，报出来的现象会指向别的地方**
+                                # #clickthrough 用哑 DOM 壳加载真的 demo.js 调处理器再
+                                # 从引擎读回状态（**DOM 本身仍需浏览器**）；驱动器必须
+                                # 先走页面初始化——**验收工具与被验对象状态不同时，
+                                # 报出来的现象会指向别的地方**
                                 # build_demo.sh#doc-tools 文档工具数 + 边界自洽：README 与 AGENTS 里
                                 # 写的工具数必须与 paint_tool_defs 一致；README
                                 # 里 unreachable 标记之间那份"AI 够不着"的名单
@@ -453,8 +454,7 @@
                                 # 数字是"做到了多少"的承诺（铁律 3）；
                                 # 别把"在浏览器里点一下"当整块——静态那半可机器验
 
-# 门禁脚本别写 `cmd | tail -1`（退出码是 tail 的，set -e 与 `&&` 都抓不到失败——
-# 实测 verify 在 9/10 失败而我以为它过了）；长输出命令走 run_quiet。
+# 门禁脚本别写 `cmd | tail -1`（退出码是 tail 的，抓不到失败）；长输出走 run_quiet。
 python3 mutation_scan.py        # 变异门：注入语义 bug 看测试能否抓住（本机约 42 分钟；
                                 # 「测试全绿」不等于「行为被守护」）
                                 # ⚠️ **扫描期间它会原地改源码**：别拿那时的 moon test
@@ -513,11 +513,11 @@ moon run --target native cli    # stdin 行协议；help 查看全部 70 个命�
   `demo_test.mbt` 可以直接喂参数断言拼出的命令行（含自由文本的引号）。
 
 - **"引擎有" ≠ "产品里的 AI 用得上"**：`undispatched_tools()` 查的是
-  "demo 工具面 → 引擎"这个方向；"引擎命令面 → 产品里到底缺哪些"是**反方向**，
-  子集是刻意的。实测 `remove-param` 在引擎里加了一轮，而 `paint_tools.mbt`
-  里连既有的 `set-param`/`list-params` 都没有（`grep param` 为空），于是
-  DESIGN 的「读元参数 → 拟命令」双通道在产品里是断的。新增引擎命令时
-  **顺手看一眼这个方向**：要么接进工具面，要么在 README 里写明它只是引擎侧能力。
+  "demo 工具面 → 引擎"；"引擎 → 产品里缺哪些"是**反方向**，子集是刻意的。
+  实测 `remove-param` 加了一轮，而 `paint_tools.mbt` 里连既有的
+  `set-param`/`list-params` 都没有（`grep param` 为空），于是 DESIGN 的
+  「读元参数 → 拟命令」双通道在产品里是断的。新增引擎命令时**顺手看一眼这个
+  方向**：要么接进工具面，要么在 README 写明它只是引擎侧能力。
   **"刻意"不等于"没人看"**：这份名单现在是两句话 + 一块机器核对的区域
   （`<!-- unreachable:begin/end -->`），`build_demo.sh#doc-tools` 断言
   **引擎命令 − 工具面覆盖 == 名单**（多写少写、条数写错都红），并且

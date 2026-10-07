@@ -827,6 +827,39 @@ MUTS = [
         "killed",
     ),
     (
+        "R61",
+        "render 的位置参数不再跳过 kv（字典写明的 `render overlay=1` 用不了）",
+        "agent/session.mbt",
+        """  let pos : Array[String] = []
+  for t in tokens {
+    if !t.contains("=") {
+      pos.push(t)
+    }
+  }""",
+        """  let pos : Array[String] = tokens""",
+        "killed",
+    ),
+    (
+        "R62",
+        "census 又静默收下没有 within= 的 components=（收了却没人读）",
+        "agent/affordance_cmds.mbt",
+        """  if comp_given && within is None {""",
+        """  if false {""",
+        "killed",
+    ),
+    (
+        "R63",
+        "overlay 线框的裁剪端点改成截断（边界上的框差一格）",
+        "render/scene.mbt",
+        """  if v >= 0.0 {
+    (v + 0.5).to_int()
+  } else {
+    0 - ((0.0 - v + 0.5).to_int())
+  }""",
+        """  v.to_int()""",
+        "killed",
+    ),
+    (
         "R18",
         "蒙版羽化解析恒 0（软边蒙版重开后变硬边）",
         "core/json.mbt",

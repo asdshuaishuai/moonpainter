@@ -1136,12 +1136,26 @@ test "参数零容忍（第三批）：视觉/分析类命令 + 「值越界就�
   assert_true(run(s, "census components=-3").contains("必须为正"), msg="components=-3 同上")
   assert_true(run(s, "mvsl-impact max=0").contains("必须为正"), msg="max=0 不许静默退回 1024")
   assert_true(run(s, "render 16 overlay=yes").contains("应为 1/0/true/false"), msg="overlay=yes 不许静默无效")
+  // `components=` 只在给了 within= 时有意义（不给选区时连通域事实根本不产出，
+  // 于是它会被静默收下而一个字段都不影响——实测 `census components=1` 与
+  // `census` 回包逐字节相同）。用不上的参数在入口拒，别让调用方自己比对回包。
+  let no_within = run(s, "census components=3")
+  assert_true(no_within.contains("error"), msg="没有 within= 时 components= 要拒：\{no_within}")
+  assert_true(no_within.contains("within"), msg="要指出它得配 within=：\{no_within}")
   // 正常路径不许误伤（含位置参数）
   assert_true(!run(s, "probe x=0 y=0 r=2").contains("error"), msg="probe 正常")
-  assert_true(!run(s, "census components=3").contains("error"), msg="census 正常")
+  assert_true(!run(s, "census within=\{b64_sel(rect_sel(0.0, 0.0, 32.0, 32.0))} components=3")
+              .contains("error"), msg="census 给了 within 时 components 正常")
   assert_true(!run(s, "mvsl-impact max=7").contains("error"), msg="impact 正常")
   assert_true(!run(s, "render 16 0 0 1 1 overlay=true").contains("error"), msg="render 位置参数+overlay 正常")
   assert_true(!run(s, "render 16 overlay=0").contains("error"), msg="overlay=0 正常")
+  // 字典写的是 `render [width] … [overlay=1]`——**overlay= 可以单独出现**。
+  // 此前它掉进 `to_i("overlay=1")`，报 "width=overlay=1 不是整数"（字典承诺的
+  // 写法用不了）。这条由 key_effect_audit.py 的（命令,键）配对发现。
+  let only_overlay = run(s, "render overlay=1")
+  assert_true(!only_overlay.contains("error"), msg="render overlay=1（不带 width）要用得了：\{only_overlay}")
+  assert_true(only_overlay.contains("\"overlay\":true"), msg="overlay 要真的生效：\{only_overlay}")
+  assert_true(!run(s, "render overlay=0").contains("\"overlay\":true"), msg="overlay=0 不许当成开")
 }
 
 ///|
