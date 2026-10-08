@@ -485,7 +485,9 @@ fn kind_str(k : ShapeKind) -> String {
 }
 
 ///|
-fn blend_str(b : BlendMode) -> String {
+/// `BlendMode` → canonical 名字。**读（`parse_blend` 在 agent 侧）与写（这里）
+/// 成对**：agent 的导出/P SD 报告都读这一处，别在别处再抄一张表。
+pub fn blend_name(b : BlendMode) -> String {
   match b {
     Normal => "normal"
     Multiply => "multiply"
@@ -693,7 +695,7 @@ fn layer_json(l : Layer) -> String {
   sb.write_string(json_escape(l.name))
   sb.write_string("\",\"kind\":\"\{kind_str(l.kind)}\",\"visible\":")
   sb.write_string(l.visible.to_string())
-  sb.write_string(",\"opacity\":\{fmt_num(l.opacity)},\"blend\":\"\{blend_str(l.blend)}\"")
+  sb.write_string(",\"opacity\":\{fmt_num(l.opacity)},\"blend\":\"\{blend_name(l.blend)}\"")
   sb.write_string(",\"x\":\{fmt_num(l.x)},\"y\":\{fmt_num(l.y)},\"w\":\{fmt_num(l.w)},\"h\":\{fmt_num(l.h)}")
   sb.write_string(",\"rot\":\{fmt_num(l.rotation_deg)},\"radius\":\{fmt_num(l.corner_radius)},\"flip_h\":\{l.flip_h},\"flip_v\":\{l.flip_v}")
   sb.write_string(",\"text\":\"\{json_escape(l.text)}\",\"font_size\":\{fmt_num(l.font_size)}")

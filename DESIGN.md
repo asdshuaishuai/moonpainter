@@ -47,7 +47,7 @@ macOS 原生类 Photoshop 编辑器。对本工程最有价值的三块遗产：
 
 ```
 宿主    cli（native 行协议 + 文件 FFI + 原子落盘）
-交互    agent（74 命令 · vision 闸 · undo/redo · 步骤历史 history/goto · P0–P2 lint · MVSL 闭环 · 工具字典）
+交互    agent（75 命令 · vision 闸 · undo/redo · 步骤历史 history/goto · P0–P2 lint · MVSL 闭环 · 工具字典）
 容器    mpd（pack/unpack · manifest/params/agent/mvsl · 指纹对账 · 限额 · 预览生成）
 渲染    render（RGBA 画布 · 2×2 子采样 AA · W3C 混合 · 旋转 · 取景 · pick · stats）
 核心    core（IR 层树 · canonical JSON 双向 · 指纹 · 层定位原语 · MVSL 编辑表 IR）
@@ -282,7 +282,7 @@ manifest 的 `mvsl` 版本块 pin 住四个独立版本号（`render_contract` /
   **空断言**即保护断言的选择子零命中（P1——恒真，比"被违反"更坏，因为它给的是虚假的安心）。
   空编辑表是合法状态，不报条目——lint 不该对「我还没改任何东西」报警。
 
-## 6. 命令集（74 个；字典 = agent/tools.mbt 单一事实源）
+## 6. 命令集（75 个；字典 = agent/tools.mbt 单一事实源）
 
 会话：`session-open` `list-tools` `help`；文档：`new` `set-canvas` `list-layers` `query-layer` `lint`；
 绘制：`add-rect/ellipse/polygon/line` `add-path` `path-preview` `bool-op`（两个形状 → 一个新路径层）`add-image`（b64）`set-image`（原地换图，只换像素）`set-style` `move` `resize` `rotate` `transform`（自由变换：位置+盒子+旋转**一次**写完 = 一步历史）`rename` `tag` `delete` `visible` `reorder` `group` `ungroup` `group-add` `group-remove`（成员增删）；
@@ -319,7 +319,7 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
 - **未做**：一个岛多个洞（一层只能挂一个反选蒙版 ⇒ 多洞结果拒绝）、
   把祖先变换折算进操作数轮廓、结果层自己的描边按集合边界重算（现在继承 A）。
 
-### 6.2 PSD 读写边界（③；`codec/psd.mbt` + `agent/psd.mbt`）
+### 6.2 PSD 读写边界（③；`codec/psd.mbt` + `codec/psd_out.mbt` + `agent/psd.mbt` + `agent/psd_out.mbt`）
 
 **读进来的东西**：`psd-info b64=` 只读地报结构；`open-psd b64= [uuid=]` 把 PSD 变成当前文档。
 一个 PSD 图层 → 一个 `Image` 层（像素编码成 PNG、内容寻址进资产表），**层序即渲染序**；
@@ -347,10 +347,39 @@ ZIP 与 ZIP+prediction 压缩；图层组；**真**像素蒙版（任何一个�
 （`channels=3`、alpha 恒 255），第一版就这么比，`layered_three` 报"66 字节不同、
 最大差 255"，看着像我们读丢了东西。
 
-**写 PSD 未做**（诚实边界）：`export-psd` 是下一轮；本轮的交付是"能读进来、读不动的
-明确拒绝、且判据站在第三方实现那一侧"。
+**写出去的东西**：`export-psd-b64` 把当前文档写成 PSD（b64 回包 + `sha256` + 字节数）。
+每层按**渲染器真实画出来的样子**烤成像素（`@render.rasterize_layer` 是唯一权威）：
 
-**没有接进产品前端**：两条命令目前是引擎侧能力（浏览器侧要一个 file picker 才谈得上入口），
+* **层自己的像素按 `opacity=1`/`visible=true` 的副本烤**，`opacity`/`visible` 只写进层记录
+  字段——组的 α 在渲染器里是**烤进画面**的（`eff_opacity`），两处都算就成了平方（变异 R170 守这条）；
+* **隐藏层也烤**（flags 记隐藏）：PSD 存隐藏层的内容，导出时静默丢掉它不是"更干净"而是丢数据；
+* 层盒子取**画面 alpha 的紧包围盒**（不是层的声明盒子）：层样式会溢出、文本层的声明盒与像素
+  本来就可能对不上，紧包围盒让"PSD 里的层"与"图上看到的那块"一致；没有墨的层写 **1×1 全透明**
+  （PSD 的通道数据不能是 0 字节）；
+* 合成图写**我们渲染结果的 RGB**，**逐通道平面序**（先整块 R、再 G、再 B）。⚠️ 写成逐像素
+  交错**不会报错**：读的人会把前 1/3 当成 R 平面，整个画面变成一片灰——写侧第一次往返就是这么红的
+  （转换只有一处：`codec.psd_composite_planes`）。压缩一律 RAW（写侧不做 RLE 编码器：合成图是
+  渲染结果的字节存档，RAW 让它逐字节可预测；读侧两种都认，由第三方语料覆盖）。
+
+**写侧明确拒绝**（不降级、理由里给下一步）：装了 MVSL 编辑表（PSD 表达不了编辑表，写出去
+等于假装那些编辑不存在）、含**调整层**（PSD 的调整层是 `brit`/`levl`/`curv`/`mixr` 另一套块格式）、
+画布超出可渲染上限（超了只会导出被裁掉的一角）。另有三条**取舍**写在能力表里：文本层是**位图**
+（不写文本层描述符）、组写成**烤好的一个层**（不写 `lsct` 分组标记）、蒙版与图层样式**烤进像素**
+（不写 PSD 的蒙版通道与 `lfx2` 效果块）——它们都有同一个性质：**画面正确、结构简化**，
+而画面正确由"导出 → 再导入 → 渲染逐位相同"守着。
+
+**写侧的判据也不自己和自己比**：`tools/check_psd_with_oracle.py` 把**我们写出的** PSD 交给
+**psd-tools + Pillow** 读（`codec/testdata/psd/roundtrip*.psd` + `roundtrip.json`），三张脸互相对：
+我们 `render` 的像素 == **Pillow 读回的合成图**（逐位）== psd-tools **按层重算**叠白纸
+（±1 的进位差，实测 12 字节），层表逐字段与 psd-tools 的读法一致（含混合模式）。
+`verify.sh#psd-roundtrip` 离线重放同一份 CLI 脚本，核导出字节 sha、`render` sha、
+**`psd-info` 解出的合成图 sha == Pillow 读同一份文件的 sha**、以及层表。
+⚠️ **实测到的第三方边界**：psd-tools 1.24.0 的 `composite(force=True)` 对**非 normal 混合**层
+按 normal 混（screen 层叠白底给出 `(200,234,200)`，而 screen 遇白恒白）——所以"按层重算"
+只用来对账**没有非 normal 混合**的场景，混合模式靠"编码层表（psd-tools 读回签名）"与
+"Pillow 读存图"两条路守。
+
+**没有接进产品前端**：三条命令目前是引擎侧能力（浏览器侧要一个 file picker / 下载动作才谈得上入口），
 README 的 unreachable 名单与 `ui_audit.py` 都记着这件事。
 
 ## 7. 远期路线（本轮明确不做，排期见 PLAN.md §8）
@@ -1071,7 +1100,7 @@ README 的 unreachable 名单与 `ui_audit.py` 都记着这件事。
 - **能力边界的权威清单是 `docs/scorecard.md`**（由 `scorecard.py` 从
   `scorecard/areas.toml` 生成、`verify.sh#scorecard` 逐字节核对）：8 个域 63 条，
   每条一个状态三档（**已做 / 部分+声明边界 / 未做**）与一个**唯一命中**的源码锚点。
-  它存在的理由是一条现场教训：**接线计数不是能力**——"74 条命令 / 61 个工具 /
+  它存在的理由是一条现场教训：**接线计数不是能力**——"75 条命令 / 61 个工具 /
   72 条人类可达"说的全是**入口存在**，而一个入口背后可能只是"回一个错误"，
   或者更坏：参数收下了、一个像素都没读（这一类现在由 `key_effect_audit.py`
   现场数：187 个（命令, 键）配对，死键目标 0，"测不出来"单列不许算通过）。

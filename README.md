@@ -1,7 +1,7 @@
 # MoonPainter — Agent 驱动的图层绘制引擎
 
 > 状态：**0.1.0（.mpd 容器 v2 + 参数化绘制 + AI 修图 demo + MVSL 确定性编辑 IR 引擎已落地：
-> native 517 项 / wasm-gc 515 项测试全绿；`./verify.sh` 十六步验证门全过）**。
+> native 527 项 / wasm-gc 525 项测试全绿；`./verify.sh` 十七步验证门全过）**。
 > 设计书 [DESIGN.md](./DESIGN.md) · 方案与验收 [PLAN.md](./PLAN.md) ·
 > MVSL 规划与评审对照 [PLAN-MVSL.md](./PLAN-MVSL.md) · AI 修图 demo 见下节。
 
@@ -50,8 +50,8 @@
 | 文字排版（②C） | **对齐 / 行距 / 字距 / 折行**（PS「字符/段落」面板那一格）：`align=left|center|right`、`line_height=1..64`、`letter_spacing=-5..32`、`wrap=1/0`，外加 `w=` 盒子宽度；`text` 里的 `\n` 是**硬换行**（`text="Hello\nWorld"`）。**单位是「字形格」**：`sc = max(1, floor(font_size/7))`，行距/字距各乘 `sc` 得像素（字号 28 ⇒ 1 格 = 4px：行距 12 是 48px、字距 2 是 8px），`advance = (6 + letter_spacing) × sc`——**这条单位口径只有一处**（`core.text_style.mbt` 的 `text_scale`/`text_adv_cols`/`text_lines`/`text_box_of`），渲染器、盒子算法、命令面校验、`lint`、字典描述、人类面板全读它。**排版只有一处实现**：渲染器把 `TextLayout`（拆行、每行对齐偏移、每行字形位图）算一次，`paint_text`（逐像素画）与 `text_ink`（`pick`/`sample`/`inside_fill` 的读点）**共用**——"这个点在不在墨上"永远只有一个答案，而 `inside_fill` 走的正是 `text_ink` ⇒ **对齐/折行之后点击判据跟着走**（否则"点得中但画不出来"或反之）。**盒子跟着内容**：行数/最长行决定盒子（`h = font_size + (行数-1) × 行距 × sc`），单行且字距为 0 时**逐位复现老公式**（`n × font_size × 6/7`）——`text_style` 为 `None` 的老文档，canonical JSON 字节、指纹、golden sha256、像素**逐位不变**（全默认的 `text_style` 也一样，`lint` 会把它当白装报出来）。**两侧都有入口**：AI 侧 `add_text`/`set_text` 收 5 个排版键（**没给的键一个都不拼** ⇒ `set_text` 是部分更新），人类侧属性面板给「对齐」下拉 +「折行」开关 +「行距」「字距」「宽度」数字格，**值全部从引擎报出来的 `text_style` 回填**（前端不猜、不缓存"上次我设了什么"），坏值把引擎的拒绝原话摆到状态栏（`line_height=8.5` 不是整数、`align=middle` 不认识、`wrap=1` 没配 `w=` ……）。**渲染契约第 8 档**（`RENDER_CONTRACT_TEXT_STYLE`）：真排版（四个值里有一个非默认）抬档 ⇒ **老引擎拒绝打开**（它只会画单行左对齐，静默打开就是静默错渲）；全默认与 `None` **不抬档**（渲染逐位相同，抬了版本闸就失去分辨力）。**诚实边界（丐版）**：①字模仍是 **ASCII 整数格点阵**（非 ASCII 画成方框，无 CJK、无字体文件）；②**折行不避标点/Hyphenation**、按空白分词、超长词**硬切**（没有连字符、没有断词规则、没有中英混排的 CJK 规则）；③**没有基线对齐/首行缩进/两端对齐/竖排**，`align` 只有三个值；④**负字距会把字模压在一起并裁掉溢出的那一列**（字模 5 列 × `sc` 宽，而格子只有 `(6+字距) × sc` 宽，`col >= 5` 的墨被判掉——这是整数格点阵的诚实边界，不是 bug）；⑤行距/字距**只有整数格**（`font_size/7` 的精度就是它）；⑥`letter_spacing` 的**中性值是 0、行距的中性值是 8**（"什么都没设"与"设成默认值"渲染相同，`lint` 报白装）；⑦**`wrap=1` 必须显式给 `w=`** 才能从"不折行"切成"折行"（没宽度就没得折，入口拒绝而不是静默用内容宽度）；⑧对齐的**舞台是盒子**：盒子等于内容宽度时 `center`/`right` 看不出来（`lint` 报 P2 并指路给 `w=`） | 带非默认排版的层在 manifest 里声明 `render_contract:8`（老引擎只认单行左对齐 ⇒ 静默错渲），**老引擎据此拒绝打开**；负控：`text_style=None` 与四个值全默认都仍是第 1 档 |
 | 渲染 | 2×2 子采样 AA、取景渲染（归一化 viewport + 目标宽）、**overlay=1（层**变换后**的四边形线框 + 3×5 序号标注，像素↔结构对位辅助；四个角过**自己的 rot/flip + 整条祖先链**——转过 90° 的层线框就是转过的那个正方形，组转了子层的框也转（此前直接把盒子投影成轴对齐矩形，于是**转过之后线框还停在原地**）；序号画在框的**重心**，转过的框里它仍在框内；线框的可见性/不透明度判据与 `pick`/渲染**同一把尺子**：隐藏的组整棵子树不画、α=0 的层不画）**、pick 像素→层 id、直方图/覆盖统计、渲染确定性（golden sha256 锁定） |
 | 容器 | pack/unpack 全环、确定性 pack（两次打包字节一致）、原子落盘（tmp+rename）、八类拒绝路径全测试 |
-| PSD 导入（③） | **读真实 PSD**：`psd-info`（只读看结构：画布/通道/模式/层表/合成图 sha256）/`open-psd`（打开成当前文档）。每个 PSD 图层 → 一个 `Image` 层（像素按 PNG 内容寻址进资产表），**层序即渲染序**；0 图层的拼合文件 → 唯一一层 `composite`（盒子=画布）；`opacity 0..255` 折成 `0..1`（唯一一处换算）。**边界（明确拒绝，不静默丢）**：位深 16/32、CMYK/索引/Lab/位图、ZIP/ZIP+prediction 压缩、图层组、**真**像素蒙版（第三方给每层写的全可见占位蒙版照读）、图层效果、剪贴蒙版、未知混合模式、通道数不属于 {1,3,4}。**写 PSD 未做**（`export-psd` 是下一轮）。判据来自**第三方**而不是自己：12 例 `.psd` 由 psd-tools 1.24.0 写出、期望值由 Pillow 12.3.0 + psd-tools 双读算好落在 `codec/testdata/psd/corpus.json`，`verify.sh#psd-corpus` 逐例核结构（含可见性/混合模式）与**合成图 sha**，8 例边界要求 `psd-info` 与 `open-psd` **两处入口都明确拒绝**且理由里带承诺的那句话；渲染端到端另有 psd-tools **按层重算**的合成图叠白纸当参考图逐位比（唯一例外：图层不透明度不是 0/255、或合成图里有半透明像素时的进位差 1——该例外是**算出来的**，见 `tools/make_psd_corpus.py` 的 `_ref_over_white`，不是猜的） | 新增 `codec/psd.mbt`（纯字节解析）+ `agent/psd.mbt`（映射到 `Document` + 资产）；两条命令；`codec` 仍然零第三方依赖（psd-tools/Pillow 只在**生成语料**时用） |
-| 会话 | 74 个命令（字典 = agent/tools.mbt）、vision 闸、undo/redo（快照栈 ≤64）、**步骤历史 `history`/`goto`**、编辑历史、P0–P2 lint、语义标签 `tag`/`untag`（可打可摘；可当**层作用域**用，见下。**两侧都有入口**：AI 走 `tag`/`untag` 工具，人类在属性面板打标签、每个标签旁一个 ✕ 摘掉——能打上的名字必须能摘下） |
+| PSD 读写（③） | **读**：`psd-info`（只读看结构：画布/通道/模式/层表/合成图 sha256）/`open-psd`（打开成当前文档）——每个 PSD 图层 → 一个 `Image` 层（像素按 PNG 内容寻址进资产表），**层序即渲染序**；0 图层的拼合文件 → 唯一一层 `composite`（盒子=画布）；`opacity 0..255` 折成 `0..1`（唯一一处换算）。**写**：`export-psd-b64` 把当前文档写成 PSD（b64 回包 + sha256）——每层按**渲染器真实画出来的样子**烤成像素（层样式/蒙版烤进像素，不写 PSD 的蒙版通道与效果块），层记录写名字/不透明度/可见性/混合模式，层盒子取**画面 alpha 紧包围盒**，合成图写我们渲染结果的 RGB（**逐通道平面序**）。**读的边界（明确拒绝，不静默丢）**：位深 16/32、CMYK/索引/Lab/位图、ZIP/ZIP+prediction 压缩、图层组、**真**像素蒙版（第三方给每层写的全可见占位蒙版照读）、图层效果、剪贴蒙版、未知混合模式、通道数不属于 {1,3,4}。**写的边界（明确拒绝）**：装了 MVSL 编辑表、含调整层、画布超出可渲染上限；**已知的写侧取舍**：文本层是位图、组写成烤好的一个层、蒙版与样式烤进像素（都写进 DESIGN §6.2）。判据来自**第三方**而不是自己：读侧 12 例 `.psd` 由 psd-tools 1.24.0 写出、期望值由 Pillow 12.3.0 + psd-tools 双读算好落在 `codec/testdata/psd/corpus.json`，`verify.sh#psd-corpus` 逐例核结构（含可见性/混合模式）与**合成图 sha**，8 例边界要求 `psd-info` 与 `open-psd` **两处入口都明确拒绝**且理由里带承诺的那句话；写侧由 `tools/check_psd_with_oracle.py` 把**我们写出的** PSD 交给 psd-tools + Pillow 读（`codec/testdata/psd/roundtrip*.psd` + `roundtrip.json`），`verify.sh#psd-roundtrip` 离线重放同一份 CLI 脚本并核：导出字节 sha、`render` sha、**`psd-info` 解出的合成图 sha == Pillow 读同一份文件的 sha**、层表逐字段 == psd-tools 的读法。⚠️ 一个实测到的第三方边界：psd-tools 1.24.0 的 `composite(force=True)` 对**非 normal 混合**层按 normal 混（screen 层叠白底给出 `(200,234,200)`，正确答案是白）；所以"按层重算"只用在没有非 normal 混合的场景上对账，混合模式靠**编码层表**与 Pillow 读存图两条路守 | 新增 `codec/psd.mbt`（纯字节解析）+ `codec/psd_out.mbt`（纯字节写出）+ `agent/psd.mbt`/`agent/psd_out.mbt`（映射到 `Document` + 资产）；三条命令；`codec` 仍然零第三方依赖（psd-tools/Pillow 只在**生成语料/对账**时用） |
+| 会话 | 75 个命令（字典 = agent/tools.mbt）、vision 闸、undo/redo（快照栈 ≤64）、**步骤历史 `history`/`goto`**、编辑历史、P0–P2 lint、语义标签 `tag`/`untag`（可打可摘；可当**层作用域**用，见下。**两侧都有入口**：AI 走 `tag`/`untag` 工具，人类在属性面板打标签、每个标签旁一个 ✕ 摘掉——能打上的名字必须能摘下） |
 | MVSL 编辑表 | 确定性声明式编辑 IR：**图层级作用域 `layer=<id>` 与标签作用域 `layer=@<标签>`**（前者只作用于指定层，后者作用于带该标签的**全部层**——"只改某几个层"的声明式写法；该层先单独栅格化到透明底，选择子在**这一层自己的像素**上求值，再合成回去；标签是活绑定：打/摘标签即改作用范围，落不到任何层则**拒绝**而不是静默不生效；**这同时是 `recolor` 边界去污染的正确做法**：半透明边缘的颜色是前景与背景的混合，在合成图上变换会连背景一起偏移，在层栅格上则只作用于纯前景色）+ 谓词选择子（OKLCh 色相环/彩度/OKLab 亮度/几何/渐变/种子连通域/外部 mask 资产，全部输出 [0,1] 软权重场，可 Union/And/Diff 组合）+ 有序算子程序（recolor/temperature/relight，`out=lerp(in,op(in),w)` 软权重过渡）+ 选区精修（grow/shrink/feather/fill_holes/keep_largest/guided filter）+ 保护断言；**是渲染的最终一遍**（`最终图 = apply(编辑表, 层合成底图)`，`render`/`previews/`/`mvsl-impact` 三条出口同一张图）；canonical JSON 往返幂等、旧引擎遇未知算子/更高版本一律拒绝、前视 `stage:` 与带 `stage:` 基准的断言在校验期拦下 |
 | MVSL 闭环 affordance | `select-preview`（选择子→overlay PNG + 覆盖率/bbox/连通域事实，"AI 选 ID 不报坐标"）、`mvsl-impact`（逐算子 diff 证书：改动像素数/ΔE/选区外泄漏率 + 结果 PNG；泄漏率判据是**选择子支撑集**，软过渡带不算泄漏——`out=lerp(in,op(in),w)` 保证支撑集外逐位不变，所以它是不变量/安全网；**并报内存代价** `est_peak_bytes` = 算子数 × 画布像素数 × 14.4，`mvsl-set` 同样报，**只报不拦**——这张表可能吃 2.4–2.9 GB 而时间护栏照样放行，见 DESIGN §性能）、`mvsl-assert`（保护区约束违反则命令信封直接 fail，"别动人物"变成机器可验证约束）、`census`（hue×sat 12×3 桶普查 + OKLab L 与 HSV V 均值对照，`within=` 可收窄到某条选择子）、`probe`（邻域统计 + 边缘置信度 + 当前编辑表每个算子/断言在该点的 membership 与连通域 id；**支持 `points=x1,y1;x2,y2;…` 一次探 64 点**，返回数组且每点字段与单点模式逐字段一致——探九宫格不用往返 9 次）、`sel-schema`（选择子/算子语法自证清单：canonical 示例由写出器产出、由同一解析器验回，附量纲与"数值该取哪个字段"）；**lint 也查编辑表**（空操作/断言被违反/空断言/白装算子）；预览**先全分辨率生成再盒平均降采样**，防发丝级软边界被抹掉误判 |
 | wasm SDK | `wasm/` 包：经典 wasm 零 import（默认会话面 `mp_version/mp_reset/mp_exec_in` + in 槽；多会话句柄面 `mp_open/mp_close/mp_exec_h`），Node/浏览器双宿主冒烟 + 合同测试；JS 宿主胶水 `npm/moonpainter-sdk/`（.d.ts 类型化门面） |
@@ -191,13 +191,13 @@ EOF
   `build_demo.sh#doc-tools` 会机械核对下面这块，同时保证**工具面不许指向一条
   引擎里不存在的命令**。要新增可达能力时改这里，而不是默默改数：
   <!-- unreachable:begin -->
-  引擎 74 条命令里，demo 的 AI 够不着 13 条：`session-open` `open-mpd-b64`
-  `psd-info` `open-psd`
+  引擎 75 条命令里，demo 的 AI 够不着 14 条：`session-open` `open-mpd-b64`
+  `psd-info` `open-psd` `export-psd-b64`
   `help` `list-tools` `fingerprint` `add-image` `set-image` `inspect`
   `history` `goto` `adjust-spec`（步骤面板是**人的**控件：AI 自己就是按顺序发命令的那一方，
   它要的是撤销/重做/指纹这三样，不需要读人类那块操作历史面板。
-  两条 PSD 导入命令同理是**尚未接线**：PSD 是本地文件，浏览器侧要一个 file picker
-  才谈得上入口（引擎侧已经能读，见 README 能力表与 DESIGN 的 PSD 边界节）。
+  三条 PSD 命令同理是**尚未接线**：PSD 是本地文件，浏览器侧要一个 file picker
+  才谈得上入口（引擎侧已经能读能写，见 README 能力表与 DESIGN 的 PSD 边界节）。
   ⚠️ 括号里**不许出现反引号包起来的命令名**：这份名单是按反引号扫的，
   散文里随手写一个命令名就会被当成名单项，判据当场报"多写"）
   <!-- unreachable:end -->
@@ -211,10 +211,11 @@ EOF
   按后者判，于是 `data-tool='move'`、`class='group'`、注入 JS 里的 `new`、以及
   `bootstrap` 装的示例场景全被算成人类入口（`add-line` 当初就是这么被算成"人类能画折线"的：
   示例场景与 AI 侧都用得上它，而工具条上一个入口都没有）；
-  另有 **2 条引擎侧命令前端还没有入口**（PSD 导入要吃**本地文件**，浏览器侧要
+  另有 **3 条引擎侧命令前端还没有入口**（PSD 读写要吃/吐**本地文件**，浏览器侧要
   一个 file picker 才谈得上入口；引擎与 CLI 已经能用，AI 工具面同样还没接）：
   - `psd-info` — 先看清一份 PSD 会读成什么（结构/层表/合成图 sha），只读、不改会话
   - `open-psd` — 把 PSD 打开成文档（一层一个 Image 层）；等浏览器侧文件入口接线
+  - `export-psd-b64` — 把当前文档写成 PSD（b64 回包）。浏览器侧同样要一个"下载文件"的动作才算入口（本地保存 / 文件系统 API）
   <!-- human-face:end -->
   那 16 条**为什么只在调试面板里**（不是没有入口，是刻意不放在日常动线上）：
   - `census` — 分析出口，产物是**给模型看的数值**（hue×sat 普查）；人类看图即可，取像素走 `sample`/统计面板
@@ -353,7 +354,7 @@ EOF
   ToolProvider / Observer 三端口扩展；Observer 即"全程可见"的官方通道）。
   评估记录：moonllm（DC-Z-lab）锁 `+native` 不适用浏览器，弃用。
 
-## 一键验证门（`./verify.sh` 16 步，任何一步失败即非零退出）
+## 一键验证门（`./verify.sh` 17 步，任何一步失败即非零退出）
 
 > 散文里引用步骤**一律写 slug**（`verify.sh#anchors`），**不写编号**：
 > 编号会随插入步骤错位——实测这里曾把锚点自检写成过一个当时的步号，插入
@@ -377,6 +378,7 @@ EOF
 13. **字段面门禁**（`field_audit.py`）：`Layer` 的每个字段都必须有"建层之后改得动"的归属，改不动的要显式声明为身份字段——「改得动吗」这一面**不许靠手走**（手走三处就下了"到此走完"的结论，实测漏掉位图换图与位图盒子两处）；
 14. **对抗性参数 fuzz**（`panic_hunt.py`）：全部命令 × 固定敌意语料（位置参数形态 + 字典里**声明过的每个键** × 敌意值）喂给一个 CLI 进程，断言**只回错、不崩**——退出码 0、每行输入恰好一行 JSON 回包（静默与崩溃一样是 bug）、stderr 无 `PanicError`；红了按前缀二分指名那一行（当年的真 bug 是 `set-text l1` 越界读 `tokens[2]` 把 CLI 干掉）。
 15. **记分卡 + 键效果**（`key_effect_audit.py` + `scorecard.py --check`）：①**行为式**问"字典承诺的每个键真的被读了吗"——每个（命令, 键）配对在同一进程里跑两遍（基线值 vs 探针值），比四个可观测出口（命令回包 / `fingerprint` / `list-layers` / `render` sha256），四个全都没变就是**收了却没人读的键**（目标 0；"测不出来"单列，不许算成通过）；②`scorecard/areas.toml` 每条必须有一个**唯一命中**的源码锚点（腐烂就红）+ 合法 slug，生成 `docs/scorecard.md` 并与提交的那份逐字节比较（过期只许重新生成）。文件不一致 = 文档在撒谎。
+17. **PSD 写出对账**（`verify.sh#psd-roundtrip`）：写出去的东西也不能自己和自己比——`codec/testdata/psd/roundtrip*.psd` 是**我们写出的**字节，期望值由 psd-tools 1.24.0 + Pillow 12.3.0 在生成时读出来（`tools/check_psd_with_oracle.py`）。这一步离线重放同一份 CLI 脚本并核四件事：①导出字节的 sha（写侧确定性）；②`render` 的 PNG sha；③**`psd-info` 解出的合成图 sha == Pillow 读同一份文件的 sha**（两个实现对同一段字节的理解必须一致）；④层表逐字段 == psd-tools 读到的层表（含混合模式）。生成时还要三条脸互相对：我们 `render` 的像素 == Pillow 读回的合成图（逐位）== psd-tools 按层重算叠白纸（±1 的进位差，且那个差是**量出来的**）。
 16. **PSD 语料对账**（`verify.sh#psd-corpus`）：PSD 是**别人的格式**，判据不能自己和自己比——12 例 `.psd` 由 psd-tools 1.24.0 写出、期望值由 Pillow 12.3.0 + psd-tools 双读算好落在 `codec/testdata/psd/corpus.json`；这一步走真 CLI，逐例核**结构**（宽高/通道/层表逐字段，含可见性与混合模式）与**合成图 sha**（我们的解码 vs Pillow 的解码，必须逐位一致），8 例边界样本则要求 `psd-info` 与 `open-psd` **两处入口都明确拒绝**、理由里带承诺的那句话（静默降级是最坏的结果）。离线跑，不需要 Pillow / psd-tools。
 
 ## 变异测试门（`python3 mutation_scan.py`，本机约 42 分钟）
@@ -397,7 +399,7 @@ EOF
 - **P3 manifest 的 `counts` 无人校验**：把 `layers` 和 `assets` 计数互换全部测试通过——
   而 `counts` 正是工具/审阅者据以判断"容器里有什么"的对外事实。
 
-当前 330 个变异中 326 个被抓住；四条**已确认的等价变异**（M2、R66、Q65、R131）
+当前 343 个变异中 339 个被抓住；四条**已确认的等价变异**（M2、R66、Q65、R131）
 是"改了也逐位相同"的同义改写，不算漏网——⚠️ **名单也要跟着退役走**：
 Q33 曾在名单里，它在一次重构后变成**真判据**（重指后能被抓住），名单当时
 没同步；现在这一行由 `mutation_scan.py --check-anchors` 的静态对账 +

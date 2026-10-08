@@ -15,19 +15,19 @@
 # 下界），但"能力倒退"会红——这正是它存在的意义。
 
 [floors]
-engine_commands = 74
-tests_native = 517
-tests_wasm = 515
-mutations = 330
-mutations_killed = 326
+engine_commands = 75
+tests_native = 527
+tests_wasm = 525
+mutations = 343
+mutations_killed = 339
 human_reachable = 72
-unreachable_human = 2
+unreachable_human = 3
 ai_tools = 61
-unreachable_ai = 13
+unreachable_ai = 14
 selfcheck_items = 31
 clickthrough_assertions = 112
 clickable_handlers = 90
-panic_lines = 5761
+panic_lines = 6105
 # `key_effect_audit.py` 量的是「（命令, 键）配对」：只要加键、加命令，配对数就涨；
 # 有读取点数应当恒等于配对数（被拒/未测/基线失败都必须为 0，否则审计自己红）。
 key_effect_pairs = 244
@@ -36,7 +36,7 @@ key_effect_read = 244
 # `未做`刻意**不进地板**——它是 roadmap，缩短它是好事，靠 `--check` 的逐字节
 # 比对逼你重新生成文档（于是"少了一项未做"必须是一次显式的改动）。
 scorecard_items = 66
-scorecard_done = 53
+scorecard_done = 54
 
 # 有意下调时的申报区（每条：metric + amount + reason，写成 `[[retired]]` 表）。
 # 例：变异退休（它守的行为变成正确行为）时，floor 减 1 并在**同一次提交**里写一条。

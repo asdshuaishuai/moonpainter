@@ -11,31 +11,31 @@
 | 路径、文本与蒙版 | 8 | 4 | 1 | 3 |
 | MVSL 编辑表 | 9 | 6 | 3 | 0 |
 | 命令面与工程纪律 | 9 | 9 | 0 | 0 |
-| 容器与互操作 | 7 | 5 | 0 | 2 |
+| 容器与互操作 | 7 | 6 | 0 | 1 |
 | 人类界面（AI 修图 demo） | 9 | 8 | 0 | 1 |
 | 性能、确定性与可复现 | 7 | 7 | 0 | 0 |
-| **合计** | **66** | **53** | **5** | **8** |
+| **合计** | **66** | **54** | **5** | **7** |
 
 ## 现场量的数字（现算，不手写）
 
 | 指标 | 值 | 来源 |
 | :-- | --: | :-- |
-| 引擎命令面（字典条数） | 74 | floors.toml ← verify.sh#catalog |
-| native 测试条数 | 517 | floors.toml ← verify.sh#catalog |
-| wasm-gc 测试条数 | 515 | floors.toml ← verify.sh#catalog |
-| 变异条数 | 330 | floors.toml ← verify.sh#catalog |
-| 被抓住的变异 | 326 | floors.toml ← verify.sh#catalog |
+| 引擎命令面（字典条数） | 75 | floors.toml ← verify.sh#catalog |
+| native 测试条数 | 527 | floors.toml ← verify.sh#catalog |
+| wasm-gc 测试条数 | 525 | floors.toml ← verify.sh#catalog |
+| 变异条数 | 343 | floors.toml ← verify.sh#catalog |
+| 被抓住的变异 | 339 | floors.toml ← verify.sh#catalog |
 | 人类可达命令 | 72 | floors.toml ← ui_audit.py |
-| 人类够不着的命令（目标 0） | 2 | floors.toml ← ui_audit.py |
+| 人类够不着的命令（目标 0） | 3 | floors.toml ← ui_audit.py |
 | AI 工具面条数 | 61 | floors.toml ← build_demo.sh#doc-tools |
-| AI 刻意够不着的命令 | 11 | floors.toml ← build_demo.sh#doc-tools |
+| AI 刻意够不着的命令 | 14 | floors.toml ← build_demo.sh#doc-tools |
 | （命令, 键）配对 | 244 | floors.toml ← key_effect_audit.py |
 | 有读取点的配对 | 244 | floors.toml ← key_effect_audit.py |
 | **收了却没人读的键（目标 0）** | 0 | key_effect_audit.py 现场量 |
 | 对抗性参数 fuzz 行数 | 5761 | floors.toml ← panic_hunt.py |
-| 浏览器自检项 | 30 | floors.toml ← build_demo.sh#selfcheck |
+| 浏览器自检项 | 31 | floors.toml ← build_demo.sh#selfcheck |
 | 点击贯通断言 | 112 | floors.toml ← build_demo.sh#clickthrough |
-| 可点处理器 | 85 | floors.toml ← build_demo.sh#clickthrough |
+| 可点处理器 | 90 | floors.toml ← build_demo.sh#clickthrough |
 
 > **别把接线计数当能力**：AI 工具 60 条 / 人类可达 70 条说的是「有没有入口」，一个入口背后可能只是"回一个错误"；行为由`verify.sh` 与 `build_demo.sh` 的各步钉住，而"参数收了没人读"这类空壳由 `key_effect_audit.py` 现场数。
 
@@ -135,7 +135,7 @@
 | 前向版本拒开：`render_contract` 按用到的新字段升档 | 已做 | `core/document.mbt#required_render_contract` | 旧引擎静默错渲比拒绝更坏；负控：只带亮度层的容器仍是第 1 档。 |
 | previews/{flat,thumb}.png：保存时自动渲染（含编辑表） | 已做 | `mpd/mpd.mbt#preview_png` | 预览与 `render` 同一张图（编辑表是渲染的最终一遍）。 |
 | PSD **读**（真实 .psd：合成图 + 图层/可见性/不透明度/混合/盒） | 已做 | `codec/psd.mbt#psd_decode` · `verify.sh#psd-corpus` | 12 例 psd-tools 写出的语料 + 8 例边界；结构期望与合成图 sha 由 Pillow/psd-tools 双读算好；边界（位深 16/CMYK/ZIP/图层组/真蒙版）两处入口都明确拒绝，不降级。 |
-| PSD **写**（`export-psd`：图层/蒙版/混合/文本/图层效果） | 未做 | `agent/psd.mbt#cmd_open_psd` | 本轮只做读侧；写出、图层效果/剪贴/文本层的往返是下一轮（③ 的后半）。 |
+| PSD **写**（`export-psd-b64`：栅格化图层 + 层记录 + 混合/不透明度/可见性 + 合成图） | 已做 | `agent/psd_out.mbt#cmd_export_psd_b64` · `verify.sh#psd-roundtrip` | 每层按渲染器真实画面烤像素（opacity/visible 不烤进去，隐藏层内容保留），层盒子取 alpha 紧包围盒，合成图写平面序 RGB。判据：psd-tools + Pillow 读我们写出的文件（合成图逐位、层表逐字段），离线门禁核导出 sha/render sha/合成图 sha/层表。边界：装了编辑表、含调整层、超限画布明确拒绝；文本层是位图、组烤成一个层、蒙版与样式烤进像素。 |
 | SVG / AI / 其他位图格式的导入导出 | 未做 | `agent/session.mbt#cmd_open_b64` | 导入只有 PNG（8-bit RGB/RGBA/灰非交错）与 `.mpd`；导出只有 `.mpd` 与 PNG。 |
 
 

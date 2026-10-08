@@ -338,6 +338,7 @@ pub fn exec(s : Session, line : String) -> String {
     "mvsl-assert" => cmd_mvsl_assert(s)
     "psd-info" => cmd_psd_info(s, tokens)
     "open-psd" => cmd_open_psd(s, tokens)
+    "export-psd-b64" => cmd_export_psd_b64(s, tokens)
     "save-mpd-b64" => cmd_save_b64(s)
     "open-mpd-b64" => cmd_open_b64(s, tokens)
     _ => err("未知命令 \{verb}（help 查看全量）")
@@ -563,7 +564,7 @@ fn layer_summary(l : @core.Layer) -> String {
   sb.write_string(",\"x\":\{@core.fmt_num(bx)},\"y\":\{@core.fmt_num(by)},\"w\":\{@core.fmt_num(bw)},\"h\":\{@core.fmt_num(bh)}")
   sb.write_string(",\"visible\":\{l.visible}")
   sb.write_string(",\"opacity\":\{@core.fmt_num(l.opacity)}")
-  sb.write_string(",\"blend\":\"\{blend_str(l.blend)}\"")
+  sb.write_string(",\"blend\":\"\{@core.blend_name(l.blend)}\"")
   // 能力表（"这条命令对这个 kind 的画面有没有效果"）——人类前端据此画控件，
   // **别在 demo 里再抄一遍 kind 名单**：判断两处实现必然先烂。
   sb.write_string(",\"caps\":[")
@@ -735,18 +736,6 @@ fn kind_str(k : @core.ShapeKind) -> String {
   }
 }
 
-///|
-fn blend_str(b : @core.BlendMode) -> String {
-  match b {
-    @core.BlendMode::Normal => "normal"
-    @core.BlendMode::Multiply => "multiply"
-    @core.BlendMode::Screen => "screen"
-    @core.BlendMode::Overlay => "overlay"
-    @core.BlendMode::Darken => "darken"
-    @core.BlendMode::Lighten => "lighten"
-    @core.BlendMode::Difference => "difference"
-  }
-}
 
 ///|
 fn cmd_list_layers(s : Session) -> String {

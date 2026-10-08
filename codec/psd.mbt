@@ -312,7 +312,12 @@ fn psd_extra_info(
             if body + 4 + n <= d.length() && n > 0 {
               let sb = StringBuilder()
               let mut i = 0
-              while i + 1 < n {
+              // ⚠️ **真 bug（写侧第一次往返才暴露）**：`luni` 里那个 u32 是
+              // **字符数**（psd-tools 的 `read_unicode_string` 读 `num_chars * 2`
+              // 字节），第一版当成字节数 ⇒ 名字被截成一半（"bottom red" 读成
+              // "botto"）。第三方语料照不出这个 bug：psd-tools 只在名字不是
+              // MacRoman 能表示的时候才写 `luni`，纯 ASCII 的层名走 Pascal 名。
+              while i + 1 < n * 2 {
                 match psd_be16(d, body + 4 + i) {
                   None => break
                   Some(cp) => {
@@ -484,9 +489,16 @@ fn psd_layer_record(d : Bytes, off : Int) -> Result[(PsdRec, Int), String] {
     }
     pascal = sb.to_string()
   }
-  // Pascal 名按 4 字节对齐（相对 extra 段起点）
+  // Pascal 名按 4 字节对齐 —— ⚠️ **真 bug（写侧第一次往返才暴露）**：对齐的参照物是
+  // **Pascal 名这个字段自己**（1 字节长度 + n 字节名字），不是文件里的绝对偏移
+  // （psd-tools 的 `write_pascal_string` 就是 `write_padding(fp, 1 + len(data), 4)`）。
+  // 第一版按 `extra_off % 4` 算：某些层记录恰好让 extra 起点不等于 4 的倍数时，
+  // 对齐量会多出 1..3 字节 ⇒ 后面的附加信息块（`luni` 名字、`lsct`/`lfx2` 这些
+  // 该拒的标记）**全被跳过**，现象是"名字只有 Pascal 那半截、组/效果层当成普通层收下"。
+  // 语料照不出来：psd-tools 写的层名之后如果没有附加信息块，多跳这几个字节
+  // 谁都不会发现（没人再往下解析）。
   let mut extra_off = q + 1 + nlen
-  let pad = (4 - (extra_off % 4)) % 4
+  let pad = (4 - ((1 + nlen) % 4)) % 4
   extra_off = extra_off + pad
   let info_len = if extra + extra_len > extra_off {
     extra + extra_len - extra_off

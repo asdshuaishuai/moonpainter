@@ -995,7 +995,7 @@ fn kind_only_fields() -> Array[KindOnly] {
       kinds: ["rect", "ellipse", "polygon", "line", "image"],
       dead: fn(l) {
         if !(l.blend is @core.BlendMode::Normal) {
-          "blend=\{blend_str(l.blend)}"
+          "blend=\{@core.blend_name(l.blend)}"
         } else {
           ""
         }

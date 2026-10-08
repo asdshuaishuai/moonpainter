@@ -428,11 +428,12 @@ note = "12 例 psd-tools 写出的语料 + 8 例边界；结构期望与合成�
 
 [[area.item]]
 id = "psd-write"
-title = "PSD **写**（`export-psd`：图层/蒙版/混合/文本/图层效果）"
-status = "missing"
-anchor = "agent/psd.mbt#cmd_open_psd"
-must_contain = "cmd_open_psd"
-note = "本轮只做读侧；写出、图层效果/剪贴/文本层的往返是下一轮（③ 的后半）。"
+title = "PSD **写**（`export-psd-b64`：栅格化图层 + 层记录 + 混合/不透明度/可见性 + 合成图）"
+status = "done"
+anchor = "agent/psd_out.mbt#cmd_export_psd_b64"
+must_contain = "cmd_export_psd_b64"
+gate = "verify.sh#psd-roundtrip"
+note = "每层按渲染器真实画面烤像素（opacity/visible 不烤进去，隐藏层内容保留），层盒子取 alpha 紧包围盒，合成图写平面序 RGB。判据：psd-tools + Pillow 读我们写出的文件（合成图逐位、层表逐字段），离线门禁核导出 sha/render sha/合成图 sha/层表。边界：装了编辑表、含调整层、超限画布明确拒绝；文本层是位图、组烤成一个层、蒙版与样式烤进像素。"
 
 [[area.item]]
 id = "svg"

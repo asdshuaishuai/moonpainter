@@ -1,0 +1,133 @@
+{
+  "note": "由 tools/check_psd_with_oracle.py 生成：psd-tools + Pillow 读**我们写出的** PSD",
+  "scenes": {
+    "blend": {
+      "bytes": 1158,
+      "cli_script": [
+        "session-open full_image",
+        "new 16 12 uuid=psd-roundtrip-blend",
+        "add-rect x=0 y=0 w=16 h=12 fill=#FFFFFF00 name=底 id=b1",
+        "add-rect x=1 y=1 w=6 h=5 fill=#3366FFFF name=乘 id=b2 blend=multiply",
+        "add-rect x=8 y=6 w=6 h=5 fill=#22AA22FF name=滤 id=b3 blend=screen",
+        "set-style b3 opacity=0.5",
+        "export-psd-b64",
+        "render 16"
+      ],
+      "height": 12,
+      "layers": [
+        {
+          "blend": "normal",
+          "h": 1,
+          "name": "底",
+          "opacity": 255,
+          "visible": true,
+          "w": 1,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "blend": "multiply",
+          "h": 5,
+          "name": "乘",
+          "opacity": 255,
+          "visible": true,
+          "w": 6,
+          "x": 1,
+          "y": 1
+        },
+        {
+          "blend": "screen",
+          "h": 5,
+          "name": "滤",
+          "opacity": 128,
+          "visible": true,
+          "w": 6,
+          "x": 8,
+          "y": 6
+        }
+      ],
+      "pillow_composite_sha256": "ac4635450e02dedea0d3f9d93b4b894bfb74f7f96d98b5d167d3dc6094ae3c5d",
+      "psd_sha256": "09be67a738c588a3749cb4ceed3a0f9a8813714447844e40779ef0064186c40d",
+      "psd_tools_force_white_diff_bytes": 90,
+      "psd_tools_force_white_max_diff": 111,
+      "psd_tools_force_white_sha256": "8f9cf055d3a2c7a35f40b02887b81ffa92937ed2e8f6dde6dfe5ab1b657abd65",
+      "render_png_sha256": "54a026591138dc617aabfe865ab54225dca53ee6c56ff787ff6dfef95c62a383",
+      "render_sha256": "ac4635450e02dedea0d3f9d93b4b894bfb74f7f96d98b5d167d3dc6094ae3c5d",
+      "width": 16
+    },
+    "main": {
+      "bytes": 4152,
+      "cli_script": [
+        "session-open full_image",
+        "new 24 18 uuid=psd-roundtrip",
+        "add-rect x=1 y=1 w=10 h=8 fill=#CC2222FF name=底板 id=r1",
+        "add-ellipse x=8 y=6 w=12 h=9 fill=#2244CCAA name=半透明蓝 id=e1",
+        "add-text x=2 y=2 text=Hi fill=#000000FF name=字 id=t1 font_size=7",
+        "add-mask t1 kind=rect x=1 y=1 w=14 h=12 feather=1",
+        "set-fx t1 shadow=true outline=true",
+        "group g1 r1 e1",
+        "set-style g1 opacity=0.5",
+        "add-rect x=20 y=14 w=6 h=6 fill=#22AA22FF name=边缘 id=r2",
+        "set-style r2 opacity=0.25",
+        "visible t1 false",
+        "add-rect x=0 y=0 w=3 h=3 fill=#000000FF name=空手 id=r3",
+        "group g2 r3",
+        "group-remove g2 r3",
+        "delete r3",
+        "export-psd-b64",
+        "render 24"
+      ],
+      "height": 18,
+      "layers": [
+        {
+          "blend": "normal",
+          "h": 14,
+          "name": "g1",
+          "opacity": 128,
+          "visible": true,
+          "w": 19,
+          "x": 1,
+          "y": 1
+        },
+        {
+          "blend": "normal",
+          "h": 16,
+          "name": "字",
+          "opacity": 255,
+          "visible": false,
+          "w": 20,
+          "x": 1,
+          "y": 1
+        },
+        {
+          "blend": "normal",
+          "h": 4,
+          "name": "边缘",
+          "opacity": 64,
+          "visible": true,
+          "w": 4,
+          "x": 20,
+          "y": 14
+        },
+        {
+          "blend": "normal",
+          "h": 1,
+          "name": "g2",
+          "opacity": 255,
+          "visible": true,
+          "w": 1,
+          "x": 0,
+          "y": 0
+        }
+      ],
+      "pillow_composite_sha256": "515de256b830f292f264e75ed83a0815e76aa822fc9a4b9555baabb5a116926e",
+      "psd_sha256": "d2e1aaf0109e1fd60ef1d1b504865fc9152d4034a24560350a74c626d4493765",
+      "psd_tools_force_white_diff_bytes": 12,
+      "psd_tools_force_white_max_diff": 1,
+      "psd_tools_force_white_sha256": "406e171f65e7b6bd7c145cc7ba7bb571ecdd90419fafd2a7d4a121cccd69a797",
+      "render_png_sha256": "a3017c49f627940f5c19989b6dcaf6e23a6880f0e876044b511c65c9486ed605",
+      "render_sha256": "515de256b830f292f264e75ed83a0815e76aa822fc9a4b9555baabb5a116926e",
+      "width": 24
+    }
+  }
+}

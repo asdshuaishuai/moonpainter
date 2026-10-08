@@ -15,7 +15,7 @@ cd "$(dirname "$0")"
 # 为什么不写编号：插一步，散文里的「第 N 步」就全错，而没有任何东西会红——
 # 实测 README 的「`verify.sh` 第 9 步用 --check-anchors」早已错位（锚点自检
 # 是第 10 步，第 9 步是参数下界）。第 8 步的文档数字对账会核这张表。
-# step-slugs: 1=check 2=native-test 3=wasm-gc 4=cli-e2e 5=unzip 6=roundtrip 7=mvsl-e2e 8=catalog 9=arg-lower-bound 10=anchors 11=params 12=deps 13=fields 14=panic-hunt 15=psd-corpus 16=scorecard
+# step-slugs: 1=check 2=native-test 3=wasm-gc 4=cli-e2e 5=unzip 6=roundtrip 7=mvsl-e2e 8=catalog 9=arg-lower-bound 10=anchors 11=params 12=deps 13=fields 14=panic-hunt 15=psd-corpus 16=psd-roundtrip 17=scorecard
 OUT=$(mktemp -d /tmp/moonpainter-verify.XXXXXX)
 trap 'rm -rf "$OUT"' EXIT
 
@@ -58,7 +58,7 @@ if bad:
 print('verify.sh 步骤编号自洽（%d 步，分母全是 %d）' % (len(steps), len(steps)))
 PYD
 
-echo "== 1/16 moon check =="
+echo "== 1/17 moon check =="
 CHECK_OUT=$(moon check 2>&1)
 echo "$CHECK_OUT" | tail -1
 if echo "$CHECK_OUT" | grep -q "Warning"; then
@@ -67,13 +67,13 @@ if echo "$CHECK_OUT" | grep -q "Warning"; then
   exit 1
 fi
 
-echo "== 2/16 moon test --target native =="
+echo "== 2/17 moon test --target native =="
 run_quiet moon test --target native
 # 留下条数给文档对账（README 首页写着具体条数）：**散文里的数字必须有人管**，
 # 实测它写着"native 192 项"而当时已经 283 项，没有任何东西会红。
 cp "$OUT/step.log" "$OUT/native-tests.log"
 
-echo "== 3/16 wasm-gc 可检 + 测试（引擎纯字节进出的背书） =="
+echo "== 3/17 wasm-gc 可检 + 测试（引擎纯字节进出的背书） =="
 # wasm-gc 的 check 也要查 warning：铁律 1 的"0 error / 0 warning"不分 target。
 # （步骤 1 查的是默认 target；target 特有的 warning 只能在这里抓。）
 WASM_CHECK=$(moon check --target wasm-gc 2>&1)
@@ -86,7 +86,7 @@ fi
 run_quiet moon test --target wasm-gc
 cp "$OUT/step.log" "$OUT/wasm-tests.log"
 
-echo "== 4/16 CLI 子进程端到端（含蒙版参数面：毛边 / 部分更新 / 容器契约档位） =="
+echo "== 4/17 CLI 子进程端到端（含蒙版参数面：毛边 / 部分更新 / 容器契约档位） =="
 # 生成最小 2×2 RGBA PNG（python3 标准库，zlib+struct 手工构造）作为位图资产
 PNG_B64=$(python3 -c "
 import zlib, struct, base64
@@ -198,7 +198,7 @@ grep -q '"error"' "$OUT/rough_open.log" && { echo "FAIL: 重开链里有命令�
 grep -Eq '"roughen":3[,}]' "$OUT/rough_open.log" || { echo "FAIL: 毛边蒙版没随容器往返"; exit 1; }
 grep -Eq '"feather":7[,}]' "$OUT/rough_open.log" || { echo "FAIL: set-mask 改的羽化没随容器往返"; exit 1; }
 
-echo "== 5/16 独立外部验证（系统 unzip，非引擎自证） =="
+echo "== 5/17 独立外部验证（系统 unzip，非引擎自证） =="
 unzip -t "$OUT/verify.mpd" > /dev/null && echo "unzip -t: 容器完整性 OK"
 unzip -l "$OUT/verify.mpd" | grep -q "meta/design.json"  || { echo "FAIL: 缺 meta/design.json"; exit 1; }
 unzip -l "$OUT/verify.mpd" | grep -q "previews/flat.png" || { echo "FAIL: 缺 flat 预览"; exit 1; }
@@ -208,7 +208,7 @@ echo "manifest/预览/资产三件套齐全"
 # 元参数层可直接文本阅读（双层容器的核心承诺）
 unzip -p "$OUT/verify.mpd" meta/design.json | head -c 200; echo " …"
 
-echo "== 6/16 open → save 字节一致（进程级确定性闭环） =="
+echo "== 6/17 open → save 字节一致（进程级确定性闭环） =="
 printf '%s\n' \
   'session-open full_image' \
   "open-mpd $OUT/verify.mpd" \
@@ -269,7 +269,7 @@ if w == 16:
 print("open-mpd-b64 载入 OK（指纹 %s…，画布 %s 宽）" % (want[:12], w))
 PYX
 
-echo "== 7/16 MVSL 编辑表命令面 + 渲染管线闭环（安装 → render/impact 同图 → 断言 → 软边界/空操作/违约 lint → 容器往返） =="
+echo "== 7/17 MVSL 编辑表命令面 + 渲染管线闭环（安装 → render/impact 同图 → 断言 → 软边界/空操作/违约 lint → 容器往返） =="
 # canonical 编辑表由引擎自己产出（不手写 JSON——少一个大括号就会得到
 # 指不到病根的解析错误）。这里用固定文本：字段序即 canonical 字段序。
 MVSL_PROG='{"version":1,"ops":[{"id":"e1","kind":"recolor","sel":{"basis":"base","expr":{"t":"geo","shape":"rect","w":{"x":0,"y":0,"w":160,"h":240,"feather":0}}},"amount":1,"hue_deg":120,"temp_kelvin":0,"relight_gain":1,"refine":[],"note":"","evidence":null}],"guards":[{"id":"g1","sel":{"basis":"base","expr":{"t":"geo","shape":"rect","w":{"x":160,"y":0,"w":160,"h":240,"feather":0}}},"max_de":0.001,"max_changed_ratio":0}]}'
@@ -494,7 +494,7 @@ printf '%s\n' \
 grep -q '保护断言被违反' "$OUT/mvsl_lintbad.log" || { echo "FAIL: lint 未报出被违反的保护断言"; exit 1; }
 echo "MVSL：安装/render≡impact/断言/软过渡带不算泄漏/容器往返/预览走编辑表/lint 空操作与违约 全部 OK"
 
-echo "== 8/16 命令字典与分发一致（铁律 6）+ 文档数字 / AGENTS.md 字节预算 =="
+echo "== 8/17 命令字典与分发一致（铁律 6）+ 文档数字 / AGENTS.md 字节预算 =="
 # 字典（agent/tools.mbt，经 list-tools 输出）与分发（session.mbt 的命令 match）
 # 是两张**手写表**，铁律 6 要求同步，但此前没有任何自动化守着。
 # demo 侧就栽在这上面：10 个工具"注册了却接不上"，而人类走前端按钮、测试
@@ -778,7 +778,7 @@ python3 floors.py --check-history
 # 破线层数改掉 / 删掉一个标记块，四种都会红（见 PLAN 四十）。
 python3 bench_ledger.py
 
-echo "== 9/16 命令参数下界自检（读 tokens[N] 之前必须先卡住 N） =="
+echo "== 9/17 命令参数下界自检（读 tokens[N] 之前必须先卡住 N） =="
 # 每个命令开头的 `if tokens.length() < K` 是唯一的越界防线。K 写小了，
 # 命令**不报用法错、而是越界 panic**：进程从 cmd_* 里直接崩掉，用户看到调用栈
 # 而不是提示。实测栽过一次——`set-text l1` 的下界写成 2（应为 3），
@@ -854,7 +854,7 @@ if checked == 0:
 print(f"命令参数下界 OK（{checked} 个命令，读 tokens[N] 的都在下界之内）")
 PYBOUND
 
-echo "== 10/16 变异锚点自检（变异门不许静默失效） =="
+echo "== 10/17 变异锚点自检（变异门不许静默失效） =="
 # 变异门（mutation_scan.py）往实现里注入语义 bug、看测试能否抓住——但它自己
 # 也有一个静默失效模式：锚点文本一旦被重构改掉、或变得不再唯一，那个变异
 # 就**再也没跑过**，而汇总里的「N 个变异全部通过」照旧好看。实测踩过：
@@ -869,7 +869,7 @@ python3 mutation_scan.py --check-anchors
 # 合成正文验"这道残余态判据本身咬得住"（四种情形），秒级。
 python3 mutation_scan.py --selfcheck
 
-echo "== 11/16 字典 ↔ 解析器 参数对账（承诺的参数必须真的认） =="
+echo "== 11/17 字典 ↔ 解析器 参数对账（承诺的参数必须真的认） =="
 # 铁律 6 只覆盖**命令清单**；**参数**一直是两张互不校验的表：工具字典里
 # 写 `key=`（LLM 就是照这个发参数的），解析器里另有 check_kv_args 的允许键表。
 # 对不上的两种表现都实测过：
@@ -881,7 +881,7 @@ echo "== 11/16 字典 ↔ 解析器 参数对账（承诺的参数必须真的�
 # 判别力已注入验证：字典多写一个键 / 解析器多认一个键，两向都会红。
 python3 param_audit.py
 
-echo "== 12/16 依赖方向门禁（铁律 5：方向/零第三方/FFI 边界） =="
+echo "== 12/17 依赖方向门禁（铁律 5：方向/零第三方/FFI 边界） =="
 # 铁律 5 此前**一条都没门禁**：moon 编译器只管有没有环，**反向依赖照样编得过**。
 # 判据：①每个包都在 ORDER 里（新包必须登记，不许静默不审）②内部边全部朝前
 # ③pixel 绝不依赖 render ④引擎包零第三方依赖 ⑤demo 不 import 任何引擎包
@@ -891,7 +891,7 @@ echo "== 12/16 依赖方向门禁（铁律 5：方向/零第三方/FFI 边界）
 # 的 `mp_version`）。
 python3 dep_audit.py
 
-echo "== 13/16 字段面门禁（\`Layer\` 的每个字段，建层之后改得动吗） =="
+echo "== 13/17 字段面门禁（\`Layer\` 的每个字段，建层之后改得动吗） =="
 # 「改得动吗」这一面此前是**靠手走**的：AGENTS 里写着"这一面到此走完"，而那是
 # 走过 add-adjust / set-text / set-style points 三处之后下的结论。**手走的清单
 # 一定漏**——实测这次漏了两处：`asset_hash`（换图只能删了重加，层序/蒙版/标签
@@ -902,7 +902,7 @@ echo "== 13/16 字段面门禁（\`Layer\` 的每个字段，建层之后改得�
 # 判别力已注入验证：拿掉一个键的登记、拿掉一个字段的覆盖，两向都会红。
 python3 field_audit.py
 
-echo "== 14/16 对抗性参数 fuzz（每条命令 × 敌意参数：只回错、不崩） =="
+echo "== 14/17 对抗性参数 fuzz（每条命令 × 敌意参数：只回错、不崩） =="
 # 命令面越铺越宽，"某个分支在某个奇怪参数下把进程干掉"是必然会出现的 bug，
 # 而它只在真实输入下暴露。此前两条门禁都照不到这一片：`verify.sh#catalog` 只用
 # **裸命令名**逐个戳（脚本自己的注释就承认"照不到带参数才越界的那批"），
@@ -916,7 +916,7 @@ echo "== 14/16 对抗性参数 fuzz（每条命令 × 敌意参数：只回错�
 # 报出 `set-text`（退出码 134 + PanicError 调用栈）——正是当年那个真 bug。
 python3 panic_hunt.py
 
-echo "== 15/16 PSD 语料对账（第三方写出的文件 × corpus.json：逐例结构 + 合成图 sha） =="
+echo "== 15/17 PSD 语料对账（第三方写出的文件 × corpus.json：逐例结构 + 合成图 sha） =="
 # PSD 是**别人的格式**，所以判据不能"自己和自己比"：这批 `.psd` 由 psd-tools
 # 1.24.0 写出、期望值由 Pillow 12.3.0 + psd-tools 双读算出，落在
 # `codec/testdata/psd/corpus.json` 里。这一步走**真 CLI 进程**，逐例核：
@@ -996,7 +996,81 @@ print("PSD 语料对账 OK（%d 例可读：结构 + 合成图 sha；%d 例边�
       % (len(ok), len(bad)))
 PYD
 
-echo "== 16/16 记分卡 + 键效果（收了却没人读的键必须为 0） =="
+echo "== 16/17 PSD 写出对账（我们写的 PSD × 第三方读过的期望值：结构 + 合成图 + 层表） =="
+# 写的方向同样不能"自己和自己比"：`codec/testdata/psd/roundtrip*.psd` 是我们写出的
+# 字节，`roundtrip.json` 里的期望值由 **psd-tools 1.24.0 + Pillow 12.3.0** 在生成时
+# 读出来（`tools/check_psd_with_oracle.py`）。这一步离线重放同一份 CLI 脚本并核：
+# ①导出的字节 sha（写侧确定性 + 这次没被改坏）；②`render` 的 PNG sha；
+# ③`psd-info` 解出的**合成图 sha == Pillow 读同一份文件得到的 sha**（两个实现
+#   对同一段字节的理解必须一致）；④层表逐字段 == psd-tools 读到的层表（含混合模式）。
+python3 - "$OUT" <<'PYD'
+import base64, json, os, subprocess, sys
+
+root = os.getcwd()
+data = json.load(open(os.path.join(root, "codec", "testdata", "psd", "roundtrip.json"),
+                     encoding="utf-8"))
+scenes = data["scenes"]
+fails = []
+
+def run_cli(lines):
+    proc = subprocess.run(["moon", "run", "--target", "native", "cli"], cwd=root,
+                          input="\n".join(lines) + "\n", capture_output=True, text=True)
+    if proc.returncode != 0:
+        print("FAIL: CLI 退出码 %d\n%s" % (proc.returncode, proc.stderr[-1500:]))
+        sys.exit(1)
+    return [json.loads(l) for l in proc.stdout.splitlines() if l.strip().startswith("{")]
+
+def pick(out, op):
+    got = [d for d in out if d.get("op") == op]
+    return got[-1] if got else None
+
+for name, sc in sorted(scenes.items()):
+    exp = pick(run_cli(sc["cli_script"]), "export-psd-b64")
+    if not exp or not exp.get("ok"):
+        fails.append("%s：export-psd-b64 没成功：%s" % (name, exp))
+        continue
+    if exp["sha256"] != sc["psd_sha256"]:
+        fails.append("%s：导出的 PSD 字节 sha 变了（写侧确定性/内容变了）：%s != %s"
+                     % (name, exp["sha256"][:12], sc["psd_sha256"][:12]))
+    if exp["bytes"] != sc["bytes"]:
+        fails.append("%s：字节数变了：%s != %s" % (name, exp["bytes"], sc["bytes"]))
+    ren = pick(run_cli(sc["cli_script"]), "render")
+    if not ren or ren.get("render_sha256") != sc["render_png_sha256"]:
+        fails.append("%s：render 的 PNG sha 变了：(%s) != %s"
+                     % (name, (ren or {}).get("render_sha256", "")[:12],
+                        sc["render_png_sha256"][:12]))
+    info = pick(run_cli(["session-open full_image",
+                         "psd-info b64=%s" % exp["psd_b64"]]), "psd-info")
+    if not info or not info.get("ok"):
+        fails.append("%s：psd-info 读不回自己写的 PSD：%s" % (name, info))
+        continue
+    if info.get("composite_sha256") != sc["pillow_composite_sha256"]:
+        fails.append("%s：我们读出的合成图 sha != Pillow 读同一份文件的 sha：%s != %s"
+                     % (name, info.get("composite_sha256", "")[:12],
+                        sc["pillow_composite_sha256"][:12]))
+    if (info.get("width"), info.get("height")) != (sc["width"], sc["height"]):
+        fails.append("%s：画布尺寸对不上：%s vs %s"
+                     % (name, (info.get("width"), info.get("height")),
+                        (sc["width"], sc["height"])))
+    rows = info.get("layer_table", [])
+    if len(rows) != len(sc["layers"]):
+        fails.append("%s：层数对不上：我们 %d，psd-tools %d"
+                     % (name, len(rows), len(sc["layers"])))
+        continue
+    for i, (a, b) in enumerate(zip(sc["layers"], rows)):
+        for k in ("name", "x", "y", "w", "h", "opacity", "visible", "blend"):
+            if a[k] != b[k]:
+                fails.append("%s：第 %d 层字段 %s 对不上：psd-tools=%r，我们=%r"
+                             % (name, i, k, a[k], b[k]))
+if fails:
+    for f in fails:
+        print("FAIL: " + f)
+    sys.exit(1)
+print("PSD 写出对账 OK（%d 个场景：导出 sha + render sha + 合成图 sha（对 Pillow）+ 层表（对 psd-tools））"
+      % len(scenes))
+PYD
+
+echo "== 17/17 记分卡 + 键效果（收了却没人读的键必须为 0） =="
 # 两件事，一条判据：①**行为式**问一遍"字典承诺的每个键真的被读了吗"——
 # 每个（命令, 键）配对在同一个 CLI 进程里跑两遍（键取基线值 vs 探针值），
 # 比四个可观测出口（命令回包 / fingerprint / list-layers / render sha256）；
