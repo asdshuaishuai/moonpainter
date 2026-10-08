@@ -1043,6 +1043,51 @@ fn blend_modes() -> Array[String] {
 /// 它在选项里就选中它；不在（理论上不该发生——引擎报的必是这七个之一，可
 /// 前端与引擎版本不匹配时什么都可能）就**额外插一个**并标出来：静默选中
 /// "normal" 会把"这层其实是 multiply"显示成 normal，那是最坏的一种谎。
+fn text_aligns() -> Array[String] {
+  ["left", "center", "right"]
+}
+
+///|
+/// 文本对齐下拉（②C）：`cur` 是引擎报的当前值（`query-layer` 的
+/// `text_style.align`）。不在表里就额外插一个并标出来——静默选中 left 会把
+/// "其实是右对齐"显示成左对齐（同 `blend_select` 那条）。
+fn align_select(cur : String, id : String) -> String {
+  let aligns = text_aligns()
+  let sb = StringBuilder()
+  sb.write_string("<span class='pk'>对齐</span><select class='psel' onchange='globalThis.__text_align(\"")
+  sb.write_string(html_attr(id))
+  sb.write_string("\",this.value)'>")
+  if !aligns.contains(cur) {
+    sb.write_string("<option value='" + html_attr(cur) + "' selected>")
+    sb.write_string(html_attr(cur))
+    sb.write_string("（引擎报的，不在本页认识的名字里）</option>")
+  }
+  for a in aligns {
+    sb.write_string("<option value='" + a + "'")
+    if a == cur {
+      sb.write_string(" selected")
+    }
+    sb.write_string(">" + a + "</option>")
+  }
+  sb.write_string("</select>")
+  sb.to_string()
+}
+
+///|
+/// 折行开关（②C）：`wrap` 是布尔。"要配 w="的规则由引擎把关（拒绝原话转给人）。
+fn wrap_select(cur : Bool, id : String) -> String {
+  "<span class='pk'>折行</span><select class='psel' onchange='globalThis.__text_wrap(\"" +
+  html_attr(id) +
+  "\",this.value)'>" +
+  (if cur {
+    "<option value='0'>不折行</option><option value='1' selected>折行</option>"
+  } else {
+    "<option value='0' selected>不折行</option><option value='1'>折行</option>"
+  }) +
+  "</select>"
+}
+
+///|
 fn blend_select(cur : String, id : String) -> String {
   let modes = blend_modes()
   let sb = StringBuilder()
@@ -1354,6 +1399,41 @@ fn props_html(
   if can("font_size") {
     sb.write_string("<div class='pedit'>")
     sb.write_string(num_input("字号", gfs, "__text_font", gid))
+    sb.write_string("</div>")
+  }
+  if can("text_style") {
+    // **控件值全部来自引擎报出来的 `text_style`**（没报就是缺省 left/8/0/不折行）
+    // ——前端不猜、也不缓存"上次我设了什么"。
+    let ts = match json_get(l, "text_style") {
+      Some(x) => x
+      None => parse_json_safe("null")
+    }
+    let align = json_get_str(ts, "align")
+    let cur_align = if text_aligns().contains(align) { align } else { "left" }
+    let lh = if json_get(ts, "line_height") is Some(_) {
+      json_get_num(ts, "line_height").to_string()
+    } else {
+      "8"
+    }
+    let ls = if json_get(ts, "letter_spacing") is Some(_) {
+      json_get_num(ts, "letter_spacing").to_string()
+    } else {
+      "0"
+    }
+    let wrap = json_get_bool(ts, "wrap")
+    sb.write_string("<div class='pedit'>")
+    sb.write_string(align_select(cur_align, gid))
+    sb.write_string(wrap_select(wrap, gid))
+    sb.write_string("</div>")
+    sb.write_string("<div class='pedit'>")
+    sb.write_string(num_input_key("行距", lh, "__text_lh", gid, "line_height"))
+    sb.write_string(num_input_key("字距", ls, "__text_ls", gid, "letter_spacing"))
+    sb.write_string("</div>")
+    // **盒子宽度**：对齐与折行都拿它当舞台——不给宽度，这两个控件从人侧
+    // 根本用不起来（盒子 = 内容宽度 ⇒ 对齐看不出来、折行折不动）。所以它不是
+    // 可选装饰，是这两格的前置条件。
+    sb.write_string("<div class='pedit'>")
+    sb.write_string(num_input_key("宽度", gw, "__text_w", gid, "w"))
     sb.write_string("</div>")
   }
   if can("adjust") {
@@ -2439,6 +2519,59 @@ fn do_text_font(id : String, v : String) -> Unit {
 }
 
 ///|
+/// 改文本排版（②C）：`set-text <id> <当前文字> <key>=<值>`。
+/// ⚠️ 内容仍是**位置参数**，所以每次都要把当前文字带上——而文字可能含空格/引号，
+/// 所以走 `quote_arg`（它会把反斜杠与引号转义；换行按 `\\n` 交给引擎的转义）。
+/// 参数名与范围由引擎把关（`line_height=8.5` 不是整数、`align=middle` 不认识、
+/// `wrap=1` 没配 `w=` 都会被拒，拒绝原话转给人）。
+fn do_text_style(id : String, key : String, v : String) -> Unit {
+  let j = eng("query-layer " + id)
+  if !eng_ok(j) {
+    js_status_bar("⚠ " + eng_s(j, "error"))
+    return
+  }
+  let l = match json_get(j, "layer") {
+    Some(x) => x
+    None => parse_json_safe("null")
+  }
+  let t = json_get_str(l, "text")
+  let _ = do_ui_cmd("set-text " + id + " " + quote_arg(t) + " " + key + "=" + v)
+}
+
+///|
+/// 改**盒子宽度**（②C）：`set-text <id> <当前文字> w=<像素>`。宽度是对齐与折行
+/// 的舞台（盒子 = 内容宽度时那两个控件看不出效果），所以人侧必须有这一格。
+fn do_text_w(id : String, v : String) -> Unit {
+  do_text_style(id, "w", v)
+}
+
+///|
+/// 折行开关：**首次开启时把当前盒子宽度显式带上**（引擎规则：从"不折行"变成
+/// "要折行"必须显式给 w=，否则折行宽度就是内容宽度、折不出东西来；而人侧这里
+/// 说的"折行宽度"显然是他当前看到的那个盒子）。关掉时不带 w=，盒子回到跟着
+/// 内容走（历史行为）。
+fn do_text_wrap(id : String, v : String) -> Unit {
+  if v != "1" {
+    do_text_style(id, "wrap", "0")
+    return
+  }
+  let j = eng("query-layer " + id)
+  if !eng_ok(j) {
+    js_status_bar("⚠ " + eng_s(j, "error"))
+    return
+  }
+  let l = match json_get(j, "layer") {
+    Some(x) => x
+    None => parse_json_safe("null")
+  }
+  let t = json_get_str(l, "text")
+  let w = json_get_num(l, "w")
+  let _ = do_ui_cmd(
+    "set-text " + id + " " + quote_arg(t) + " wrap=1 w=" + w.to_string(),
+  )
+}
+
+///|
 /// 改调整层的算子/数值（`set-adjust`，**原地改、层序不变**）。取值契约由
 /// 引擎把关（invert/grayscale 不收 value、越界拒绝），错误原话转给人。
 fn do_adj(id : String, which : String, v : String) -> Unit {
@@ -3508,6 +3641,20 @@ pub fn register_globals() -> Unit {
   js_reg2s("__flip", fn(id : String, axis : String) { do_flip(id, axis) })
   js_reg2s("__text_set", fn(id : String, v : String) { do_text_set(id, v) })
   js_reg2s("__text_font", fn(id : String, v : String) { do_text_font(id, v) })
+  // ②C 文本排版四格（同一处实现，四个入口）
+  js_reg2s("__text_align", fn(id : String, v : String) {
+    do_text_style(id, "align", v)
+  })
+  js_reg2s("__text_lh", fn(id : String, v : String) {
+    do_text_style(id, "line_height", v)
+  })
+  js_reg2s("__text_ls", fn(id : String, v : String) {
+    do_text_style(id, "letter_spacing", v)
+  })
+  js_reg2s("__text_wrap", fn(id : String, v : String) {
+    do_text_wrap(id, v)
+  })
+  js_reg2s("__text_w", fn(id : String, v : String) { do_text_w(id, v) })
   js_reg2s("__adj_op", fn(id : String, v : String) { do_adj_op(id, v) })
   js_reg2s("__blend", fn(id : String, v : String) { do_blend(id, v) })
   js_reg1("__tf_ready", fn(box : String) { do_tf_ready(box) })

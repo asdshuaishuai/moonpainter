@@ -1324,10 +1324,10 @@ MUTS = [
         "Q12",
         "set-text 不重算盒子（层报出来的范围装不下自己的像素）",
         "agent/session.mbt",
-        """  let est = text_box(content, fs)
+        """  let est = text_box(content, fs, style, wrap_w)
   let ew = est.0
   let eh = est.1""",
-        """  let est = text_box(content, fs)
+        """  let est = text_box(content, fs, style, wrap_w)
   let ew = target.w
   let eh = target.h""",
         "killed",
@@ -2234,9 +2234,9 @@ MUTS = [
         "文本层不走**本层**变换（字形只按层位平移：`rotate t1 90` 回 ok 而画面不动）",
         "render/scene.mbt",
         """      let (lx, ly) = canvas_to_layer(l, frames, x.to_double(), y.to_double())
-      match text_cell(sc, adv, ox, oy, glyphs.length(), lx, ly) {""",
+      match text_cell(lo, lx, ly) {""",
         """      let (lx, ly) = to_local_in(frames, x.to_double(), y.to_double())
-      match text_cell(sc, adv, ox, oy, glyphs.length(), lx - l.x, ly - l.y) {""",
+      match text_cell(lo, lx - l.x, ly - l.y) {""",
         "killed",
     ),
     (
@@ -2273,10 +2273,8 @@ MUTS = [
         "Q87",
         "字形格判定去掉抗浮点偏置（轴对齐的 90°/镜像下墨迹数不再守恒：208→206/207）",
         "render/scene.mbt",
-        """  let u = lx - ox + 1.0e-4
-  let v = ly - oy + 1.0e-4""",
-        """  let u = lx - ox + 1.0e-9
-  let v = ly - oy + 1.0e-9""",
+        """  let bias = 1.0e-4""",
+        """  let bias = 1.0e-9""",
         "killed",
     ),
     (
@@ -3381,6 +3379,133 @@ MUTS = [
         "core/document.mbt",
         '    MotionBlur | RadialBlur => get("radius") == 0.0',
         "    MotionBlur | RadialBlur => false",
+        "killed",
+    ),
+    # ---- ②C 文字排版（对齐/行距/字距/折行/契约/命令面）----
+    (
+        "R138", "文本拆行忽略 `\\n`（硬换行不生效，只画一行）",
+        "core/text_style.mbt",
+        r"""    if ch == '\n' {
+      hard.push(sb.to_string())
+      sb = StringBuilder()""",
+        r"""    if false {
+      hard.push(sb.to_string())
+      sb = StringBuilder()""",
+        "killed",
+    ),
+    (
+        "R139", "折行开关失效（wrap=true 也只按硬换行拆，长文本溢出盒子）",
+        "core/text_style.mbt",
+        """  if !style.wrap {
+    return hard
+  }""",
+        """  if true {
+    return hard
+  }""",
+        "killed",
+    ),
+    (
+        "R140", "折行的每行字符数不再夹下界（盒子比一个字符还窄 ⇒ cols=0，折行死循环/丢字）",
+        "core/text_style.mbt",
+        """  if cols < 1 {
+    cols = 1
+  }""",
+        """  if false {
+    cols = 1
+  }""",
+        "killed",
+    ),
+    (
+        "R141", "行推进不认 line_height（多行行距恒为 8 格）",
+        "core/text_style.mbt",
+        """  let h = font_size + (n - 1).to_double() * (style.line_height * sc).to_double()""",
+        """  let h = font_size + (n - 1).to_double() * (8 * sc).to_double()""",
+        "killed",
+    ),
+    (
+        "R142", "字距不进字符推进（letter_spacing 只进盒子、不进渲染）",
+        "core/text_style.mbt",
+        """  6 + s.letter_spacing""",
+        """  6 + 0""",
+        "killed",
+    ),
+    (
+        "R143", "对齐偏移不认 center/right（三个值都按左对齐摆）",
+        "render/scene.mbt",
+        """      @core.TextAlign::Center => ((l.w - lw) / 2.0).to_int()""",
+        """      @core.TextAlign::Center => 0""",
+        "killed",
+    ),
+    (
+        "R144", "行推进退化成字模高度（line_height 不进渲染，只进盒子）",
+        "render/scene.mbt",
+        """    line_adv: st.line_height * sc,""",
+        """    line_adv: 8 * sc,""",
+        "killed",
+    ),
+    (
+        "R145", "渲染不走排版（多行只画第一行、对齐全丢）——退化成 ②C 之前的单行路径",
+        "render/scene.mbt",
+        """  let lines = @core.text_lines(l.text, st, l.w, l.font_size)""",
+        """  let lines = [l.text]""",
+        "killed",
+    ),
+    (
+        "R146", "非默认排版不抬渲染契约档（老引擎静默按单行左对齐画）",
+        "core/document.mbt",
+        """      Some(ts) => if !text_style_is_default(ts) && rc < RENDER_CONTRACT_TEXT_STYLE {
+        rc = RENDER_CONTRACT_TEXT_STYLE
+      }""",
+        """      Some(ts) => if false && rc < RENDER_CONTRACT_TEXT_STYLE {
+        rc = RENDER_CONTRACT_TEXT_STYLE
+      }""",
+        "killed",
+    ),
+    (
+        "R147", "`text_style` 不写进 canonical JSON（落盘丢排版，重开变单行左对齐）",
+        "core/json.mbt",
+        """  sb.write_string(text_style_json(l.text_style))""",
+        """  sb.write_string("")""",
+        "killed",
+    ),
+    (
+        "R148", "`text_style` 读回来永远是 None（容器里有也当没有）",
+        "core/json.mbt",
+        """  let text_style = match text_style_of(v) {
+    Ok(t) => t
+    Err(e) => return Err(e)
+  }""",
+        """  let text_style : TextStyle? = None
+  match text_style_of(v) {
+    Ok(_) => ()
+    Err(e) => return Err(e)
+  }""",
+        "killed",
+    ),
+    (
+        "R149", "`set-text` 不再把排版带过去（改内容把对齐/行距/字距/折行悄悄清回默认）",
+        "agent/session.mbt",
+        """  let style = match text_style_args(m, target.text_style, "set-text") {""",
+        """  let style = match text_style_args(m, None, "set-text") {""",
+        "killed",
+    ),
+    (
+        "R150", "`wrap=1` 不再要求显式给 `w=`（没宽度也放行 ⇒ 折行宽度=内容宽度，折了个寂寞）",
+        "agent/text_layout.mbt",
+        """pub fn text_wrap_width_error(ctx : String, wrap : Bool, w_given : Bool) -> String {""",
+        """pub fn text_wrap_width_error(ctx : String, wrap : Bool, w_given : Bool) -> String {
+  if true {
+    return ""
+  }""",
+        "killed",
+    ),
+    (
+        "R151", "`text_style_lint` 的白装判据失效（全默认的 text_style 没人喊）",
+        "agent/text_layout.mbt",
+        """  if @core.text_style_is_default(ts) {
+    out.push(""",
+        """  if false {
+    out.push(""",
         "killed",
     ),
     ]

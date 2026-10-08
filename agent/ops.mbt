@@ -848,6 +848,15 @@ fn kind_only_fields() -> Array[KindOnly] {
       },
     },
     {
+      field: "text_style",
+      reader: "text 层",
+      hint: "文本排版（对齐/行距/字距/折行）只对文本层有意义——要给图形加字请先 add-text 建一个文本层",
+      kinds: ["text"],
+      dead: fn(l) {
+        if l.text_style is Some(_) { "text_style 字段" } else { "" }
+      },
+    },
+    {
       field: "corner_radius",
       reader: "矩形（rect）",
       hint: "渲染器不读它的圆角（椭圆本身就是圆的；要给图形加圆角请用 add-rect）",
@@ -1411,6 +1420,7 @@ pub fn layer_caps(l : @core.Layer) -> Array[String] {
     ("mask", "mask"),
     ("text", "text"),
     ("font_size", "font_size"),
+    ("text_style", "text_style"),
     ("adjust", "adjust"),
     ("fx", "fx"),
     ("asset", "asset_hash"),
@@ -1543,7 +1553,7 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
         // 画到盒子外面；而 `pick`/`overlay` 线框/`lgrad` 端点全按盒子算 ——
         // 同一个层，"看得见的范围"与"报出来的范围"对不上。
         // 命令面已拦（set-text 重算盒子），这里兜住手改容器 / resize 缩小。
-        let est = text_box(l.text, l.font_size)
+        let est = text_box(l.text, l.font_size, l.text_style, 0.0)
         let ew = est.0
         let eh = est.1
         if l.w + 0.000000001 < ew || l.h + 0.000000001 < eh {
@@ -1553,6 +1563,9 @@ pub fn lint_doc(doc : @core.Document) -> Array[String] {
         }
       }
     }
+    // 文本排版（②C）：白装（四个值全默认）与"对齐看不出来"两条，判据在
+    // `agent/text_layout.mbt` 一处（命令面拒不了这两种状态）。
+    text_style_lint(l.id, l, v)
     // 顶点数不足：`in_polygon` 要求 ≥3、线段要 ≥2 —— 少于下界就是
     // "装了却什么都不干"（指纹变了、query-layer 报着顶点、画面一像素不落）。
     // 命令面已拦（add-polygon/add-line 与 set-style points= 共用

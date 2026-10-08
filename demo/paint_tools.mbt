@@ -525,23 +525,33 @@ fn paint_tool_defs() -> Array[@posoco.ToolDef] {
     ),
     make_tool(
       "add_text",
-      "加文本层（ASCII 真字形）。文字可含空格（命令行层会自动加引号）",
+      "加文本层（ASCII 真字形）。文字可含空格（命令行层会自动加引号）；换行写 \\n",
       [
         ("x", "integer:req:左上 x（像素）"),
         ("y", "integer:req:左上 y（像素）"),
-        ("text", "string:req:文字内容，可含空格"),
+        ("text", "string:req:文字内容，可含空格；\\n 是硬换行"),
         ("font_size", "integer:字号 px（默认 16）"),
+        ("w", "integer:盒子宽度 px（对齐与折行的舞台；不给则等于内容宽度）"),
+        ("align", "string:left|center|right（默认 left；盒子要比内容宽才看得出来）"),
+        ("line_height", "integer:行距，单位**字形格**（字号/7 向下取整，至少 1；默认 8）"),
+        ("letter_spacing", "integer:字距，单位**字形格**，加在每字符 6 格推进上（-5..32）"),
+        ("wrap", "string:1=按盒子宽度自动折行（要配 w=），0=不折行（默认）"),
         ("fill", "string:颜色 #RRGGBB[AA]（默认黑）"),
         ("name", "string:图层名"),
       ],
     ),
     make_tool(
       "set_text",
-      "改文本层的内容（位置/颜色保留）。盒子跟着内容与字号重算；要固定盒子用 resize",
+      "改文本层的内容与排版（对齐/行距/字距/折行；位置与颜色保留）。盒子跟着内容与字号重算；**只给要改的键**，其余原样",
       [
         ("id", "string:req:文本层 id"),
-        ("text", "string:req:新内容，可含空格"),
+        ("text", "string:req:新内容，可含空格；\\n 是硬换行"),
         ("font_size", "integer:选填:新字号 px（不给则沿用当前字号）"),
+        ("w", "integer:选填:盒子宽度 px（对齐与折行的舞台）"),
+        ("align", "string:选填:left|center|right"),
+        ("line_height", "integer:选填:行距（字形格；1..64）"),
+        ("letter_spacing", "integer:选填:字距（字形格；-5..32）"),
+        ("wrap", "string:选填:1/0 折行（首次开启要同时给 w=）"),
       ],
     ),
     make_tool(
@@ -839,6 +849,22 @@ pub impl @posoco.ToolProvider for PaintTools with fn execute(
 /// 漏了"仍然只能靠人眼——`undispatched_tools()` 只查前一张表，而
 /// `engine_exec_line` 直接调引擎、**绕过**这里，两条测试路径都照不到。
 /// 提取成接受 `Json` 的纯函数后，测试可以直接喂参数进来断言拼出的命令行。
+///|
+/// 文本排版的 kv 尾巴（②C）：**只拼模型真的给了的键**——没给的键一个都不写，
+/// 引擎按"沿用当前值"处理（`set-text` 是部分更新）。`w=` 要能配合 `wrap=1`
+/// （首次折行必须显式给宽度），所以两者都在这里、顺序固定（`w` 在前）。
+fn text_style_tail(args : Json) -> String {
+  let mut out = ""
+  for k in ["w", "align", "line_height", "letter_spacing", "wrap"] {
+    let v = arg_of(args, k)
+    if v != "" {
+      out = out + " " + k + "=" + v
+    }
+  }
+  out
+}
+
+///|
 pub fn tool_line(name : String, args : Json) -> String {
   let cmd = tool_cmd(name).unwrap_or("")
   let out = match name {
@@ -913,18 +939,13 @@ pub fn tool_line(name : String, args : Json) -> String {
       let fs = opt_of(args, "font_size", "16")
       let fill = opt_of(args, "fill", "#000000FF")
       let name = quote_arg(opt_of(args, "name", "文本"))
-      "add-text x=\{x} y=\{y} text=\{txt} font_size=\{fs} fill=\{fill} name=\{name}"
+      "add-text x=\{x} y=\{y} text=\{txt} font_size=\{fs} fill=\{fill} name=\{name}" +
+      text_style_tail(args)
     }
     "set_text" => {
       let id = arg_of(args, "id")
-      let fs = arg_of(args, "font_size")
-      // 字号可选：不给就不写这个 kv（引擎按"沿用当前字号"处理）
       let head = "set-text \{id} \{quote_arg(arg_of(args, "text"))}"
-      if fs == "" {
-        head
-      } else {
-        "\{head} font_size=\{fs}"
-      }
+      head + text_style_tail(args)
     }
     "visible" => "visible \{arg_of(args, "id")} \{arg_of(args, "visible")}"
     "group" => {

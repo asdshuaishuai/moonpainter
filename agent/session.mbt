@@ -179,9 +179,16 @@ fn tokenize_line(s : String) -> Array[String] {
       if c == '"' {
         in_quote = false
       } else if c == '\\' && i < n {
+        // 转义：`\"` → 字面引号、`\\` → 字面反斜杠（沿旧行为），
+        // **②C 新增 `\n` → 换行**（文本层的硬换行：`text="Hello\nWorld"`）。
+        // 用法串/字典里写明；含真正反斜杠的内容写 `\\`。
         let c2 = s.get_char(i).unwrap_or(c)
         i = i + 1
-        sb.write_char(c2)
+        if c2 == 'n' {
+          sb.write_char('\n')
+        } else {
+          sb.write_char(c2)
+        }
       } else {
         sb.write_char(c)
       }
@@ -660,6 +667,11 @@ fn layer_summary(l : @core.Layer) -> String {
     sb.write_string(",\"text\":\"\{@core.json_escape(l.text)}\"")
     sb.write_string(",\"font_size\":\{@core.fmt_num(l.font_size)}")
   }
+  // 文本排版（②C）：**能打上就要能读回来**（同 radius/flip/adjust/fx 那条）。
+  // 空文字的文本层也报——"设了排版但没内容"同样是调用方要看得见的状态。
+  if l.kind is @core.ShapeKind::Text {
+    sb.write_string(text_style_report(l.text_style))
+  }
   if l.asset_hash != "" {
     sb.write_string(",\"asset\":\"\{l.asset_hash}\"")
   }
@@ -1011,7 +1023,11 @@ fn set_image_keys() -> Array[String] {
 
 ///|
 fn add_text_keys() -> Array[String] {
-  ["id", "name", "x", "y", "w", "h", "text", "font_size", "fill"]
+  [
+    "id", "name", "x", "y", "w", "h", "text", "font_size", "fill",
+    // ②C 文本排版（对齐/行距/字距/折行）
+    "align", "line_height", "letter_spacing", "wrap",
+  ]
 }
 
 ///|
@@ -1109,7 +1125,7 @@ fn level_keys() -> Array[String] {
 ///|
 /// `set-text` 认的全部键：位置参数是 `<id> <内容>`，之后只认这三个。
 fn set_text_keys() -> Array[String] {
-  ["font_size", "w", "h"]
+  ["font_size", "w", "h", "align", "line_height", "letter_spacing", "wrap"]
 }
 
 ///|
@@ -1784,8 +1800,20 @@ fn parse_adjust(m : Map[String, String]) -> Result[@core.Adjust, String] {
 /// （实测两种建法的 render sha256 逐位相同，而 query-layer 报的 w 还是 27.43）。
 /// 盒子是渲染之外唯一的范围事实源：`pick`/`overlay` 线框/`lgrad` 归一化端点
 /// 都按它算，所以"装不下自己的像素"就是三个信号自相矛盾。
-fn text_box(text : String, fs : Double) -> (Double, Double) {
-  (text.length().to_double() * fs * 6.0 / 7.0, fs)
+fn text_box(
+  text : String,
+  fs : Double,
+  style : @core.TextStyle?,
+  explicit_w : Double,
+) -> (Double, Double) {
+  let st = match style {
+    Some(s) => s
+    None => @core.text_neutral_style()
+  }
+  // 排版算法（拆行/折行/单位换算）在 `core.text_box_of` **一处**；这里只是
+  // 把 `None` 折成中性样式。`text_style` 为 `None` 且 `explicit_w = 0` 时它
+  // 退回历史公式 `n × fs × 6/7`（逐位相同）。
+  @core.text_box_of(text, fs, st, explicit_w)
 }
 
 ///|
@@ -1839,7 +1867,19 @@ fn cmd_add_text(s : Session, tokens : Array[String]) -> String {
   // 注意：这里 `w ≤ 0 → 估算盒` 只对**缺省**成立。显式 `w=0`/负值走不到这儿
   // ——下面 `build_shape_layer` 会先报 "w/h 必须为正"（实测 `add-text … w=0`
   // 报的是那句）。原来这里注释写"w ≤ 0 时估算"，读起来像"给 0 也行"。
-  let est = text_box(text, fs)
+  let style = match text_style_args(m, None, "add-text") {
+    Ok(t) => t
+    Err(e) => return err(e)
+  }
+  let want_wrap = match style {
+    Some(t) => t.wrap
+    None => false
+  }
+  let we = text_wrap_width_error("add-text", want_wrap, w > 0.0)
+  if we != "" {
+    return err(we)
+  }
+  let est = text_box(text, fs, style, w)
   let bw = if w > 0.0 { w } else { est.0 }
   let bh = if h > 0.0 { h } else { est.1 }
   let layer = match build_shape_layer(id, @core.ShapeKind::Text, m) {
@@ -1862,6 +1902,7 @@ fn cmd_add_text(s : Session, tokens : Array[String]) -> String {
     h: bh,
     text,
     font_size: fs,
+    text_style: style,
     fill: text_fill,
   }
   snapshot(s, doc, "add text \{id}")
@@ -1878,7 +1919,7 @@ fn cmd_set_text(s : Session, tokens : Array[String]) -> String {
   // 仍是 3 个 token），所以下界卡 3 不会误伤这条用法。
   if tokens.length() < 3 {
     return err(
-      "用法：set-text <id> <新内容> [font_size=<px>] [w=<px>] [h=<px>]（含空格用双引号包起来；清空用 \"\"）",
+      "用法：set-text <id> <新内容> [font_size=<px>] [w=<px>] [h=<px>] [align=left|center|right] [line_height=<字形格>] [letter_spacing=<字形格>] [wrap=0|1]（含空格用双引号包起来；清空用 \"\"）",
     )
   }
   let doc = match require_doc(s) {
@@ -1922,7 +1963,37 @@ fn cmd_set_text(s : Session, tokens : Array[String]) -> String {
   // 盒子：显式给 w/h 就用给的（与 add-text 同一条规则：必须为正），
   // 否则按内容与字号**重算**——`set-text` 曾只换文字不动盒子，于是层报出来的
   // 范围装不下自己的像素（`pick` 拾不到、overlay 线框画小了、lgrad 端点错位）。
-  let est = text_box(content, fs)
+  let style = match text_style_args(m, target.text_style, "set-text") {
+    Ok(t) => t
+    Err(e) => return err(e)
+  }
+  let want_wrap = match style {
+    Some(t) => t.wrap
+    None => false
+  }
+  // 折行宽度：显式 `w=` 优先，否则沿用**当前盒子宽度**（内容只换几个字时
+  // 盒子不该跳——`wrap` 关着时盒子照旧跟着内容重算，历史行为不变）。
+  // 只有在"从没折行变成要折行"时才必须显式给 w=：那时当前盒子就是内容宽度，
+  // 拿它当折行宽度等于折给自己看。
+  let was_wrap = match target.text_style {
+    Some(t) => t.wrap
+    None => false
+  }
+  let we = text_wrap_width_error("set-text", want_wrap && !was_wrap, m.get("w") is Some(_))
+  if we != "" {
+    return err(we)
+  }
+  let wrap_w = if m.get("w") is Some(_) {
+    match arg_d(m, "w", 0.0) {
+      Ok(v) => v
+      Err(e) => return err(e)
+    }
+  } else if want_wrap {
+    target.w
+  } else {
+    0.0
+  }
+  let est = text_box(content, fs, style, wrap_w)
   let ew = est.0
   let eh = est.1
   let nw = match m.get("w") {
@@ -1948,7 +2019,7 @@ fn cmd_set_text(s : Session, tokens : Array[String]) -> String {
   let _ = update_layer(
     doc.layers,
     id,
-    fn(l) { { ..l, text: content, font_size: fs, w: nw, h: nh } },
+    fn(l) { { ..l, text: content, font_size: fs, text_style: style, w: nw, h: nh } },
   )
   "{\"ok\":true,\"op\":\"set-text\",\"id\":\"\{id}\",\"fingerprint\":\"\{@core.fingerprint(doc)}\"}"
 }

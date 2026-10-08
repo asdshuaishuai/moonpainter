@@ -592,6 +592,48 @@ check(
   tl ? `text=${layer(tl.id).text} w ${w0} → ${w1} font_size=${layer(tl.id).font_size}` : '没建出文字层',
 );
 
+// ⑨b 文本排版（②C）：宽度 → 对齐 → 行距/字距 → 折行，四格都从引擎读回来验
+if (tl) {
+  // 宽度：对齐与折行的舞台（不给宽度，这两个控件从人侧用不起来）
+  await globalThis.__text_w(tl.id, '120');
+  const bw = layer(tl.id).w;
+  // 对齐：盒子比内容宽，center 才是"看得出来"的（lint 也咬这一条）
+  await globalThis.__text_align(tl.id, 'center');
+  const al = layer(tl.id).text_style?.align;
+  // 行距/字距：单位是**字形格**（引擎的话）
+  await globalThis.__text_lh(tl.id, '12');
+  await globalThis.__text_ls(tl.id, '2');
+  const lh = layer(tl.id).text_style?.line_height;
+  const ls = layer(tl.id).text_style?.letter_spacing;
+  // 折行：盒子 120px、字号 28（推进 24px）⇒ 一行 5 个字符，长句必然折成多行
+  const h1 = layer(tl.id).h;
+  await globalThis.__text_wrap(tl.id, '1');
+  const wrap = layer(tl.id).text_style?.wrap;
+  const h2 = layer(tl.id).h;
+  check(
+    '文本排版：宽度/对齐/行距/字距/折行五格都落到引擎（四值都能回读）',
+    bw === 120 && al === 'center' && lh === 12 && ls === 2 && wrap === true && h2 > h1,
+    `w=${bw} align=${al} lh=${lh} ls=${ls} wrap=${wrap} h ${h1} → ${h2}`,
+  );
+  // 拒绝路径：行距给 0（越界）→ 引擎原话进状态栏；面板值不许被改坏
+  await globalThis.__text_lh(tl.id, '0');
+  const stillLh = layer(tl.id).text_style?.line_height;
+  const bar = el('sbar-text') ? el('sbar-text').textContent : '';
+  check(
+    '文本排版：坏值（行距 0）被引擎拒绝并进状态栏，层上还是老值',
+    stillLh === 12 && /line_height/.test(bar),
+    `line_height=${stillLh} status=${bar}`,
+  );
+  // 折行关掉：盒子回到跟着内容走（不许把宽度冻在那儿）
+  await globalThis.__text_wrap(tl.id, '0');
+  const wrap0 = layer(tl.id).text_style?.wrap;
+  check(
+    '文本排版：关掉折行后 wrap=false（盒子重新跟着内容走）',
+    wrap0 === false,
+    `wrap=${wrap0}`,
+  );
+}
+
 // ⑩ 蒙版：加 → 反转 → 摘（三态都要能从报告面读出来）
 // 靶子自己新建（根级、不转不翻）：蒙版坐标是**层局部**的，人侧对转过/翻过/
 // 在组里的层会明确拒绝——拿别的块留下的层来测，测的就成了"那层恰好合不合格"。
@@ -1251,7 +1293,7 @@ check(
 // ⑯ 覆盖清单（机器对账用，格式由 `build_demo.sh#html-wiring` 解析）：
 // driver 走不到的处理器必须在这儿**写明原因**，否则"没覆盖"会静默变成"覆盖了"。
 /* coverage:begin
-driven: __selfcheck __dbg_lint __dbg_edits __dbg_census __dbg_probe __dbg_help __dbg_tools __dbg_schema __dbg_preview __mvsl_set __mvsl_show __mvsl_impact __mvsl_assert __mvsl_clear __param_list __param_set __param_del __cmd __build_badge __save __export __run __sel __vis __front __back __setx __sety __setw __seth __move_delta __rotate __flip __op __del __undo __redo __rename __tag_add __tag_del __reparent __ungroup_sel __text_at __text_add __text_set __text_font __mask_ready __mask_invert __mask_clear __adj_op __adj_val __adj_key __blend __fx_sw __fx_key __fx_clear __tf_ready __tf_hint __af __stroke __new __set_canvas __crop_ready __crop_apply __crop_cancel __zoom __refresh __stats __optip __toggle_ai __tool __poly_click __poly_finish __poly_cancel __shape_ready __group_sel __pick_at __clone_src __goto __pen_handle __bool_op
+driven: __selfcheck __dbg_lint __dbg_edits __dbg_census __dbg_probe __dbg_help __dbg_tools __dbg_schema __dbg_preview __mvsl_set __mvsl_show __mvsl_impact __mvsl_assert __mvsl_clear __param_list __param_set __param_del __cmd __build_badge __save __export __run __sel __vis __front __back __setx __sety __setw __seth __move_delta __rotate __flip __op __del __undo __redo __rename __tag_add __tag_del __reparent __ungroup_sel __text_at __text_add __text_set __text_font __text_w __text_align __text_lh __text_ls __text_wrap __mask_ready __mask_invert __mask_clear __adj_op __adj_val __adj_key __blend __fx_sw __fx_key __fx_clear __tf_ready __tf_hint __af __stroke __new __set_canvas __crop_ready __crop_apply __crop_cancel __zoom __refresh __stats __optip __toggle_ai __tool __poly_click __poly_finish __poly_cancel __shape_ready __group_sel __pick_at __clone_src __goto __pen_handle __bool_op
 browser-only: __drop=拒绝路径已被 driver 走过（没字节时明说）；成功路径要真的 File+Image 解码，壳里造一个等于把"读文件"假装测了; __file_sel=同上（driver 走的是"没选到文件"那条）; __mpd_sel=要真的 .mpd 文件字节，壳里没有 FileReader; __img_swap=换图必须先有一张真图进来
 coverage:end */
 

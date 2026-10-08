@@ -97,7 +97,15 @@ SPEC = {
     'add-line': dict(pos='', skel={'points': LINE}),
     'add-path': dict(pos='', skel={'points': POLY}),
     'path-preview': dict(pos='', skel={'points': POLY}),
-    'add-text': dict(pos='', skel={'text': '"Base"'}),
+    # ②C 文本排版：四个键都要**看得出来**才谈得上"被读"——
+    # ①对齐的舞台是盒子：不给宽的 `w=` 时盒子=内容宽度，center/right 偏移为 0，
+    #   画面逐位相同 ⇒ 这四个键会被误判成死键（判据口径没错，是探针太弱）；
+    # ②行距要看**两行**才看得出；③折行要配 `w=`（不配会被入口拒）。
+    'add-text': dict(pos='', skel={'text': '"Base"'},
+                     skel_over={'align': {'text': '"Hi"', 'w': '30'},
+                                'letter_spacing': {'text': '"Hi"', 'w': '30'},
+                                'line_height': {'text': '"Hi\\nHi"'},
+                                'wrap': {'text': '"HiHiHi"', 'w': '30'}}),
     'add-image': dict(pos='', skel={'b64': BLUE}),
     # ⚠️ prep 里放一张**渐变**椭圆（不是纯色矩形）：调整层作用在它下面，
     # 纯色底图会让 pixelate/posterize/contrast 这类算子的"改了参数"在画面上
@@ -139,7 +147,15 @@ SPEC = {
                       prep_over={'points': ['add-path points=' + POLY + ' fill=#FF0000FF'],
                                  'handles': ['add-path points=' + POLY + ' fill=#FF0000FF']}),
     'transform': dict(pos='l1', skel={'rot': '0'}, prep=['add-rect w=20 h=20']),
-    'set-text': dict(pos='l1 "Base"', skel={}, prep=['add-text text="Base"']),
+    'set-text': dict(pos='l1 "Base"', skel={}, prep=['add-text text="Base"'],
+                     skel_over={'align': {'w': '30'},
+                                'letter_spacing': {'w': '30'},
+                                'wrap': {'w': '30'},
+                                'line_height': {}},
+                     pos_over={'align': 'l1 "Hi"',
+                               'letter_spacing': 'l1 "Hi"',
+                               'wrap': 'l1 "HiHiHi"',
+                               'line_height': 'l1 "Hi\\nHi"'}),
     'set-adjust': dict(pos='l2', skel={'op': 'blur', 'value': '0.2'},
                        prep=['add-ellipse x=4 y=4 w=32 h=32 lgrad=#FF0000FF,#0000FFFF,0,0,1,1', 'add-adjust op=blur value=0.2'],
                        skel_over={'in_lo': {'op': 'levels', 'in_lo': '0.1'},
@@ -212,6 +228,8 @@ PROBE = {
     'points': POLY, 'handles': '2,2;2,2;2,2;2,2;2,2;2,2', 'closed': 'true',
     'op': 'contrast', 'value': '0.5', 'a': 'l2', 'b': 'l1',
     'text': '"Probe"', 'font_size': '24',
+    # ②C 文本排版四格（`align` 取 center —— 探针要比"没给"能看出摆位不同）
+    'align': 'center', 'line_height': '12', 'letter_spacing': '2', 'wrap': '1',
     'kind': 'ellipse', 'feather': '3', 'roughen': '2', 'invert': 'true',
     'layer': 'l2', 'pts': '2,2;18,18', 'r': '5', 'color': '#FF0000FF', 'src': '8,8',
     'overlay': '1', 'within': SEL_B64, 'components': '1', 'max': '8',

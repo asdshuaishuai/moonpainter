@@ -130,6 +130,14 @@ must_contain = "pub fn filter_param_rows"
 note = "八个算子各自一张 `FilterParam` 表（键/范围/中性值/整数标记）——入口校验、`lint` 空操作判据、字典描述、`adjust-spec` 参数面、面板控件全读它一处。滤镜参数走 `adjust.params`（键名升序存储，容器位置敏感地回读），`AdjustOp` 仍是同一个枚举 ⇒ 撤销/层序/蒙版语义与老算子完全一样，每层一步。边界（诚实）：①模糊族固定 25 采样（`FILTER_BLUR_SAMPLES`），半径 > 12 时步长 > 1px、会**跳过**像素；②径向模糊只**向外**采样（不向内收缩），中心处不采样；③噪点是确定性哈希（同一份文档每次一样），**没有随机种子**、也没有颗粒大小/彩色通道各自强度（只有 mono）；④色彩平衡只有 RGB 三通道整体偏移，**没有**阴影/中间调/高光三段；⑤像素化的块均值把 α 一起平均（半透明层边缘会跟底色混）；⑥海报化按每通道等分（不是感知分位）；⑦阈值只跟单通道/亮度比，没有软过渡；⑧采样点不吸附像素中心（`floor(x+dx*t)`）⇒ 过渡像素的字节对浮点尾差敏感，判据只咬「整段落在同色块内」的格子与对称性不变量。"
 
 [[area.item]]
+id = "text-layout"
+title = "文字排版：对齐 / 行距 / 字距 / 折行（②C）"
+status = "done"
+anchor = "core/text_style.mbt#text_lines"
+must_contain = "pub fn text_lines"
+note = "四个值：`align=left|center|right`、`line_height=1..64`、`letter_spacing=-5..32`、`wrap=1/0`，外加 `w=` 盒子宽度；`text` 里的 `\\n` 是硬换行。单位是「字形格」= `max(1, floor(font_size/7))` 像素（字号 28 ⇒ 1 格 = 4px），换算与拆行只有一处（`text_scale`/`text_adv_cols`/`text_lines`/`text_box_of`）。排版只有一处实现：`render/scene.mbt` 的 `text_layout` 算一次，`paint_text`（画）与 `text_ink`（`pick`/`sample`/`inside_fill` 的读点）共用 ⇒ 对齐/折行之后点击判据自动跟着走。非默认排版抬到渲染契约第 8 档（`RENDER_CONTRACT_TEXT_STYLE`）⇒ 老引擎拒绝打开；`text_style=None` 与四个值全默认，canonical 字节/指纹/golden sha/像素逐位不变（全默认由 lint 报白装）。边界（诚实）：①字模是 ASCII 整数格点阵（非 ASCII 画方框，无 CJK/字体文件）；②折行按空白分词、超长词硬切，不避标点、无连字符；③没有基线对齐/首行缩进/两端对齐/竖排；④负字距会把字模压在一起并裁掉溢出一列（字模 5 列 × sc > 格子 (6+字距) × sc）；⑤行距/字距只有整数格；⑥`wrap=1` 必须显式给 `w=`（没宽度就没得折，入口拒绝）；⑦对齐的舞台是盒子，盒子=内容宽度时 center/right 看不出来（lint 报 P2）。"
+
+[[area.item]]
 id = "layer-styles"
 title = "图层样式 fx：投影 / 描边 / 外发光 / 内阴影"
 status = "done"

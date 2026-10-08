@@ -128,11 +128,29 @@ fn make_sample() -> @core.Document {
       ]),
     ),
   }
+  // ②C 文本排版：`text_style` 此前**没有任何样本**——四个值里任意一个被读成
+  // 常量（`wrap` 恒 false、`letter_spacing` 恒 0）在往返里都看不出来。
+  // 四个值**全非默认**（含 `\n` 硬换行），并让文本层带上排版。
+  let txt0 = @core.default_layer("l8", "caption", 20.0, 30.0, 300.0, 60.0)
+  let txt = {
+    ..txt0,
+    kind: @core.ShapeKind::Text,
+    text: "Hello\nWorld",
+    font_size: 21.0,
+    text_style: Some({
+      align: @core.TextAlign::Center,
+      line_height: 11,
+      letter_spacing: 2,
+      wrap: true,
+    }),
+    fill: @core.Fill::Solid(0xFFFFFFFF),
+  }
   doc.layers.push(bg2)
   doc.layers.push(circle2)
   doc.layers.push(g2)
   doc.layers.push(ras2)
   doc.layers.push(flt2)
+  doc.layers.push(txt)
   doc.assets.push({ hash: "abc123", width: 64, height: 48 })
   doc.params.push({ name: "palette.primary", value: "#FF7A45" })
   doc.next_layer_no = 7
@@ -180,7 +198,18 @@ test "往返后结构与语义字段保真" {
   assert_eq(back.height, 600)
   assert_eq(back.uuid, "uuid-test-0001")
   assert_eq(back.next_layer_no, 7)
-  assert_eq(back.layers.length(), 5)
+  assert_eq(back.layers.length(), 6)
+  // ②C 文本排版逐字段保真：四个值任意一个读成常量，这里当场红。
+  match back.layers[5].text_style {
+    Some(ts) => {
+      assert_true(ts.align is @core.TextAlign::Center, msg="排版 align 读回")
+      assert_eq(ts.line_height, 11, msg="排版 line_height 读回")
+      assert_eq(ts.letter_spacing, 2, msg="排版 letter_spacing 读回")
+      assert_eq(ts.wrap, true, msg="排版 wrap 读回")
+    }
+    None => abort("text_style 丢了")
+  }
+  assert_eq(back.layers[5].text, "Hello\nWorld", msg="文本内容（含硬换行）读回")
   // 克隆笔触逐个字段保真：这几个字段"写得出、读不回"的表现是画面从克隆取样
   // 退化成一块死色（而往返字节一致照样成立——两边都错成默认值）
   match back.layers[3].dabs {
@@ -679,7 +708,11 @@ test "required_render_contract：组里的新语义也抬档（扫整棵层树�
   // 严格递增：新档位必须比所有旧档位高（`rc < RENDER_CONTRACT_FX` 才是有意义的
   // 比较；档位值改动 = 老容器少一道闸）
   assert_true(@core.RENDER_CONTRACT_FX > @core.RENDER_CONTRACT_ADJUST_PARAMS)
-  assert_eq(@core.RENDER_CONTRACT_VERSION, @core.RENDER_CONTRACT_FX)
+  // ②C 文本排版是第 8 档：老引擎只认单行左对齐 ⇒ 多行/行距/字距/对齐必须让它
+  // 拒绝打开。这条同时钉住"最高档 == 最新那一档"（加档忘了改 VERSION = 新语义
+  // 在老引擎里静默降级）。
+  assert_true(@core.RENDER_CONTRACT_TEXT_STYLE > @core.RENDER_CONTRACT_FX)
+  assert_eq(@core.RENDER_CONTRACT_VERSION, @core.RENDER_CONTRACT_TEXT_STYLE)
 }
 
 ///|

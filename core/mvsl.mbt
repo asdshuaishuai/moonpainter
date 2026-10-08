@@ -75,9 +75,16 @@ pub const RENDER_CONTRACT_ADJUST_PARAMS : Int = 6
 pub const RENDER_CONTRACT_FX : Int = 7
 
 ///|
+/// 8 = **文本排版**（②C：`Layer.text_style` 的对齐/换行/行距/字距 + `\n` 硬换行）：
+///     老引擎只认单行左对齐 —— 多行文本在它那里**被压成一行画**（越界部分按它的
+///     老盒子裁掉），行距/字距/对齐全不生效 ⇒ 必须让老引擎拒绝打开。
+///     全默认的 `text_style` 不算（渲染逐位相同，见 `text_style_is_default`）。
+pub const RENDER_CONTRACT_TEXT_STYLE : Int = 8
+
+///|
 /// 引擎支持的**最高**档（读入端：`render_contract > 它` 一律拒绝打开，
 /// 见 `mpd/mpd.mbt`）。
-pub const RENDER_CONTRACT_VERSION : Int = 7
+pub const RENDER_CONTRACT_VERSION : Int = 8
 
 ///|
 /// 选择子算法版本（kernel/window/环距约定都属于算法的一部分）。

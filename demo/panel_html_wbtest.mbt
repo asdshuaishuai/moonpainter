@@ -157,7 +157,10 @@ test "属性面板：文字层给内容+字号，调整层给算子+数值（各
   // 人类点下去只换来状态栏里的引擎拒绝原话）：文本层读 x/y 与 text/font_size，
   // 但**不读**盒子与 rotation/flip（引擎侧 caps 逐格实测，见 PLAN 五十一）。
   assert_true(has_sub(ht, "globalThis.__setx("), msg="文本层的 x/y 是真的（字按 font_size 画在 x/y 上）：\{ht}")
-  assert_true(lacks_sub(ht, "__setw"), msg="文本层不该有 W 输入框：\{ht}")
+  // ⚠️ ②C 起：文本层仍然**没有 `resize`**（caps 里没有 resize，`__setw` 不画），
+  // 但有一个**只改盒子宽度**的输入框（`__text_w`，走 `set-text … w=`）——对齐与
+  // 折行都拿盒子宽度当舞台，没有它那两格从人侧用不起来。
+  assert_true(lacks_sub(ht, "__setw"), msg="文本层不该有 resize 的 W 输入框：\{ht}")
   assert_true(lacks_sub(ht, "__seth"), msg="文本层不该有 H 输入框：\{ht}")
   assert_true(lacks_sub(ht, "__rotate"), msg="文本层不该有旋转输入框：\{ht}")
   assert_true(lacks_sub(ht, "__flip"), msg="文本层不该有翻转按钮：\{ht}")
@@ -559,4 +562,41 @@ test "属性面板：图层样式（fx）四件套开关，只给开着的那几
   let off = fx_html("l1", "none")
   assert_true(!off.contains("__fx_key"), msg="没有样式时不该画参数框：\{off}")
   assert_true(!off.contains("__fx_clear"), msg="没有样式时不该画「清除全部」：\{off}")
+}
+
+///|
+test "②C 文本排版：五格控件由 caps 门控、值从引擎报的 text_style 回填" {
+  let roots = panel_layers()
+  // 正控：引擎报了 text_style ⇒ 五格都在，且值回填成引擎报的那个
+  let t = parse_json_safe(
+    "{\"id\":\"t1\",\"name\":\"标题\",\"kind\":\"text\",\"x\":0,\"y\":0,\"w\":120,\"h\":28,\"text\":\"Hi\",\"font_size\":28,\"text_style\":{\"align\":\"center\",\"line_height\":12,\"letter_spacing\":2,\"wrap\":true},\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"opacity\",\"mask\",\"text\",\"font_size\",\"text_style\"]}",
+  )
+  let h = props_html(t, roots, "", "")
+  assert_true(has_sub(h, "globalThis.__text_align(\"t1\",this.value)"), msg="缺对齐下拉：\{h}")
+  assert_true(has_sub(h, "globalThis.__text_wrap(\"t1\",this.value)"), msg="缺折行开关：\{h}")
+  assert_true(has_sub(h, "globalThis.__text_lh(\"t1\",\"line_height\",this.value)"), msg="缺行距：\{h}")
+  assert_true(has_sub(h, "globalThis.__text_ls(\"t1\",\"letter_spacing\",this.value)"), msg="缺字距：\{h}")
+  assert_true(has_sub(h, "globalThis.__text_w(\"t1\",\"w\",this.value)"), msg="缺盒子宽度：\{h}")
+  // 值回填：对齐选中的是引擎报的 center、折行选中"折行"、两个数值框是 12/2
+  assert_true(has_sub(h, "<option value='center' selected>"), msg="对齐没选中 center：\{h}")
+  assert_true(has_sub(h, "<option value='1' selected>折行"), msg="折行没选中：\{h}")
+  assert_true(has_sub(h, "value='12'"), msg="行距没回填：\{h}")
+  assert_true(has_sub(h, "value='2'"), msg="字距没回填：\{h}")
+  assert_true(has_sub(h, "value='120'"), msg="宽度没回填：\{h}")
+  // 负控一：引擎没报 text_style（老层）⇒ 控件照画（caps 说了算），但值是缺省
+  let t2 = parse_json_safe(
+    "{\"id\":\"t2\",\"name\":\"老\",\"kind\":\"text\",\"x\":0,\"y\":0,\"w\":40,\"h\":16,\"text\":\"Hi\",\"font_size\":16,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"opacity\",\"text\",\"font_size\",\"text_style\"]}",
+  )
+  let h2 = props_html(t2, roots, "", "")
+  assert_true(has_sub(h2, "globalThis.__text_align(\"t2\",this.value)"), msg=h2)
+  assert_true(has_sub(h2, "<option value='left' selected>"), msg="缺省对齐该是 left：\{h2}")
+  assert_true(has_sub(h2, "<option value='0' selected>不折行"), msg="缺省不折行：\{h2}")
+  // 负控二：caps 里没有 text_style（图形层）⇒ 一个排版控件都不许画
+  let r = parse_json_safe(
+    "{\"id\":\"r1\",\"name\":\"块\",\"kind\":\"rect\",\"x\":0,\"y\":0,\"w\":10,\"h\":10,\"opacity\":1,\"blend\":\"normal\",\"caps\":[\"move\",\"resize\",\"opacity\"]}",
+  )
+  let hr = props_html(r, roots, "", "")
+  for hh in ["__text_align", "__text_wrap", "__text_lh", "__text_ls", "__text_w("] {
+    assert_true(lacks_sub(hr, hh), msg="图形层不该有 \{hh}：\{hr}")
+  }
 }

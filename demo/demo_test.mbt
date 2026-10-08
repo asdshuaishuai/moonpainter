@@ -639,6 +639,53 @@ test "图层样式工具行：set_fx 拼得出 set-fx（部分更新、clear 与
 }
 
 ///|
+test "②C 文本排版工具行：只拼给了的键、顺序固定、换行转义交回引擎" {
+  // 只给 text：一个排版键都不写（引擎按"沿用当前值"处理 = 部分更新）
+  assert_eq(
+    @demo.tool_line("set_text", @demo.parse_json_safe("{\"id\":\"t1\",\"text\":\"Hi\"}")),
+    "set-text t1 \"Hi\"",
+  )
+  // 只给 align：别的键一个都不许冒出来
+  assert_eq(
+    @demo.tool_line(
+      "set_text",
+      @demo.parse_json_safe("{\"id\":\"t1\",\"text\":\"Hi\",\"align\":\"center\"}"),
+    ),
+    "set-text t1 \"Hi\" align=center",
+  )
+  // 多键按**键表顺序**（不是模型给的顺序）：`w` 在 `wrap` 之前——首次开启折行
+  // 必须显式给宽度，两键同现时顺序不能靠运气
+  assert_eq(
+    @demo.tool_line(
+      "set_text",
+      @demo.parse_json_safe(
+        "{\"id\":\"t1\",\"text\":\"Hi\",\"wrap\":\"1\",\"line_height\":12,\"w\":140,\"letter_spacing\":2}",
+      ),
+    ),
+    "set-text t1 \"Hi\" w=140 line_height=12 letter_spacing=2 wrap=1",
+  )
+  // `add_text` 同样带上排版尾巴，且 `x/y/text/font_size/fill/name` 的历史顺序不变
+  assert_eq(
+    @demo.tool_line(
+      "add_text",
+      @demo.parse_json_safe(
+        "{\"x\":10,\"y\":20,\"text\":\"Hello World\",\"align\":\"right\",\"wrap\":\"1\",\"w\":180}",
+      ),
+    ),
+    "add-text x=10 y=20 text=\"Hello World\" font_size=16 fill=#000000FF name=\"文本\" w=180 align=right wrap=1",
+  )
+  // 空值不算"给了"：模型偶尔会填 `""`，那是"没给"而不是"空字符串"（否则
+  // `align=` 会当作"值面为空"被引擎拒，而模型以为自己没改对齐）
+  assert_eq(
+    @demo.tool_line(
+      "set_text",
+      @demo.parse_json_safe("{\"id\":\"t1\",\"text\":\"Hi\",\"align\":\"\"}"),
+    ),
+    "set-text t1 \"Hi\"",
+  )
+}
+
+///|
 test "分组工具：tool_line 拼得出 group-add / group-remove（成员逗号转空格）" {
   // 引擎的四条分组命令此前只有 AI 走得到「group/ungroup」，「group-add/
   // group-remove」两轮前才补上、这一轮接进工具面。工具名两张表的一致性

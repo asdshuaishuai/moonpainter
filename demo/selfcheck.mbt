@@ -268,6 +268,37 @@ pub fn selfcheck_cases() -> Array[SCase] {
       },
     },
     {
+      name: "文本排版（②C）：对齐真的改画面、折行真的换行、越界真的被拒",
+      steps: [
+        sc_s("new 120 60 uuid=sc-tstyle"),
+        sc_s("add-text id=t x=4 y=4 w=100 text=HHHHHHHHHH font_size=28 align=left fill=#000000FF name=T"),
+        sc_s("render 120"),
+        sc_s("set-text t HHHHHHHHHH w=100 align=center"),
+        sc_s("render 120"),
+        sc_s("set-text t HHHHHHHHHH w=100 wrap=1"),
+        sc_s("query-layer t"),
+      ],
+      check: fn(rs) {
+        // ①左对齐 → 居中：画面必须变。⚠️ 两次都**显式给 `w=100`**——`set-text`
+        // 不给 `w=` 时盒子会按内容重算（240px），那时盒子=内容宽度、居中偏移为 0，
+        // 画面逐位相同，这条判据就成了空的（第一版就是这么写的，当场红）。
+        // ②`wrap=1` 也**必须**给 `w=`（入口硬要求：没宽度就没得折）——第一版漏了
+        // `w=`，自检直接红在"命令被拒"上，反而证明了那条入口判据是活的。
+        sc_sha(rs[2]) != "" &&
+        sc_sha(rs[2]) != sc_sha(rs[4]) &&
+        // ②wrap=1 后盒子高度按行数涨（10 字符 / 每行 4 个 = 3 行）
+        sc_field_num(rs[6], "h") > 28.0
+      },
+      want: "居中前后 sha 不同、折行后盒高 > 28（越界拒绝在 agent/clickthrough 两层判据里咬，这里只跑跑得通的路）",
+      evidence: fn(rs) {
+        sc_pre(sc_sha(rs[2])) +
+        " → " +
+        sc_pre(sc_sha(rs[4])) +
+        " h=" +
+        json_num_str(sc_layer(rs[6]), "h")
+      },
+    },
+    {
       name: "文本旋转真的改画面（不是「回 ok 而画面不动」）",
       steps: [
         sc_s("new 60 60 uuid=sc-trot"),

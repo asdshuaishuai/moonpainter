@@ -84,7 +84,8 @@ test "caps：逐 kind 的完整能力表（人类面板据此画控件）" {
   // 文本：位置读、盒子不参与渲染（`resize` 改不动画面 ⇒ 不报）、
   // `rotate`/`flip` 从 PLAN 六十一起读（字形逐点过完整变换链，绕自己的盒子中心）
   assert_true(
-    caps_str(s, "t1") == "move,opacity,rotate,flip,mask,text,font_size,fx",
+    caps_str(s, "t1") ==
+      "move,opacity,rotate,flip,mask,text,font_size,text_style,fx",
     msg="文本层的能力表：\{caps_str(s, "t1")}",
   )
   // 笔触：位置挪笔触、`rotate`/`flip` 从本轮起也读（绕**落笔范围中心**转，

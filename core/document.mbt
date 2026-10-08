@@ -258,6 +258,14 @@ pub fn required_render_contract(doc : Document) -> Int {
       }
       None => ()
     }
+    // 文本排版（②C）：老引擎只认单行左对齐，多行/行距/字距/对齐一律不生效 ⇒
+    // 必须升档。全默认的 `text_style` 不算（它渲染逐位等于没有这个字段）。
+    match l.text_style {
+      Some(ts) => if !text_style_is_default(ts) && rc < RENDER_CONTRACT_TEXT_STYLE {
+        rc = RENDER_CONTRACT_TEXT_STYLE
+      }
+      None => ()
+    }
     // 克隆笔触：老引擎会把它画成普通笔色（整笔一块死色）⇒ 必须升档
     for d in l.dabs {
       if d.clone && rc < RENDER_CONTRACT_CLONE {
@@ -1066,6 +1074,7 @@ pub(all) struct Layer {
   flip_v : Bool // 垂直翻转
   text : String // Text 层内容（ASCII 真字形；非 ASCII 盒形占位，诚实边界）
   font_size : Double // Text 层字号（像素，5x7 点阵缩放基准 7）
+  text_style : TextStyle? // 文本排版（对齐/行距/字距/折行）；None = 全默认（历史单行）
   mask : LayerMask? // 矢量蒙版（与层同变换；None=无）
   adjust : Adjust? // Adjust 层的算子参数；其余恒 None
   fx : LayerFx? // 图层样式（投影/描边/外发光/内阴影）；None = 没有样式（历史行为）
@@ -1163,6 +1172,7 @@ pub fn default_layer(
     flip_v: false,
     text: "",
     font_size: 16.0,
+    text_style: None,
     mask: None,
     adjust: None,
     fx: None,

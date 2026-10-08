@@ -3915,14 +3915,57 @@ fn glyph_columns(ch : Char) -> Array[Int]? {
 }
 
 ///|
-/// 文本层的三个量，**一处算**：`sc` = 每像素放大倍数（`font_size/7` 向下取整、
-/// 至少 1）、`adv` = 每字符推进（6 列）、`ox`/`oy` = 字形在**层局部**坐标系里的
-/// 起点（复现旧实现的 `l.x.to_int()`：字形落在整数格上、分数坐标被截掉，于是
-/// 不带变换的路径逐位不变）。
-fn text_metrics(l : @core.Layer) -> (Int, Int, Double, Double) {
-  let scale = (l.font_size / 7.0).to_int()
-  let sc = if scale < 1 { 1 } else { scale }
-  (sc, 6 * sc, l.x.to_int().to_double() - l.x, l.y.to_int().to_double() - l.y)
+/// 文本层的**排版结果**（②C）：拆行（`core.text_lines`，`\n` + 可选折行）、
+/// 每行各自的 x 偏移（对齐）、每行的字形位图。**一处算**——`paint_text`
+/// （逐像素绘制）与 `text_ink`（`pick`/`sample`/`inside_fill` 的读点）共用它，
+/// 于是"这个点在不在墨上"永远只有一个答案。
+///
+/// `ox`/`oy` 复现旧实现的 `l.x.to_int()`：字形落在整数格上、分数坐标被截掉，
+/// 不带变换的路径逐位不变（`text_style = None` 时 offsets 全 0、行推进 8×sc、
+/// 只有一个元素 —— 与旧单行路径**逐位相同**）。
+priv struct TextLayout {
+  sc : Int // 每像素放大倍数
+  adv : Int // 每字符推进（像素）= (6 + 字距) × sc
+  line_adv : Int // 行推进（像素）= 行距 × sc
+  ox : Double
+  oy : Double
+  offsets : Array[Int] // 每行的对齐偏移（像素；左对齐恒 0）
+  glyphs : Array[Array[Array[Int]]] // 每行 → 每个字符 → 5 列位图
+}
+
+///|
+fn text_layout(l : @core.Layer) -> TextLayout {
+  let st = match l.text_style {
+    Some(s) => s
+    None => @core.text_neutral_style()
+  }
+  let sc = @core.text_scale(l.font_size)
+  let adv = @core.text_adv_cols(st) * sc
+  let lines = @core.text_lines(l.text, st, l.w, l.font_size)
+  let glyphs : Array[Array[Array[Int]]] = []
+  let offsets : Array[Int] = []
+  for ln in lines {
+    glyphs.push(text_glyphs(ln))
+    // 对齐：在**盒子宽度**里摆这一行。行宽按整格推进算（`字数 × adv`）——
+    // 取整到像素，字模是整数格位图，偏移要是分数就会出现"半个像素的墨"
+    // （`text_cell` 的整格索引给不出两种答案，但边界上的点会跳）。
+    let lw = (ln.length() * adv).to_double()
+    let off = match st.align {
+      @core.TextAlign::Left => 0
+      @core.TextAlign::Center => ((l.w - lw) / 2.0).to_int()
+      @core.TextAlign::Right => (l.w - lw).to_int()
+    }
+    offsets.push(off)
+  }
+  {
+    sc,
+    adv,
+    line_adv: st.line_height * sc,
+    ox: l.x.to_int().to_double() - l.x,
+    oy: l.y.to_int().to_double() - l.y,
+    offsets,
+    glyphs,
+  }
 }
 
 ///|
@@ -3936,32 +3979,39 @@ fn text_metrics(l : @core.Layer) -> (Int, Int, Double, Double) {
 /// 级数近似，实测 90° 下单点误差 ~1.4e-6。偏置必须**大于**它：1e-9/1e-6 都太小
 /// （"H" 转 90° 时墨迹 208→206/207、点探针当场翻格），1e-4 之后轴对齐的四格
 /// 全部恰好 208（PLAN 六十一）。
-fn text_cell(
-  sc : Int,
-  adv : Int,
-  ox : Double,
-  oy : Double,
-  nchars : Int,
-  lx : Double,
-  ly : Double,
-) -> (Int, Int, Int)? {
-  let u = lx - ox + 1.0e-4
-  let v = ly - oy + 1.0e-4
-  if u < 0.0 || v < 0.0 {
+fn text_cell(lo : TextLayout, lx : Double, ly : Double) -> (Int, Int, Int, Int)? {
+  // 抗浮点误差的偏置**只有一处**（字形是硬边位图，格判定必须容忍整条变换链的
+  // 级数近似误差，实测轴对齐 90° 下单点 ~1.4e-6；取 1e-4 后墨迹数恰好守恒）。
+  // 收成一个 `let` 是为了让"把它调小"这件事只有一个落点（变异 Q87 的锚点）。
+  let bias = 1.0e-4
+  let v = ly - lo.oy + bias
+  if v < 0.0 {
     return None
   }
-  let scf = sc.to_double()
-  let ci = (u / adv.to_double()).to_int()
-  if ci >= nchars {
+  let scf = lo.sc.to_double()
+  // 先落到**第几行**，再落到行内的列/行——②C 之前只有一行，这一步是新的。
+  let li = (v / lo.line_adv.to_double()).to_int()
+  if li >= lo.glyphs.length() {
     return None
   }
-  let col = ((u - ci.to_double() * adv.to_double()) / scf).to_int()
-  let row = (v / scf).to_int()
+  let row = ((v - li.to_double() * lo.line_adv.to_double()) / scf).to_int()
+  if row >= 7 {
+    return None
+  }
+  let u = lx - lo.ox + bias - lo.offsets[li].to_double()
+  if u < 0.0 {
+    return None
+  }
+  let ci = (u / lo.adv.to_double()).to_int()
+  if ci >= lo.glyphs[li].length() {
+    return None
+  }
+  let col = ((u - ci.to_double() * lo.adv.to_double()) / scf).to_int()
   // 第 5 列（6 列推进里的最后一列）是**字距空隙**，不算墨；行 0..6 之外同理
   if col >= 5 || row >= 7 {
     return None
   }
-  Some((ci, col, row))
+  Some((li, ci, col, row))
 }
 
 ///|
@@ -3983,11 +4033,11 @@ fn text_glyphs(text : String) -> Array[Array[Int]] {
 /// 文本层在**层局部**坐标 `(lx, ly)` 上有没有墨。判据一处：`paint_text` 与
 /// `inside_fill`（`pick`/`sample`）都经它 ⇒ 报告面与画面不可能分家。
 fn text_ink(l : @core.Layer, lx : Double, ly : Double) -> Bool {
-  let (sc, adv, ox, oy) = text_metrics(l)
-  match text_cell(sc, adv, ox, oy, l.text.length(), lx, ly) {
+  let lo = text_layout(l)
+  match text_cell(lo, lx, ly) {
     None => false
-    Some((ci, col, row)) => {
-      let bits = text_glyphs(l.text)[ci][col]
+    Some((li, ci, col, row)) => {
+      let bits = lo.glyphs[li][ci][col]
       (lsr(bits, 6 - row) & 1) == 1
     }
   }
@@ -4021,38 +4071,47 @@ fn paint_text(
   if l.text.length() == 0 {
     return
   }
-  let (sc, adv, ox, oy) = text_metrics(l)
+  let lo = text_layout(l)
+  let sc = lo.sc
   let color = fill_color_at(l.fill, 0.0, 0.0, l.w, l.h)
   // 颜色自带的 alpha 并进覆盖度（与形状填充同理）。`NoFill` 的 alpha 是 0，
   // 语义就是"不画"；默认层是 `Solid(0xFF808080)`，所以默认路径不变。
   let color_a = ((color >> 24) & 0xFF).to_double() / 255.0
-  let glyphs = text_glyphs(l.text)
-  let gw = (adv * glyphs.length()).to_double()
+  // 渲染窗 = **所有行的字形矩形**（含各自的对齐偏移）过 `screen` 后的并集外接盒。
+  // ②C 之前只有一行、且 x 起点就是 `ox`，这里退化成那个矩形。
   let gh = (7 * sc).to_double()
+  let mut minx = 1.0e18
+  let mut miny = 1.0e18
+  let mut maxx = -1.0e18
+  let mut maxy = -1.0e18
+  for li = 0; li < lo.glyphs.length(); li = li + 1 {
+    let gw = (lo.adv * lo.glyphs[li].length()).to_double()
+    let lx0 = lo.ox + lo.offsets[li].to_double()
+    let ly0 = lo.oy + (li * lo.line_adv).to_double()
+    for c in [(lx0, ly0), (lx0 + gw, ly0), (lx0, ly0 + gh), (lx0 + gw, ly0 + gh)] {
+      let (px, py) = screen(l, frames, c.0, c.1)
+      if px < minx {
+        minx = px
+      }
+      if py < miny {
+        miny = py
+      }
+      if px > maxx {
+        maxx = px
+      }
+      if py > maxy {
+        maxy = py
+      }
+    }
+  }
+  if minx > maxx {
+    return
+  }
   // 渲染窗 = 字形矩形的四角过 `screen`（本层变换 + 祖先链）后的外接盒，各留 1px。
   // 仿射映射把矩形映成平行四边形 ⇒ 四角外接盒一定装得下。
   // ⚠️ 不用 `paint_window_in`：那是**保守**窗（对角线为边），一行长文本（w≫h）
   // 会被扫成 ~w² 个像素，比字形盒子大一个量级——"保守上界"给 `pick`/`lint` 用
   // 没问题，给逐像素循环用就是个性能坑。
-  let mut minx = 1.0e18
-  let mut miny = 1.0e18
-  let mut maxx = -1.0e18
-  let mut maxy = -1.0e18
-  for c in [(ox, oy), (ox + gw, oy), (ox, oy + gh), (ox + gw, oy + gh)] {
-    let (px, py) = screen(l, frames, c.0, c.1)
-    if px < minx {
-      minx = px
-    }
-    if py < miny {
-      miny = py
-    }
-    if px > maxx {
-      maxx = px
-    }
-    if py > maxy {
-      maxy = py
-    }
-  }
   let mut x0 = minx.to_int() - 1
   let mut y0 = miny.to_int() - 1
   let mut x1 = maxx.to_int() + 2
@@ -4074,10 +4133,10 @@ fn paint_text(
     let mut x = x0
     while x < x1 {
       let (lx, ly) = canvas_to_layer(l, frames, x.to_double(), y.to_double())
-      match text_cell(sc, adv, ox, oy, glyphs.length(), lx, ly) {
+      match text_cell(lo, lx, ly) {
         None => ()
-        Some((ci, col, row)) => {
-          if (lsr(glyphs[ci][col], 6 - row) & 1) == 1 {
+        Some((li, ci, col, row)) => {
+          if (lsr(lo.glyphs[li][ci][col], 6 - row) & 1) == 1 {
             // 蒙版按**层局部**坐标采样（`add-mask` 的 x/y 默认 0；矩形实测：
             // 层在 (50,40)、蒙版 x=0 w=10 时左半保留）。旧实现拿**画布**坐标
             // 采样 ⇒ 定过位的文本层上蒙版整块错位。

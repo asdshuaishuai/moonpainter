@@ -32,6 +32,18 @@ pub fn json_get_str(j : Json, key : String) -> String {
 }
 
 ///|
+/// 取布尔字段（缺字段/类型不对一律回 false；面板只做显示，不做判据）。
+/// ⚠️ **别拿 `json_get_str` 读布尔**：JSON 的 `true` 不是字符串，`json_get_str`
+/// 会回 ""（实测 `text_style.wrap` 就是这么被读成 false 的——面板显示"不折行"
+/// 而引擎报的是 true，正是"前端报假话"那一类）。
+pub fn json_get_bool(j : Json, key : String) -> Bool {
+  match j.value(key) {
+    Some(Json::True) => true
+    _ => false
+  }
+}
+
+///|
 pub fn json_get(j : Json, key : String) -> Json? {
   j.value(key)
 }

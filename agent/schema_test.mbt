@@ -211,6 +211,7 @@ test "lint 兜住手改容器的越界渐变端点（命令面之外的入口）
     flip_v: false,
     text: "",
     font_size: 12.0,
+    text_style: None,
     mask: None,
     adjust: None,
     fx: None,

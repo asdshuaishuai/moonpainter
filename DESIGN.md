@@ -83,7 +83,7 @@ macOS 原生类 Photoshop 编辑器。对本工程最有价值的三块遗产：
 - 层属性（`Layer` 字段，与代码**逐字对账**）：
   <!-- layer-fields:begin -->
   `id` `name` `kind` `visible` `opacity` `blend` `x` `y` `w` `h` `rotation_deg`
-  `corner_radius` `flip_h` `flip_v` `text` `font_size` `mask` `adjust` `fx`
+  `corner_radius` `flip_h` `flip_v` `text` `font_size` `text_style` `mask` `adjust` `fx`
   `points` `handles` `dabs` `fill` `stroke` `asset_hash` `tags` `children`
   <!-- layer-fields:end -->
   ——`opacity` 0..1；`rotation_deg` 顺时针绕层中心；`flip_h/flip_v` 先翻转后旋转；
@@ -416,7 +416,9 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
   调整层的**参数面可反复编辑**（`set-adjust` 原地改、层序不变；人类面板按引擎
   报出来的参数面画控件：色阶五格、曲线点表 + 引擎采样的预览折线、滤镜逐键数字
   格）；仍未做的是"把调整层限定到某几个层"（剪贴）与分通道曲线；
-  **文本层**做了 **ASCII 点阵字形**（无 CJK、无字体文件）。
+  **文本层**做了 **ASCII 点阵字形**（无 CJK、无字体文件）+ **排版**（②C：对齐/
+  行距/字距/折行，单位是「字形格」= `max(1, floor(font_size/7))` 像素；见本节
+  「文字排版」段）。
 - **仍未做**：多色渐变/径向渐变；
   **路径（贝塞尔）本轮是 Stage A**：锚点 + 每锚 in/out 控制柄的采样 / 包含 / 描边 / 包围盒，闭合语义只有一处（`core.fill_closed`：`fill = NoFill` ⇒ 开放）。布尔运算（并/差/交/异或）、路径上再编辑（加/删锚点、人侧除「点下拖出」以外的控制柄手柄）、把已有形状转成路径、路径文字、SVG/AI 导入**仍未做**——判据只咬「这条曲线画得对不对」，不咬「能不能布尔」。
 - **PSD L1 读 → L3 写**（PSD 为第一公民，Photopea 天然覆盖）、AI（PDF 层）导入、Sketch/XCF/KRA；原文保全策略（source/ 层）；
@@ -628,7 +630,7 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
   "写了/没写"分不出来），所以名单来自实测、并由 `agent/caps_test.mbt` 的对照
   测试钉住：**caps 说有 ⇒ 渲染 sha 必须变，说没有 ⇒ 必须逐位相同**；"没有效果"
   那半边还要求**要么入口拒绝、要么指纹变了**（不许拿"命令压根没执行"充数）。
-  矩阵那半（rotate/flip/mask/text/font_size/adjust/asset/children）直接读矩阵行，
+  矩阵那半（rotate/flip/mask/text/font_size/text_style/adjust/asset/children）直接读矩阵行，
   字段名打错时**少报**而不是全报，且逐 kind 的完整表有断言。
   **消费面**：人类前端（属性面板的控件、画布拖拽手势）只按 `caps` 决定"画不画/
   做不做"，被拒时**印出理由**（面板印只读回显，手势印状态栏）——`caps` 缺失
@@ -726,6 +728,28 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
     ②`pick`/`sample` 的文本读点必须是**字形墨**（`@render.text_ink`，与渲染器
     共用一处）而不是盒子——盒子约一半是空隙，只判盒子会"报出一个当点一个
     像素都没画的层"；
+  - **文字排版（②C）**：`align`（左/中/右）、`line_height`、`letter_spacing`、
+    `wrap` 四个值 + `\n` 硬换行。**单位是「字形格」**：`sc = max(1,
+    floor(font_size/7))`，行推进 = `line_height × sc` px、字符推进 =
+    `(6 + letter_spacing) × sc` px（字号 28 ⇒ `sc=4`）；三个换算函数
+    （`text_scale`/`text_adv_cols`/`text_lines`）与盒子公式
+    （`text_box_of`）只有一处（`core/text_style.mbt`），渲染器、命令面、
+    `lint`、字典、面板全读它。**排版只有一处实现**：`render/scene.mbt` 的
+    `text_layout` 把"拆几行、每行摆在哪、每行有哪些字形"算一次，
+    `paint_text`（画）与 `text_ink`（读点，`inside_fill` 走它）共用——
+    对齐/折行之后**点击判据自动跟着走**（同一个判断两处实现必有一处先烂）。
+    ⚠️ 三条容易写错的：①**对齐的舞台是盒子**（`l.w`），盒子 = 内容宽度时
+    `center`/`right` 看不出来 ⇒ `lint` 报 P2 并指路给 `w=`；②`wrap=1`
+    **必须显式给 `w=`**（没宽度就没得折，入口拒绝而不是静默用内容宽度）；
+    ③**负字距会裁掉字模溢出的一列**（字模 5 列 × `sc`，格子只有
+    `(6+字距) × sc`，`col >= 5` 的墨被判掉）——这是整数格点阵的诚实边界，
+    写进 README，判据按**实测**咬。
+    **向后兼容**：`text_style = None` 与四个值全默认，canonical JSON 字节、
+    指纹、golden sha256、像素**逐位不变**（单行左对齐的排版结果退化成旧路径，
+    `text_box_of` 在 `letter_spacing == 0` 时用**原浮点表达式**）；真排版
+    （任一个值非默认）在 manifest 里声明 `render_contract:8`，**老引擎拒绝
+    打开**（它只画单行左对齐 ⇒ 静默错渲）。全默认的那个"白装"状态由 `lint`
+    报（渲染与 `None` 逐位相同，抬档会白抬）。
 - 栅格蒙版（画笔涂抹）与 live mask（引用下层 alpha，DESIGN §1 引的 Photoshop 做法）
   均未实现，蒙版只有几何形态。几何蒙版支持 `feather` 边缘羽化，但它是**线性**
   过渡且过渡带在**内侧**（边界处覆盖 0，向内 feather 像素到满覆盖），不是

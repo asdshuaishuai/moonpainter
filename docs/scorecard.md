@@ -7,34 +7,34 @@
 | 域 | 条目 | 已做 | 部分 | 未做 |
 | :-- | --: | --: | --: | --: |
 | 画布与文档 | 5 | 4 | 0 | 1 |
-| 绘制与图层 | 11 | 9 | 1 | 1 |
+| 绘制与图层 | 12 | 10 | 1 | 1 |
 | 路径、文本与蒙版 | 8 | 4 | 1 | 3 |
 | MVSL 编辑表 | 9 | 6 | 3 | 0 |
 | 命令面与工程纪律 | 9 | 9 | 0 | 0 |
 | 容器与互操作 | 6 | 4 | 0 | 2 |
 | 人类界面（AI 修图 demo） | 9 | 8 | 0 | 1 |
 | 性能、确定性与可复现 | 7 | 7 | 0 | 0 |
-| **合计** | **64** | **51** | **5** | **8** |
+| **合计** | **65** | **52** | **5** | **8** |
 
 ## 现场量的数字（现算，不手写）
 
 | 指标 | 值 | 来源 |
 | :-- | --: | :-- |
 | 引擎命令面（字典条数） | 72 | floors.toml ← verify.sh#catalog |
-| native 测试条数 | 487 | floors.toml ← verify.sh#catalog |
-| wasm-gc 测试条数 | 485 | floors.toml ← verify.sh#catalog |
-| 变异条数 | 306 | floors.toml ← verify.sh#catalog |
-| 被抓住的变异 | 302 | floors.toml ← verify.sh#catalog |
+| native 测试条数 | 505 | floors.toml ← verify.sh#catalog |
+| wasm-gc 测试条数 | 503 | floors.toml ← verify.sh#catalog |
+| 变异条数 | 320 | floors.toml ← verify.sh#catalog |
+| 被抓住的变异 | 316 | floors.toml ← verify.sh#catalog |
 | 人类可达命令 | 72 | floors.toml ← ui_audit.py |
 | 人类够不着的命令（目标 0） | 0 | floors.toml ← ui_audit.py |
 | AI 工具面条数 | 61 | floors.toml ← build_demo.sh#doc-tools |
 | AI 刻意够不着的命令 | 11 | floors.toml ← build_demo.sh#doc-tools |
-| （命令, 键）配对 | 236 | floors.toml ← key_effect_audit.py |
-| 有读取点的配对 | 236 | floors.toml ← key_effect_audit.py |
+| （命令, 键）配对 | 244 | floors.toml ← key_effect_audit.py |
+| 有读取点的配对 | 244 | floors.toml ← key_effect_audit.py |
 | **收了却没人读的键（目标 0）** | 0 | key_effect_audit.py 现场量 |
 | 对抗性参数 fuzz 行数 | 5761 | floors.toml ← panic_hunt.py |
 | 浏览器自检项 | 30 | floors.toml ← build_demo.sh#selfcheck |
-| 点击贯通断言 | 109 | floors.toml ← build_demo.sh#clickthrough |
+| 点击贯通断言 | 112 | floors.toml ← build_demo.sh#clickthrough |
 | 可点处理器 | 85 | floors.toml ← build_demo.sh#clickthrough |
 
 > **别把接线计数当能力**：AI 工具 60 条 / 人类可达 70 条说的是「有没有入口」，一个入口背后可能只是"回一个错误"；行为由`verify.sh` 与 `build_demo.sh` 的各步钉住，而"参数收了没人读"这类空壳由 `key_effect_audit.py` 现场数。
@@ -69,6 +69,7 @@
 | 布尔运算（并/差/交/异或 → 新路径层，洞用反选蒙版） | 已做 | `agent/bool_cmds.mbt#cmd_bool_op` | 操作数被结果替换（留着会让洞看不见）；共线部分重叠明确拒绝；每个岛最多一个洞。 |
 | 调整层：亮度/对比度/饱和度/模糊/锐化/色阶/曲线… + 原地改 | 已做 | `agent/session.mbt#cmd_set_adjust` | 叠加式像素算子，作用于其下全部可见层；蒙版覆盖度 × α 连续生效；不参与变换/混合（入口拒）。 |
 | 滤镜库：动感/径向模糊、噪点、像素化、海报化、阈值、色相饱和度、色彩平衡 | 已做 | `core/document.mbt#filter_param_rows` | 八个算子各自一张 `FilterParam` 表（键/范围/中性值/整数标记）——入口校验、`lint` 空操作判据、字典描述、`adjust-spec` 参数面、面板控件全读它一处。滤镜参数走 `adjust.params`（键名升序存储，容器位置敏感地回读），`AdjustOp` 仍是同一个枚举 ⇒ 撤销/层序/蒙版语义与老算子完全一样，每层一步。边界（诚实）：①模糊族固定 25 采样（`FILTER_BLUR_SAMPLES`），半径 > 12 时步长 > 1px、会**跳过**像素；②径向模糊只**向外**采样（不向内收缩），中心处不采样；③噪点是确定性哈希（同一份文档每次一样），**没有随机种子**、也没有颗粒大小/彩色通道各自强度（只有 mono）；④色彩平衡只有 RGB 三通道整体偏移，**没有**阴影/中间调/高光三段；⑤像素化的块均值把 α 一起平均（半透明层边缘会跟底色混）；⑥海报化按每通道等分（不是感知分位）；⑦阈值只跟单通道/亮度比，没有软过渡；⑧采样点不吸附像素中心（`floor(x+dx*t)`）⇒ 过渡像素的字节对浮点尾差敏感，判据只咬「整段落在同色块内」的格子与对称性不变量。 |
+| 文字排版：对齐 / 行距 / 字距 / 折行（②C） | 已做 | `core/text_style.mbt#text_lines` | 四个值：`align=left|center|right`、`line_height=1..64`、`letter_spacing=-5..32`、`wrap=1/0`，外加 `w=` 盒子宽度；`text` 里的 `\n` 是硬换行。单位是「字形格」= `max(1, floor(font_size/7))` 像素（字号 28 ⇒ 1 格 = 4px），换算与拆行只有一处（`text_scale`/`text_adv_cols`/`text_lines`/`text_box_of`）。排版只有一处实现：`render/scene.mbt` 的 `text_layout` 算一次，`paint_text`（画）与 `text_ink`（`pick`/`sample`/`inside_fill` 的读点）共用 ⇒ 对齐/折行之后点击判据自动跟着走。非默认排版抬到渲染契约第 8 档（`RENDER_CONTRACT_TEXT_STYLE`）⇒ 老引擎拒绝打开；`text_style=None` 与四个值全默认，canonical 字节/指纹/golden sha/像素逐位不变（全默认由 lint 报白装）。边界（诚实）：①字模是 ASCII 整数格点阵（非 ASCII 画方框，无 CJK/字体文件）；②折行按空白分词、超长词硬切，不避标点、无连字符；③没有基线对齐/首行缩进/两端对齐/竖排；④负字距会把字模压在一起并裁掉溢出一列（字模 5 列 × sc > 格子 (6+字距) × sc）；⑤行距/字距只有整数格；⑥`wrap=1` 必须显式给 `w=`（没宽度就没得折，入口拒绝）；⑦对齐的舞台是盒子，盒子=内容宽度时 center/right 看不出来（lint 报 P2）。 |
 | 图层样式 fx：投影 / 描边 / 外发光 / 内阴影 | 已做 | `render/scene.mbt#apply_fx` | 层自己像素的一部分：先整层栅格化到自己的缓冲 → 在覆盖度场（`Field`）上做四件套 → 最后**一步**乘 opacity/blend（先乘会把半透明层的描边算没）。场的工作窗按层**实际范围 + 扩散量**裁（`fx_reach`），与整画布逐位相同；半径上限 64 由 `fx_param_error` 一处判、渲染器显式夹住。边界：不做样式各自的混合模式/渐变描边/多重叠影，`Adjust` 层没有样式（入口拒、lint 报）。 |
 | 自由笔刷（笔压、形状动态、笔尖贴图） | 未做 | `agent/session.mbt#cmd_brush` | `brush` 只有圆头、恒定半径与浓度；没有笔压/动态/贴图，也没有画笔预设。 |
 

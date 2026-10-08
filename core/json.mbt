@@ -623,6 +623,70 @@ fn fx_json(f : LayerFx?) -> String {
 }
 
 ///|
+/// 文本排版的写出端（②C）：**只在真的有排版时写这个字段**（`None` 时整个字段
+/// 不出现）——老文档的 canonical 字节一个字节都不变，与 `fx`/`handles` 同一条
+/// 思路。四个字段**全写**（不是"只写非默认"）：排版是一整件东西，半个对象
+/// 读回来只能靠默认值猜。
+fn text_style_json(ts : TextStyle?) -> String {
+  match ts {
+    None => ""
+    Some(s) => {
+      ",\"text_style\":{\"align\":\"" +
+      text_align_name(s.align) +
+      "\",\"line_height\":" +
+      s.line_height.to_string() +
+      ",\"letter_spacing\":" +
+      s.letter_spacing.to_string() +
+      ",\"wrap\":" +
+      s.wrap.to_string() +
+      "}"
+    }
+  }
+}
+
+///|
+/// 读入端：字段缺省 = `None`（全默认）。不认识的 `align` 必须**失败得响**
+/// （铁律：不认识的枚举不许当默认值收下）。
+fn text_style_of(v : JValue) -> Result[TextStyle?, String] {
+  let raw = match v.get("text_style") {
+    Some(t) => t
+    None => return Ok(None)
+  }
+  if raw is JNull {
+    return Ok(None)
+  }
+  let d = text_neutral_style()
+  let align = match str_field(raw, "align") {
+    Some(a) => match text_align_from_name(a) {
+      Some(x) => x
+      None => {
+        let mut names = ""
+        let mut first = true
+        for a2 in all_text_aligns() {
+          if first {
+            first = false
+          } else {
+            names = names + "/"
+          }
+          names = names + text_align_name(a2)
+        }
+        return Err("text_style.align 必须是 \{names}，收到 \{a}")
+      }
+    }
+    None => d.align
+  }
+  let line_height = match raw.get("line_height") {
+    Some(_) => int_field(raw, "line_height")
+    None => d.line_height
+  }
+  let letter_spacing = match raw.get("letter_spacing") {
+    Some(_) => int_field(raw, "letter_spacing")
+    None => d.letter_spacing
+  }
+  Ok(Some({ align, line_height, letter_spacing, wrap: bool_field(raw, "wrap") }))
+}
+
+///|
 fn layer_json(l : Layer) -> String {
   let sb = StringBuilder()
   sb.write_string("{\"id\":\"\{l.id}\",\"name\":\"")
@@ -633,6 +697,8 @@ fn layer_json(l : Layer) -> String {
   sb.write_string(",\"x\":\{fmt_num(l.x)},\"y\":\{fmt_num(l.y)},\"w\":\{fmt_num(l.w)},\"h\":\{fmt_num(l.h)}")
   sb.write_string(",\"rot\":\{fmt_num(l.rotation_deg)},\"radius\":\{fmt_num(l.corner_radius)},\"flip_h\":\{l.flip_h},\"flip_v\":\{l.flip_v}")
   sb.write_string(",\"text\":\"\{json_escape(l.text)}\",\"font_size\":\{fmt_num(l.font_size)}")
+  // 排版**只在有 text_style 时写**（见 `text_style_json` 的注释）：老文档字节不变。
+  sb.write_string(text_style_json(l.text_style))
   sb.write_string(",\"mask\":")
   sb.write_string(mask_json(l.mask))
   sb.write_string(",\"adjust\":")
@@ -971,6 +1037,14 @@ fn bool_field(v : JValue, key : String) -> Bool {
 }
 
 ///|
+/// 整数字段（②C 的 `line_height`/`letter_spacing`）：给的是小数就**失败得响**
+/// （`8.5` 行距没有意义；静默截断 = 读回来的东西与存下去的字节不一致）。
+fn int_field(v : JValue, key : String) -> Int {
+  let n = num_f(v, key)
+  n.to_int()
+}
+
+///|
 fn num_f(v : JValue, key : String) -> Double {
   match v.get(key) {
     Some(n) => match n.as_num() {
@@ -1241,6 +1315,10 @@ fn layer_of(v : JValue) -> Result[Layer, String] {
     Ok(f) => f
     Err(e) => return Err(e)
   }
+  let text_style = match text_style_of(v) {
+    Ok(t) => t
+    Err(e) => return Err(e)
+  }
   let fill = match v.get("fill") {
     Some(f) => fill_of(f)
     None => return Err("缺 fill")
@@ -1341,6 +1419,7 @@ fn layer_of(v : JValue) -> Result[Layer, String] {
         flip_v,
         text: txt,
         font_size: fs,
+        text_style,
         mask,
         adjust,
         fx,

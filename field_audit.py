@@ -49,6 +49,13 @@ KEY_FIELD = {
     "handles": "handles",
     "text": "text",
     "font_size": "font_size",
+    # ②C 文本排版四格 + 盒子宽度：都改 `text_style` 这一个字段（`w` 除外——
+    # 它仍是盒子字段，只是在文本层上它是"对齐/折行的舞台"）。`text_style`
+    # 的四个值走 `add-text`/`set-text` 的 `text_style_args` 一处解析。
+    "align": "text_style",
+    "line_height": "text_style",
+    "letter_spacing": "text_style",
+    "wrap": "text_style",
     "b64": "asset_hash",  # add-image / set-image 的像素载荷
     "op": "adjust",  # add-adjust / set-adjust 的算子
     "value": "adjust",
@@ -139,7 +146,7 @@ CMD_FIELD = {
     "add-adjust": ["adjust"],
     "set-adjust": ["adjust"],
     "set-fx": ["fx"],
-    "set-text": ["text", "font_size", "w", "h"],
+    "set-text": ["text", "font_size", "text_style", "w", "h"],
     "set-style": [
         "fill",
         "stroke",
@@ -154,7 +161,7 @@ CMD_FIELD = {
     ],
     "add-image": ["asset_hash"],
     "set-image": ["asset_hash", "w", "h"],
-    "add-text": ["text", "font_size"],
+    "add-text": ["text", "font_size", "text_style"],
     "add-rect": ["fill", "stroke", "opacity", "blend", "corner_radius", "visible", "tags"],
     "add-ellipse": ["fill", "stroke", "opacity", "blend", "visible", "tags"],
     "add-polygon": ["fill", "stroke", "opacity", "blend", "points", "visible", "tags"],
