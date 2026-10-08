@@ -11,22 +11,22 @@
 | 路径、文本与蒙版 | 8 | 4 | 1 | 3 |
 | MVSL 编辑表 | 9 | 6 | 3 | 0 |
 | 命令面与工程纪律 | 9 | 9 | 0 | 0 |
-| 容器与互操作 | 6 | 4 | 0 | 2 |
+| 容器与互操作 | 7 | 5 | 0 | 2 |
 | 人类界面（AI 修图 demo） | 9 | 8 | 0 | 1 |
 | 性能、确定性与可复现 | 7 | 7 | 0 | 0 |
-| **合计** | **65** | **52** | **5** | **8** |
+| **合计** | **66** | **53** | **5** | **8** |
 
 ## 现场量的数字（现算，不手写）
 
 | 指标 | 值 | 来源 |
 | :-- | --: | :-- |
-| 引擎命令面（字典条数） | 72 | floors.toml ← verify.sh#catalog |
-| native 测试条数 | 505 | floors.toml ← verify.sh#catalog |
-| wasm-gc 测试条数 | 503 | floors.toml ← verify.sh#catalog |
-| 变异条数 | 320 | floors.toml ← verify.sh#catalog |
-| 被抓住的变异 | 316 | floors.toml ← verify.sh#catalog |
+| 引擎命令面（字典条数） | 74 | floors.toml ← verify.sh#catalog |
+| native 测试条数 | 517 | floors.toml ← verify.sh#catalog |
+| wasm-gc 测试条数 | 515 | floors.toml ← verify.sh#catalog |
+| 变异条数 | 330 | floors.toml ← verify.sh#catalog |
+| 被抓住的变异 | 326 | floors.toml ← verify.sh#catalog |
 | 人类可达命令 | 72 | floors.toml ← ui_audit.py |
-| 人类够不着的命令（目标 0） | 0 | floors.toml ← ui_audit.py |
+| 人类够不着的命令（目标 0） | 2 | floors.toml ← ui_audit.py |
 | AI 工具面条数 | 61 | floors.toml ← build_demo.sh#doc-tools |
 | AI 刻意够不着的命令 | 11 | floors.toml ← build_demo.sh#doc-tools |
 | （命令, 键）配对 | 244 | floors.toml ← key_effect_audit.py |
@@ -134,7 +134,8 @@
 | 原子落盘（tmp + rename）+ 八类拒绝路径全测试 | 已做 | `agent/session.mbt#pack_current` | CRC / 指纹对账 / 前向版本拒绝 / 限额 / 路径安全；`unpack` 拒绝式校验。 |
 | 前向版本拒开：`render_contract` 按用到的新字段升档 | 已做 | `core/document.mbt#required_render_contract` | 旧引擎静默错渲比拒绝更坏；负控：只带亮度层的容器仍是第 1 档。 |
 | previews/{flat,thumb}.png：保存时自动渲染（含编辑表） | 已做 | `mpd/mpd.mbt#preview_png` | 预览与 `render` 同一张图（编辑表是渲染的最终一遍）。 |
-| PSD 读写（真实 .psd：图层/蒙版/混合/文本/样式） | 未做 | `agent/session.mbt#cmd_save_b64` | 落盘格式只有 `.mpd`；没有 PSD 解析/写出，也没有语料级往返对账（③ 的目标）。 |
+| PSD **读**（真实 .psd：合成图 + 图层/可见性/不透明度/混合/盒） | 已做 | `codec/psd.mbt#psd_decode` · `verify.sh#psd-corpus` | 12 例 psd-tools 写出的语料 + 8 例边界；结构期望与合成图 sha 由 Pillow/psd-tools 双读算好；边界（位深 16/CMYK/ZIP/图层组/真蒙版）两处入口都明确拒绝，不降级。 |
+| PSD **写**（`export-psd`：图层/蒙版/混合/文本/图层效果） | 未做 | `agent/psd.mbt#cmd_open_psd` | 本轮只做读侧；写出、图层效果/剪贴/文本层的往返是下一轮（③ 的后半）。 |
 | SVG / AI / 其他位图格式的导入导出 | 未做 | `agent/session.mbt#cmd_open_b64` | 导入只有 PNG（8-bit RGB/RGBA/灰非交错）与 `.mpd`；导出只有 `.mpd` 与 PNG。 |
 
 

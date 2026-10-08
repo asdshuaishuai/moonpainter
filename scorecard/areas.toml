@@ -418,12 +418,21 @@ must_contain = "preview_png"
 note = "预览与 `render` 同一张图（编辑表是渲染的最终一遍）。"
 
 [[area.item]]
-id = "psd"
-title = "PSD 读写（真实 .psd：图层/蒙版/混合/文本/样式）"
+id = "psd-read"
+title = "PSD **读**（真实 .psd：合成图 + 图层/可见性/不透明度/混合/盒）"
+status = "done"
+anchor = "codec/psd.mbt#psd_decode"
+must_contain = "psd_decode"
+gate = "verify.sh#psd-corpus"
+note = "12 例 psd-tools 写出的语料 + 8 例边界；结构期望与合成图 sha 由 Pillow/psd-tools 双读算好；边界（位深 16/CMYK/ZIP/图层组/真蒙版）两处入口都明确拒绝，不降级。"
+
+[[area.item]]
+id = "psd-write"
+title = "PSD **写**（`export-psd`：图层/蒙版/混合/文本/图层效果）"
 status = "missing"
-anchor = "agent/session.mbt#cmd_save_b64"
-must_contain = "cmd_save_b64"
-note = "落盘格式只有 `.mpd`；没有 PSD 解析/写出，也没有语料级往返对账（③ 的目标）。"
+anchor = "agent/psd.mbt#cmd_open_psd"
+must_contain = "cmd_open_psd"
+note = "本轮只做读侧；写出、图层效果/剪贴/文本层的往返是下一轮（③ 的后半）。"
 
 [[area.item]]
 id = "svg"

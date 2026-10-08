@@ -1,0 +1,527 @@
+{
+  "boundary": [
+    {
+      "bytes": 433,
+      "file": "boundary_zip.psd",
+      "kind": "boundary",
+      "name": "boundary_zip",
+      "note": "第三方写出、压缩方式 = 2（我们能读的只有 0/1）",
+      "sha256": "1184f545e8a04c8057acba147250816980754ae1f69138098170d00cbfaf9c4b",
+      "third_party_ok": "psd-tools 打得开（1 层）",
+      "want": "压缩方式 2 不支持"
+    },
+    {
+      "bytes": 449,
+      "file": "boundary_zip_pred.psd",
+      "kind": "boundary",
+      "name": "boundary_zip_pred",
+      "note": "第三方写出、压缩方式 = 3（我们能读的只有 0/1）",
+      "sha256": "f0e66da6c10316036330969c96ad6d5290edcc5582e6b5dcd4f344784b72b7e4",
+      "third_party_ok": "psd-tools 打得开（1 层）",
+      "want": "压缩方式 3 不支持"
+    },
+    {
+      "bytes": 230,
+      "file": "boundary_depth16.psd",
+      "kind": "boundary",
+      "name": "boundary_depth16",
+      "note": "第三方写出、位深 = 16",
+      "sha256": "19caa35d481b375f93565b529de82ef5fee3ef2c9b1a42a1527132450aba80f4",
+      "third_party_ok": "psd-tools 打得开（0 层）",
+      "want": "位深 16 不支持"
+    },
+    {
+      "bytes": 198,
+      "file": "boundary_cmyk.psd",
+      "kind": "boundary",
+      "name": "boundary_cmyk",
+      "note": "第三方写出、色彩模式 = CMYK",
+      "sha256": "b9f84906d60981acf24d084570c32e4124731142548699cae6d3ada0ac241951",
+      "third_party_ok": "psd-tools 打得开（0 层）",
+      "want": "色彩模式 CMYK 不支持"
+    },
+    {
+      "bytes": 830,
+      "file": "boundary_group.psd",
+      "kind": "boundary",
+      "name": "boundary_group",
+      "note": "第三方写出、带一个图层组（section divider）",
+      "sha256": "db6a3827835ef70a877709c95814151e43e7376a25096f712327f8dcc1293d7a",
+      "third_party_ok": "psd-tools 打得开（1 层）",
+      "want": "图层组"
+    },
+    {
+      "bytes": 482,
+      "file": "boundary_mask.psd",
+      "kind": "boundary",
+      "name": "boundary_mask",
+      "note": "第三方写出 + 字节级把 -2 蒙版通道的游程改成 0（长度不变；psd-tools 读回 mask 最小值=0）",
+      "sha256": "4d68f9037b0e75910cbb883dfae551b079f02ca68c94264daa23b54ce12d8482",
+      "third_party_ok": "psd-tools 读回 mask 像素 min=0",
+      "want": "像素蒙版"
+    },
+    {
+      "bytes": 449,
+      "file": "layered_halfalpha_as_mask.psd",
+      "kind": "boundary",
+      "name": "layered_halfalpha_as_mask",
+      "note": "第三方写出：psd-tools 把 RGBA 的 alpha 写进 -2 蒙版通道 ⇒ 真有非平凡蒙版",
+      "sha256": "676a5647ee48102d23024ab03be7759f339e581177b1c4a9093bed20a81459c0",
+      "third_party_ok": "psd-tools 读回蒙版非全可见",
+      "want": "像素蒙版"
+    },
+    {
+      "bytes": 698,
+      "file": "layered_transparent_as_mask.psd",
+      "kind": "boundary",
+      "name": "layered_transparent_as_mask",
+      "note": "第三方写出：psd-tools 把 RGBA 的 alpha 写进 -2 蒙版通道 ⇒ 真有非平凡蒙版",
+      "sha256": "a9c57f25fd92aacc71185807fc227443b2857524f9cc3ecf39d1b50215ad5f04",
+      "third_party_ok": "psd-tools 读回蒙版非全可见",
+      "want": "像素蒙版"
+    }
+  ],
+  "cases": [
+    {
+      "bytes": 314,
+      "composite_sha256": "57714528081646c2e13253cd995151f9d339b317403cb9bf438860c35a6fb802",
+      "compression": 0,
+      "file": "flat_rgb_rle.psd",
+      "height": 5,
+      "kind": "flat",
+      "layer_channel_counts": [],
+      "layers": [],
+      "name": "flat_rgb_rle",
+      "note": "psd-tools 写出 / Pillow 与 psd-tools 双读合成图（compression=0）",
+      "psd_mode": "RGB",
+      "render_ref_png": "iVBORw0KGgoAAAANSUhEUgAAAAwAAAAFCAYAAABxeg0vAAAAFklEQVR4nGNkYGD4z0ACYCJF8SDVAAD1zQEJ9nFmYgAAAABJRU5ErkJggg==",
+      "render_tol": 0,
+      "sha256": "717dc05018709d464c827c4c2d3a400bc6ee9986639e0f8e28402b1b57b19eb9",
+      "width": 12
+    },
+    {
+      "bytes": 242,
+      "composite_sha256": "218be6c5703006d77363e4bda8ff683649616f6314ff9dab331b6f4974c4934c",
+      "compression": 0,
+      "file": "flat_rgb_raw.psd",
+      "height": 4,
+      "kind": "flat",
+      "layer_channel_counts": [],
+      "layers": [],
+      "name": "flat_rgb_raw",
+      "note": "psd-tools 写出 / Pillow 与 psd-tools 双读合成图（compression=0）",
+      "psd_mode": "RGB",
+      "render_ref_png": "iVBORw0KGgoAAAANSUhEUgAAAAkAAAAECAYAAABcDxXOAAAAFUlEQVR4nGNkYGD4z0AAMBFSQF1FAJJUAQfTkE5cAAAAAElFTkSuQmCC",
+      "render_tol": 0,
+      "sha256": "19bee705202c31b5c34f0a12457f7d62cdfa8d8d090ebb19ec4292021e41a3fc",
+      "width": 9
+    },
+    {
+      "bytes": 386,
+      "composite_sha256": "913c6e2c32d99e4baff62cf421a494730cb043924f2c6bf46406573b59c641bd",
+      "compression": 0,
+      "file": "flat_rgba_alpha.psd",
+      "height": 7,
+      "kind": "flat",
+      "layer_channel_counts": [],
+      "layers": [],
+      "name": "flat_rgba_alpha",
+      "note": "psd-tools 写出 / Pillow 与 psd-tools 双读合成图（compression=0）",
+      "psd_mode": "RGBA",
+      "render_ref_png": "iVBORw0KGgoAAAANSUhEUgAAAAkAAAAHCAYAAADam2dgAAAAFklEQVR4nGP8////fwYCgImQgiGtCAAGUgQKPoqIaQAAAABJRU5ErkJggg==",
+      "render_tol": 0,
+      "sha256": "74d748876af49a11d5425e3f3c707c72c0e3fbd8ccec3be069d891de08a4617a",
+      "width": 9
+    },
+    {
+      "bytes": 198,
+      "composite_sha256": "2c893cd47b6757133987906e00c55e6dcce3c567b9df9e7f91ffecd3604cc6a6",
+      "compression": 0,
+      "file": "flat_gray.psd",
+      "height": 8,
+      "kind": "flat",
+      "layer_channel_counts": [],
+      "layers": [],
+      "name": "flat_gray",
+      "note": "psd-tools 写出 / Pillow 与 psd-tools 双读合成图（compression=0）",
+      "psd_mode": "L",
+      "render_ref_png": "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFUlEQVR4nGNkYGD4z4AHMOGTHD4KAAxTAQ8VzYiVAAAAAElFTkSuQmCC",
+      "render_tol": 0,
+      "sha256": "fca2bc3718ff1ade8fb44e90d2770fa67efebea0915da4852f58344afdd5e3d6",
+      "width": 8
+    },
+    {
+      "bytes": 137,
+      "composite_sha256": "e3820096cb82366b860b8a4e668453a7aaaf423af03bdf289fa308ea03a79332",
+      "compression": 0,
+      "file": "flat_1x1.psd",
+      "height": 1,
+      "kind": "flat",
+      "layer_channel_counts": [],
+      "layers": [],
+      "name": "flat_1x1",
+      "note": "psd-tools 写出 / Pillow 与 psd-tools 双读合成图（compression=0）",
+      "psd_mode": "RGB",
+      "render_ref_png": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAX+XDSwAAAABJRU5ErkJggg==",
+      "render_tol": 0,
+      "sha256": "67df99107849144c4dd6c9e2218b02f4187425ac422b1a5a08b314bb8af15ab5",
+      "width": 1
+    },
+    {
+      "bytes": 197,
+      "composite_sha256": "70b8681134f212bf3cbfa3a27deb840e0e8054911f28a93336ec81f24ebaf746",
+      "compression": 0,
+      "file": "flat_7x3.psd",
+      "height": 3,
+      "kind": "flat",
+      "layer_channel_counts": [],
+      "layers": [],
+      "name": "flat_7x3",
+      "note": "psd-tools 写出 / Pillow 与 psd-tools 双读合成图（compression=0）",
+      "psd_mode": "RGB",
+      "render_ref_png": "iVBORw0KGgoAAAANSUhEUgAAAAcAAAADCAYAAABfwxXFAAAAFUlEQVR4nGNkYGD4z4ADMOGSICgJAFQJAQXeD1/0AAAAAElFTkSuQmCC",
+      "render_tol": 0,
+      "sha256": "e6b54551419f71874a5a5b4daef7834a2359e8f84dddf17106cd17cfd8ba9588",
+      "width": 7
+    },
+    {
+      "bytes": 266,
+      "composite_sha256": "e2721896e0578af1389df43bff68540f35bbeeef047da0d57ee61e9d11081aa5",
+      "compression": 1,
+      "file": "flat_rgb_rle_comp.psd",
+      "height": 6,
+      "kind": "flat",
+      "layer_channel_counts": [],
+      "layers": [],
+      "name": "flat_rgb_rle_comp",
+      "note": "psd-tools frompil 写出 / 双读合成图 / 层表由 psd-tools 读回（compression=1）",
+      "psd_mode": "RGB",
+      "render_ref_png": "iVBORw0KGgoAAAANSUhEUgAAAAsAAAAGCAYAAAAVMmT4AAAAHElEQVR4nGNksGH4z83AwEAMZmFgUGQgFgxFxQATwgJkI1AbvAAAAABJRU5ErkJggg==",
+      "render_tol": 0,
+      "sha256": "6c839468fe3d19437278ca64cda0a93b1d3576e30cfdf9aa301886c3e4045580",
+      "width": 11
+    },
+    {
+      "bytes": 260,
+      "composite_sha256": "b7b6df83ee92739df61b6382b322a65d9005d9d391b512be98036607afe29002",
+      "compression": 1,
+      "file": "flat_rgba_rle_comp.psd",
+      "height": 6,
+      "kind": "flat",
+      "layer_channel_counts": [],
+      "layers": [],
+      "name": "flat_rgba_rle_comp",
+      "note": "psd-tools frompil 写出 / 双读合成图 / 层表由 psd-tools 读回（compression=1）",
+      "psd_mode": "RGBA",
+      "render_ref_png": "iVBORw0KGgoAAAANSUhEUgAAAAYAAAAGCAYAAADgzO9IAAAAGUlEQVR4nGP8/////xsMSBDKY2LAAeghAQBPMQ13PfgQtAAAAABJRU5ErkJggg==",
+      "render_tol": 1,
+      "sha256": "fff90d8bcc63b8558a086aad148af7262135cc65b27af771fffe3b0dc658d041",
+      "width": 6
+    },
+    {
+      "bytes": 824,
+      "composite_sha256": "30f27710ba50baf35a0eb493f558e377c05155f78791a839563973d13f7dadda",
+      "compression": 0,
+      "file": "layered_two.psd",
+      "height": 7,
+      "kind": "layered",
+      "layer_channel_counts": [
+        [
+          [
+            -1,
+            18
+          ],
+          [
+            0,
+            18
+          ],
+          [
+            1,
+            18
+          ],
+          [
+            2,
+            18
+          ],
+          [
+            -2,
+            18
+          ]
+        ],
+        [
+          [
+            -1,
+            18
+          ],
+          [
+            0,
+            18
+          ],
+          [
+            1,
+            18
+          ],
+          [
+            2,
+            18
+          ],
+          [
+            -2,
+            18
+          ]
+        ]
+      ],
+      "layers": [
+        {
+          "blend": "normal",
+          "h": 4,
+          "name": "bottom red",
+          "opacity": 255,
+          "rgba_sha256": "1686ec2239359e93703c735fb088a9cd5f41afcc7455cb424badcc261c8fd57e",
+          "visible": true,
+          "w": 6,
+          "x": 1,
+          "y": 1
+        },
+        {
+          "blend": "normal",
+          "h": 4,
+          "name": "top blue",
+          "opacity": 128,
+          "rgba_sha256": "40ec232d5d5d799b4ef08c2459b1109491948123c89ebf704636d85aede601d6",
+          "visible": true,
+          "w": 4,
+          "x": 3,
+          "y": 2
+        }
+      ],
+      "name": "layered_two",
+      "note": "psd-tools 写出 / 层表由 psd-tools 读回 / 合成图两张脸一致",
+      "render_ref_png": "iVBORw0KGgoAAAANSUhEUgAAAAoAAAAHCAYAAAAxrNxjAAAAN0lEQVR4nGP8////fwYiAAuYZGTELotkBkQhFDQyNqCoq0diMxFjLUkKIVZD3fIf1WYUwEisrwHYiA8Jt5j3ZQAAAABJRU5ErkJggg==",
+      "render_tol": 1,
+      "sha256": "c996c0b23b2b716d04804fd4d241be5257445e221593e570b0f9ffabd0d93726",
+      "width": 10
+    },
+    {
+      "bytes": 838,
+      "composite_sha256": "a3d8ee30ce7d858c7aa6b6cb30d4ce9127752a1f3b946b1044f2b630e6764843",
+      "compression": 0,
+      "file": "layered_hidden.psd",
+      "height": 8,
+      "kind": "layered",
+      "layer_channel_counts": [
+        [
+          [
+            -1,
+            22
+          ],
+          [
+            0,
+            22
+          ],
+          [
+            1,
+            22
+          ],
+          [
+            2,
+            22
+          ],
+          [
+            -2,
+            22
+          ]
+        ],
+        [
+          [
+            -1,
+            22
+          ],
+          [
+            0,
+            22
+          ],
+          [
+            1,
+            22
+          ],
+          [
+            2,
+            22
+          ],
+          [
+            -2,
+            22
+          ]
+        ]
+      ],
+      "layers": [
+        {
+          "blend": "normal",
+          "h": 5,
+          "name": "shown",
+          "opacity": 255,
+          "rgba_sha256": "1f3f0426376126bc45a8460144c664c3d9c064cb6ab73978a3deae975378604f",
+          "visible": true,
+          "w": 5,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "blend": "normal",
+          "h": 5,
+          "name": "hidden",
+          "opacity": 255,
+          "rgba_sha256": "a051f3b744e4e9f9cf009d43290a7a72d76336834f2cea3948f39cf2af1d50e4",
+          "visible": false,
+          "w": 5,
+          "x": 2,
+          "y": 2
+        }
+      ],
+      "name": "layered_hidden",
+      "note": "psd-tools 写出 / 层表由 psd-tools 读回 / 合成图两张脸一致",
+      "render_ref_png": "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAJElEQVR4nGNkOMHwnwEN/DdHCDGhS6IDOihg/P//P4YjqWsFAG90CAehXfN5AAAAAElFTkSuQmCC",
+      "render_tol": 0,
+      "sha256": "8a2e6cc8526c4c4fbb6d2be014b43009358a7b9d3ea1b6c6fb5bea1f6b4b2c32",
+      "width": 8
+    },
+    {
+      "bytes": 674,
+      "composite_sha256": "cfda08f404b7ac0de1f1e7bac085cd9707a4d3d492093c2fa27fb1e027b5102e",
+      "compression": 0,
+      "file": "layered_three.psd",
+      "height": 6,
+      "kind": "layered",
+      "layer_channel_counts": [
+        [
+          [
+            -1,
+            14
+          ],
+          [
+            0,
+            14
+          ],
+          [
+            1,
+            14
+          ],
+          [
+            2,
+            14
+          ],
+          [
+            -2,
+            14
+          ]
+        ],
+        [
+          [
+            -1,
+            14
+          ],
+          [
+            0,
+            14
+          ],
+          [
+            1,
+            14
+          ],
+          [
+            2,
+            14
+          ],
+          [
+            -2,
+            14
+          ]
+        ]
+      ],
+      "layers": [
+        {
+          "blend": "normal",
+          "h": 3,
+          "name": "opaque",
+          "opacity": 255,
+          "rgba_sha256": "53232a050200e4bd47a7404bfaf1c4ac814fa39d1ab5d18d85e95ffdc7506300",
+          "visible": true,
+          "w": 3,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "blend": "normal",
+          "h": 3,
+          "name": "solid",
+          "opacity": 255,
+          "rgba_sha256": "49fefc0b4c8ab2f683b1d3e59b3d2cf11407c23c50095f952a2e076f4c3cbfb0",
+          "visible": true,
+          "w": 3,
+          "x": 1,
+          "y": 1
+        }
+      ],
+      "name": "layered_three",
+      "note": "psd-tools 写出 / 层表由 psd-tools 读回 / 合成图两张脸一致",
+      "render_ref_png": "iVBORw0KGgoAAAANSUhEUgAAAAYAAAAGCAYAAADgzO9IAAAAPElEQVR4nGOskDvxnwEK2h+aw5gMLCCi6Y4RmPP7928GVlZWMJsJrgQNMP7///8/SCUMwHSAJbDpwGkUAPCfE5B0AJujAAAAAElFTkSuQmCC",
+      "render_tol": 0,
+      "sha256": "d99b344d87fb6227f212df0af1dc4db65b26ebd3f3e234d9cdaa503b3d839e39",
+      "width": 6
+    },
+    {
+      "bytes": 422,
+      "composite_sha256": "f68a7c28d85984122e632ebc4c489a6e223ba4688fc912e7c11f1a0825099c8b",
+      "compression": 0,
+      "file": "layered_alpha.psd",
+      "height": 4,
+      "kind": "layered",
+      "layer_channel_counts": [
+        [
+          [
+            -1,
+            18
+          ],
+          [
+            0,
+            18
+          ],
+          [
+            1,
+            18
+          ],
+          [
+            2,
+            18
+          ],
+          [
+            -2,
+            18
+          ]
+        ]
+      ],
+      "layers": [
+        {
+          "blend": "normal",
+          "h": 4,
+          "name": "semi",
+          "opacity": 255,
+          "rgba_sha256": "b9e184519652f8ff3592a0fcbc0f66e1cceb1e87891070c63909912b0c4d6465",
+          "visible": true,
+          "w": 4,
+          "x": 0,
+          "y": 0
+        }
+      ],
+      "name": "layered_alpha",
+      "note": "psd-tools 写出 + 把 -1/-2 通道的游程值对调（长度不变）",
+      "render_ref_png": "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAFUlEQVR4nGN8vHHGfwYkwITMIU4AANC3AzP4T5jIAAAAAElFTkSuQmCC",
+      "render_tol": 0,
+      "sha256": "6472822d4f0f8359ed5c79238939b58b8181ac7c9ab496cd7fe2b9293096949b",
+      "width": 4
+    }
+  ],
+  "pillow": "12.3.0",
+  "psd_tools": "1.24.0"
+}

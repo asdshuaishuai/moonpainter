@@ -472,7 +472,7 @@ python3 mutation_scan.py R3 R4  # 按 id 只跑指定的变异（改完测试想
 # INVALID（锚点失效 **或变异本身编译不过**）与 UNKNOWN 都**退出码 1**：
 # 它们不是"通过"，是"这条变异压根没在测试任何东西"——静默排除在统计之外
 # 会让每次汇总照旧印 PASS（经过见 PLAN 四十）。
-moon run --target native cli    # stdin 行协议；help 查看全部 72 个命令
+moon run --target native cli    # stdin 行协议；help 查看全部 74 个命令
 ```
 
 ## demo/agent 层附加纪律（demo 包不适用"零第三方依赖"铁律）

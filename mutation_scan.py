@@ -3508,6 +3508,79 @@ MUTS = [
     out.push(""",
         "killed",
     ),
+    # ③ PSD 读侧（真实 PSD：位深/色彩模式压缩/PackBits/行长度表/混合模式/蒙版/
+    # 可见性；agent 侧的拼合分支与 RGBA 通道序）。每一条都对着**第三方语料**，
+    # 不是对着自己的实现。
+    (
+        "R152", "PSD 位深检查失效（16 位也照解 ⇒ 每像素两字节被当成一字节，静默错位）",
+        "codec/psd.mbt",
+        """  if depth != 8 {""",
+        """  if false {""",
+        "killed",
+    ),
+    (
+        "R153", "PSD 色彩模式检查失效（CMYK 四通道按 RGB 解 ⇒ 颜色全错，还不报错）",
+        "codec/psd.mbt",
+        """  if mode != 3 && mode != 1 {""",
+        """  if false {""",
+        "killed",
+    ),
+    (
+        "R154", "PackBits 控制字节按无符号读（重复段全被当字面量 ⇒ 整片像素错位）",
+        "codec/psd.mbt",
+        """    let n = if nb >= 128 { nb - 256 } else { nb }""",
+        """    let n = nb""",
+        "killed",
+    ),
+    (
+        "R155", "合成图 RLE 的行长度表只按行算（漏乘通道数 ⇒ 第二个通道读到像素数据）",
+        "codec/psd.mbt",
+        """    let total_rows = height * channels""",
+        """    let total_rows = height""",
+        "killed",
+    ),
+    (
+        "R156", "混合模式 norm 被映射成 multiply（层混合全错，画面与文件说的不是一回事）",
+        "codec/psd.mbt",
+        """    "norm" => Some("normal")""",
+        """    "norm" => Some("multiply")""",
+        "killed",
+    ),
+    (
+        "R157", "真像素蒙版不再拒绝（静默丢掉遮挡关系 ⇒ 读进来的是另一张图）",
+        "codec/psd.mbt",
+        """        if hidden > 0 {""",
+        """        if false {""",
+        "killed",
+    ),
+    (
+        "R158", "蒙版占位判据失效（全可见的占位蒙版也被当成真蒙版 ⇒ 第三方普通分层文件全读不进来）",
+        "codec/psd.mbt",
+        """          if (b.to_int() & 0xFF) != 255 {""",
+        """          if true {""",
+        "killed",
+    ),
+    (
+        "R159", "图层可见性 flags 判据失效（隐藏层被当成可见 ⇒ 画面多出本该看不见的东西）",
+        "codec/psd.mbt",
+        """      visible: (flags & 2) == 0,""",
+        """      visible: true,""",
+        "killed",
+    ),
+    (
+        "R160", "拼合文件分支被写死（分层 PSD 也走「只有合成图」那条路 ⇒ 层全丢）",
+        "agent/psd.mbt",
+        """  if psd.layers.length() == 0 {""",
+        """  if true {""",
+        "killed",
+    ),
+    (
+        "R161", "RGBA→PNG 的通道序写反（R/B 对调 ⇒ 红蓝互换，尺寸与结构全对）",
+        "agent/psd.mbt",
+        """    @codec.rgba_set(buf, i % w, i / w, (a << 24) | (r << 16) | (g << 8) | b)""",
+        """    @codec.rgba_set(buf, i % w, i / w, (a << 24) | (b << 16) | (g << 8) | r)""",
+        "killed",
+    ),
     ]
 
 

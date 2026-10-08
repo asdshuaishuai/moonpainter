@@ -47,7 +47,7 @@ macOS 原生类 Photoshop 编辑器。对本工程最有价值的三块遗产：
 
 ```
 宿主    cli（native 行协议 + 文件 FFI + 原子落盘）
-交互    agent（72 命令 · vision 闸 · undo/redo · 步骤历史 history/goto · P0–P2 lint · MVSL 闭环 · 工具字典）
+交互    agent（74 命令 · vision 闸 · undo/redo · 步骤历史 history/goto · P0–P2 lint · MVSL 闭环 · 工具字典）
 容器    mpd（pack/unpack · manifest/params/agent/mvsl · 指纹对账 · 限额 · 预览生成）
 渲染    render（RGBA 画布 · 2×2 子采样 AA · W3C 混合 · 旋转 · 取景 · pick · stats）
 核心    core（IR 层树 · canonical JSON 双向 · 指纹 · 层定位原语 · MVSL 编辑表 IR）
@@ -282,7 +282,7 @@ manifest 的 `mvsl` 版本块 pin 住四个独立版本号（`render_contract` /
   **空断言**即保护断言的选择子零命中（P1——恒真，比"被违反"更坏，因为它给的是虚假的安心）。
   空编辑表是合法状态，不报条目——lint 不该对「我还没改任何东西」报警。
 
-## 6. 命令集（72 个；字典 = agent/tools.mbt 单一事实源）
+## 6. 命令集（74 个；字典 = agent/tools.mbt 单一事实源）
 
 会话：`session-open` `list-tools` `help`；文档：`new` `set-canvas` `list-layers` `query-layer` `lint`；
 绘制：`add-rect/ellipse/polygon/line` `add-path` `path-preview` `bool-op`（两个形状 → 一个新路径层）`add-image`（b64）`set-image`（原地换图，只换像素）`set-style` `move` `resize` `rotate` `transform`（自由变换：位置+盒子+旋转**一次**写完 = 一步历史）`rename` `tag` `delete` `visible` `reorder` `group` `ungroup` `group-add` `group-remove`（成员增删）；
@@ -290,6 +290,7 @@ manifest 的 `mvsl` 版本块 pin 住四个独立版本号（`render_contract` /
 修图：`add-paint` `brush` `erase` `crop` `sample` `add-adjust` `set-adjust` `add-mask` `set-mask` `remove-mask`；
 MVSL：`mvsl-set` `mvsl-show` `mvsl-clear` `select-preview` `mvsl-impact` `mvsl-assert`；
 历史/容器：`fingerprint` `inspect` `edits` `undo` `redo` `save-mpd-b64` `open-mpd-b64`；
+PSD：`psd-info` `open-psd`（见 §6.2）；
 cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
 
 ### 6.1 布尔运算的诚实边界（`core/bool.mbt` + `agent/bool_cmds.mbt`）
@@ -317,6 +318,40 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
   （洞里露出下面那层）；结果插在两个操作数原来**最下面那个**的位置，填充/描边继承 A。
 - **未做**：一个岛多个洞（一层只能挂一个反选蒙版 ⇒ 多洞结果拒绝）、
   把祖先变换折算进操作数轮廓、结果层自己的描边按集合边界重算（现在继承 A）。
+
+### 6.2 PSD 读写边界（③；`codec/psd.mbt` + `agent/psd.mbt`）
+
+**读进来的东西**：`psd-info b64=` 只读地报结构；`open-psd b64= [uuid=]` 把 PSD 变成当前文档。
+一个 PSD 图层 → 一个 `Image` 层（像素编码成 PNG、内容寻址进资产表），**层序即渲染序**；
+0 图层的拼合文件 → 唯一一层 `composite`（盒子 = 画布）；`opacity 0..255` 折成 `0..1` 是
+唯一一处换算。画布语义是**白纸**（与渲染器一致），PSD 的"无像素处"是透明——
+比对时一律"合成图叠白纸"，这条口径写进 §6.2 也写进语料生成器。
+
+**我们支持的**（每一条都有第三方语料守着）：8 位、RGB/Grayscale、1/3/4 通道、
+RAW 与 RLE(PackBits) 压缩的**合成图**与**图层通道**、图层名（Pascal，4 字节对齐）、
+可见性、不透明度、七种混合模式（normal/multiply/screen/overlay/darken/lighten/difference）、
+图层盒伸出画布（坐标可负）、**全可见的占位蒙版**（第三方给每层都写一张全白的 −2 蒙版）。
+
+**明确拒绝的**（不回 ok 假装读过，理由里给下一步）：位深 16/32；CMYK/索引/Lab/位图/多通道；
+ZIP 与 ZIP+prediction 压缩；图层组；**真**像素蒙版（任何一个像素 < 255 就拒——读进来也
+表达不了"遮挡关系"，静默丢就是另一张图）；图层效果、剪贴蒙版、未知混合模式；通道数不属于
+{1,3,4}；以及"声明了蒙版但蒙版通道不见了"这种结构自相矛盾的文件。
+
+**判据是别人的实现**：12 例可读语料由 **psd-tools 1.24.0** 写出，期望值由
+**Pillow 12.3.0 + psd-tools** 双读算好（层表逐字段 + 合成图 sha256），落在
+`codec/testdata/psd/corpus.json`；8 例边界样本要求 `psd-info` 与 `open-psd`
+**两处入口都明确拒绝**。渲染端到端另有 psd-tools **按层重算**（`composite(force=True)`）
+的合成图**叠白纸**当参考图，我们的渲染结果逐位比：除"进位差 1"的例子外必须逐位相同，
+而那个容差是**算出来的**（把参考图的合成图叠白纸用我们的定点公式再算一遍，与 Pillow
+不一致才声明 1），不是拍的。⚠️ **别拿存图那份合成图当参考**：它在无像素处是**黑底**
+（`channels=3`、alpha 恒 255），第一版就这么比，`layered_three` 报"66 字节不同、
+最大差 255"，看着像我们读丢了东西。
+
+**写 PSD 未做**（诚实边界）：`export-psd` 是下一轮；本轮的交付是"能读进来、读不动的
+明确拒绝、且判据站在第三方实现那一侧"。
+
+**没有接进产品前端**：两条命令目前是引擎侧能力（浏览器侧要一个 file picker 才谈得上入口），
+README 的 unreachable 名单与 `ui_audit.py` 都记着这件事。
 
 ## 7. 远期路线（本轮明确不做，排期见 PLAN.md §8）
 
@@ -848,7 +883,7 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
   ⚠️ 口径要说准：**"0.08 s/层"是整幅实心矩形层的数**，真实文档里取决于层的
   覆盖面积与种类。每种层的代价口径（代码事实，不是推断）：
   * **几何层**（rect/ellipse/polygon/line/image）按 `paint_window`（bbox 对角线
-    + 2px 松弛）裁窗——**这条缩放本轮实测了**：整幅 10 层 1.13 s、1/16 画布
+    + 2px 松弛）裁窗——**这条缩放本轮实测了**：整幅 10 层 1.13 s、画布十六分之一
     （1000×750）0.61 s、200×200 0.38 s（≈ 只剩固定成本 0.36 s）；50 个 200×200
     0.49 s ⇒ **小层每层边际 ≈ 2.8 ms**，比整幅层的 78 ms 小 **28 倍**。
   * **Raster** 只扫**落笔窗口** `dabs_window`（见下面 m4 那张表）；
@@ -1036,7 +1071,7 @@ cli 专属：`save-mpd <path>`（原子落盘）`open-mpd <path>` `:exit`。
 - **能力边界的权威清单是 `docs/scorecard.md`**（由 `scorecard.py` 从
   `scorecard/areas.toml` 生成、`verify.sh#scorecard` 逐字节核对）：8 个域 63 条，
   每条一个状态三档（**已做 / 部分+声明边界 / 未做**）与一个**唯一命中**的源码锚点。
-  它存在的理由是一条现场教训：**接线计数不是能力**——"72 条命令 / 61 个工具 /
+  它存在的理由是一条现场教训：**接线计数不是能力**——"74 条命令 / 61 个工具 /
   72 条人类可达"说的全是**入口存在**，而一个入口背后可能只是"回一个错误"，
   或者更坏：参数收下了、一个像素都没读（这一类现在由 `key_effect_audit.py`
   现场数：187 个（命令, 键）配对，死键目标 0，"测不出来"单列不许算通过）。

@@ -336,6 +336,8 @@ pub fn exec(s : Session, line : String) -> String {
     "select-preview" => cmd_select_preview(s, tokens)
     "mvsl-impact" => cmd_mvsl_impact(s, tokens)
     "mvsl-assert" => cmd_mvsl_assert(s)
+    "psd-info" => cmd_psd_info(s, tokens)
+    "open-psd" => cmd_open_psd(s, tokens)
     "save-mpd-b64" => cmd_save_b64(s)
     "open-mpd-b64" => cmd_open_b64(s, tokens)
     _ => err("未知命令 \{verb}（help 查看全量）")

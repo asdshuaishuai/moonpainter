@@ -5,3 +5,8 @@
 import {
   "moonbitlang/core/encoding/utf8",
 }
+
+import {
+  "moonpainter/base",
+  "moonbitlang/core/encoding/base64",
+} for "test"

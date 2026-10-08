@@ -6575,8 +6575,70 @@ size=2)` 不算空转（块边长 2 就是"什么都不干"的反面）；动感
 `lint` 报）；⑧`text_style` 四个值全默认与 `None` 渲染逐位相同（**白装**，
 `lint` 报 P2——这是刻意的：不给"看起来设置了什么"的假信号）。
 
-**门禁结果。** native 505 / wasm-gc 503 全绿；`./verify.sh` 十五步全过；
+**门禁结果。** native 517 / wasm-gc 515 全绿；`./verify.sh` 十六步全过；
 `./build_demo.sh` 九步全过（demo 测试 52、点击穿透 112 条断言）；
-`python3 key_effect_audit.py` 244/244、死键 0；`scorecard.py` 65 项/52 已做；
-`--check-anchors` 320 条锚点全部唯一命中；`floors.mutations 306 → 320`、
+`python3 key_effect_audit.py` 244/244、死键 0；`scorecard.py` 66 项/53 已做；
+`--check-anchors` 330 条锚点全部唯一命中；`floors.mutations 320 → 330`、
 `mutations_killed` 随本次逐条跑（R138–R151 全部 KILLED）。
+
+### 八十、③ PSD 兼容（读侧）：真实 PSD 语料 + 第三方 oracle + 不降级边界（2026-10-08）
+
+**做了什么。** 新增 `codec/psd.mbt`（纯字节解析，零第三方依赖）与 `agent/psd.mbt`
+（把 `PsdImage` 映射成 `Document` + 内容寻址资产），命令面加 `psd-info b64=`（只读看结构）
+与 `open-psd b64= [uuid=]`（打开成当前文档）。每个 PSD 图层 → 一个 `Image` 层，层序即渲染序；
+0 图层的拼合文件 → 唯一一层 `composite`（盒子 = 画布）；`opacity 0..255 → 0..1` 是唯一一处换算。
+`tools/make_psd_corpus.py` 用 **psd-tools 1.24.0** 写出 `codec/testdata/psd/*.psd`
+（12 例可读 + 8 例边界），期望值由 **Pillow 12.3.0 + psd-tools** 双读算好落进
+`codec/testdata/psd/corpus.json`，并生成两张表：`codec/psd_corpus_test.mbt`（结构期望）
+与 `agent/psd_refs_test.mbt`（**渲染参考图** = psd-tools 按层重算的合成图叠白纸的 PNG）。
+门禁新增 `verify.sh#psd-corpus`（走真 CLI：逐例核结构 + 合成图 sha，8 例边界要求
+`psd-info`/`open-psd` 两处入口都明确拒绝），变异新增 R152–R161。
+
+**判据（能被注入 bug 抓住的）。** 关键是**判据站在第三方实现那一侧**：
+①`verify.sh#psd-corpus` 比"我们的解码 vs Pillow 的解码"的**合成图 sha256**与层表逐字段；
+②`agent/psd_test.mbt` 比"导入 → 渲染"与 psd-tools **按层重算**叠白纸的参考图（逐位）；
+③10 条变异各打一个真 bug（位深/色彩模式不拒、PackBits 按无符号读、合成图行长度表漏乘通道数、
+`norm` 映射错、真蒙版不拒、占位蒙版判反、可见性写死、拼合分支写死、RGBA 通道序写反），
+逐条实测 KILLED。
+
+**踩到的真 bug（都是"看着对、其实错位"这一类）。**
+- **图层记录偏移全错**：把混合模式当成 4 字节（`4BIM`?实际是 `8BIM` + 4 字节键 = **8 字节**），
+  于是 opacity/clipping/flags/extra_len 全部错位，每个分层文件都报"混合模式 8BIM 不支持"，
+  而**拼合文件照样读得开**——错误只在"有图层"时出现。
+- **蒙版数据没跳过**：`extra` 里 mask_len 后面跟着 mask data，跳过它才会读到 blending ranges、
+  才会读到图层名。症状是**所有图层名字都是空串**（判据写的是"层 0 名字： ≠ bottom red"），
+  而不是报错——静默丢字段最像"我读对了"。
+- **图层数读成 4 字节**：PSD 的 layer count 是 **i16**（可为负），按 u32 读出来是 131072/65536
+  这种"看着像文件坏了"的巨数。
+- **PackBits 控制字节是有符号的**：`d[i].to_int()` 给 0..255 ⇒ `n >= 0` 恒真 ⇒
+  重复段全被当字面量读，合成图完全错位（而 RLE 的**行长度表**还是对的，所以错误看起来像
+  "像素解压坏了"而不是"算法选错了"）。
+- **合成图的 RLE 行长度表是 `rows × channels` 一张表**（图层通道才是每通道一张）——
+  按每通道一张读，第二个通道开始就把像素数据当行长度读，报"行长度表不足"。
+- **蒙版拒绝判据第一版太宽**：psd-tools 给**每个**图层都写一张全白的 −2 占位蒙版，
+  按"有蒙版就拒"会拒掉所有正常分层文件；正确判据是"**解码那条通道，出现任何 < 255 的像素才拒**"，
+  再单列一条"声明了蒙版却找不到蒙版通道"（结构自相矛盾）的响亮拒绝。
+- **参考图口径**：`psd.composite` 给的是**存图那份**合成图（无像素处是**黑底**、`channels=3`），
+  拿它比 `layered_three` 报"66 字节不同、最大差 255"；必须用 `composite(force=True)`
+  （按层重算、带 alpha）再**叠白纸**。附带一条：Pillow 的 `alpha_composite`（浮点）与我们的
+  定点混合在**进位**上会差 1，`layered_two`（层不透明度 128/255）实测 24/280 字节差 1。
+- **容差必须"量出来"**：第一版按"有半透明像素就 tol=1"猜，`flat_rgba_alpha`（有半透明但
+  两边逐位相同）被无谓放宽、而 `flat_rgba_rle_comp` 的差正是进位。改成"把参考图的合成图叠白纸
+  用**我们的定点公式**再算一遍，与 Pillow 不一致才声明 tol=1"——判据比现象松就等于没有判据。
+- **MoonBit 侧的三处编译/测试教训**：测试 helper 里用 `assert_*` 必须在签名上写 `raise`
+  （它们只能在 error-capable 函数里用）；`layer_table[i].visible` 是 JSON **布尔**（`as_str` 会
+  失败，判据要按 `as_bool`）；`ref` 是保留字。
+- **blend 名两边不一致**：psd-tools 的 `str(blend_mode)` 带 `blendmode.` 前缀，语料 JSON 里
+  存了带前缀的名字，而门禁比的是码表里的裸名 —— 门禁报的是"名字不一样"，两边其实在说同一件事。
+  修法是把剥前缀收成生成器里的 `_blend_name` 一处。
+
+**诚实边界（丐版）。** ①**只读不写**：`export-psd` 是下一轮，本轮交付是"能读进来 + 读不动的
+明确拒绝 + 判据在第三方那一侧"；②不支持的（位深 16/32、CMYK/索引/Lab/位图、ZIP/ZIP+prediction、
+图层组、真像素蒙版、图层效果、剪贴蒙版、未知混合模式、通道数 ∉ {1,3,4}）**一律明确拒绝**，
+理由里给下一步；③图层属性只映射 name/几何/可见性/不透明度/混合——其余（效果、剪贴、锁定、
+蒙版）没有对应表达就拒绝，不是"读到一半丢掉"；④两条命令**还没接进产品前端**
+（浏览器侧要 file picker），README 的 unreachable 名单与 `ui_audit.py` 都记着。
+
+**门禁结果。** native / wasm-gc 全绿；`./verify.sh` 十六步全过（新增 `#psd-corpus`）；
+`--check-anchors` 330 条锚点全部唯一命中；`floors.mutations 320 → 330`；
+R152–R161 逐条实测 KILLED（见上）。
