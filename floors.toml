@@ -18,8 +18,8 @@
 engine_commands = 75
 tests_native = 527
 tests_wasm = 525
-mutations = 343
-mutations_killed = 339
+mutations = 344
+mutations_killed = 340
 human_reachable = 72
 unreachable_human = 3
 ai_tools = 61
@@ -36,7 +36,7 @@ key_effect_read = 244
 # `未做`刻意**不进地板**——它是 roadmap，缩短它是好事，靠 `--check` 的逐字节
 # 比对逼你重新生成文档（于是"少了一项未做"必须是一次显式的改动）。
 scorecard_items = 66
-scorecard_done = 54
+scorecard_done = 56
 
 # 有意下调时的申报区（每条：metric + amount + reason，写成 `[[retired]]` 表）。
 # 例：变异退休（它守的行为变成正确行为）时，floor 减 1 并在**同一次提交**里写一条。

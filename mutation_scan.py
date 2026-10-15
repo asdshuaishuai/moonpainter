@@ -3269,6 +3269,19 @@ MUTS = [
         """      Some(_f) => if rc < RENDER_CONTRACT_FX {""",
         "killed",
     ),
+    (
+        "R175",
+        "盒模糊第二趟的窗口沿 x 滑（两趟同轴：斜纹 + **负**均值，而定性断言看不见）",
+        "pixel/edit.mbt",
+        """      out.v[y2 * f.w + x2] = acc / wd
+      acc = acc - field_get(tmp, x2, y2 - r) + field_get(tmp, x2, y2 + r + 1)""",
+        """      out.v[y2 * f.w + x2] = acc / wd
+      acc = acc - field_get(tmp, x2 - r, y2) + field_get(tmp, x2 + r + 1, y2)""",
+        "killed",
+    ),
+    # ⚠️ R175 是 ②A 那轮的第六条真 bug（`box_mean` 的竖直趟被写成了水平趟），
+    # 补在 id 序列的尾部而不是 R124 后面：**编号是登记顺序，不是分组**——
+    # 插进旧号段会让后面所有号的"谁先谁后"失真（同 R68/R69 的处理）。
     # ---- ②B 滤镜库（16 个参数键 / 8 个算子）----
     # 每条都指着一个**新判据**：改坏了哪条测试会红，写在描述里。
     (

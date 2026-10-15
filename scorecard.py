@@ -263,14 +263,61 @@ def render(areas, nums):
         val = nums.get(key)
         out.append('| %s | %s | %s |' % (label, '—' if val is None else val, src))
     out.append('')
-    out.append('> **别把接线计数当能力**：AI 工具 60 条 / 人类可达 70 条说的是'
+    # ⚠️ 这两个数字**不许写死**：它们曾经是 60/70，后来涨到 61/72 而这里没人动
+    # ——生成器自己会撒谎（"数字进了散文就没人管"的又一个现场）。
+    out.append('> **别把接线计数当能力**：AI 工具 %s 条 / 人类可达 %s 条说的是'
                '「有没有入口」，一个入口背后可能只是"回一个错误"；行为由'
+               % (nums.get('ai_tools'), nums.get('human_reachable')) +
                '`verify.sh` 与 `build_demo.sh` 的各步钉住，'
                '而"参数收了没人读"这类空壳由 `key_effect_audit.py` 现场数。')
     out.append('')
     out.append('## 分域明细')
     out.extend(detail)
     return '\n'.join(out).rstrip('\n') + '\n'
+
+
+def doc_numbers(areas, nums):
+    """文档**散文里**那些"现算数字"的对账（只认写死的措辞，读不出来就判失败）。
+
+    为什么单列一块：`187 → 244`（键效果配对）、`63 条 → 66 条`（记分卡条数）、
+    `10 条未做 → 5 条`都实测漂过——而它们和这份生成出来的文档说的是**同一件事**，
+    只是没人对账。措辞变了就红（静默跳过 = 这块覆盖没了而汇总照旧好看）。
+    """
+    errs = []
+    items = [it for a in areas.get('area', []) for it in a.get('item', [])]
+    total = len(items)
+    doms = len(areas.get('area', []))
+    miss = sum(1 for it in items if it.get('status') == 'missing')
+    rules = [
+        ('README.md', r'(\d+) 个域 (\d+) 条', (doms, total)),
+        ('README.md', r'未做的 (\d+) 条就是 roadmap', (miss,)),
+        ('DESIGN.md', r'(\d+) 个域 (\d+) 条', (doms, total)),
+    ]
+    for path, pat, want in rules:
+        text = io.open(path, encoding='utf-8').read()
+        ms = re.findall(pat, text)
+        if not ms:
+            errs.append('%s 里读不出「%s」——散文里的现算数字**不许静默跳过**'
+                        '（改措辞就同一次改这里）' % (path, pat))
+            continue
+        for got in ms:
+            got = got if isinstance(got, tuple) else (got,)
+            if tuple(int(x) for x in got) != tuple(want):
+                errs.append('%s 写「%s」，实际 %s'
+                            % (path, '/'.join(got), '/'.join(str(x) for x in want)))
+    # 记分卡备注里的"现测 N 对"必须等于 floors 里的 key_effect_pairs
+    want_pairs = nums.get('key_effect_pairs')
+    src = io.open('scorecard/areas.toml', encoding='utf-8').read()
+    ms = re.findall(r'现测 (\d+) 对', src)
+    if not ms:
+        errs.append('scorecard/areas.toml 里读不出「现测 N 对」——别静默跳过')
+    elif want_pairs is not None:
+        for got in ms:
+            if int(got) != want_pairs:
+                errs.append('scorecard/areas.toml 写「现测 %s 对」，'
+                            'floors.toml 是 %s（键效果配对涨了要同一次改）'
+                            % (got, want_pairs))
+    return errs
 
 
 def main():
@@ -288,6 +335,14 @@ def main():
     md = render(areas, nums)
     if '--check' in sys.argv:
         cur = io.open(OUT, encoding='utf-8').read() if os.path.exists(OUT) else ''
+        # 散文数字只在**门禁口径**里判：生成这半不该被它挡住（否则会死锁：
+        # 改清单 → 生成器拒绝写文档 → 门禁永远红）
+        dn = doc_numbers(areas, nums)
+        if dn:
+            print('FAIL: 文档散文里那些现算数字对不上（改清单/涨了数字就要同一次改散文）：')
+            for e in dn:
+                print('  - %s' % e)
+            return 1
         if bad:
             print('FAIL: 清单不合法，记分卡不生成（先修清单）')
             return 1

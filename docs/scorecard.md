@@ -8,13 +8,13 @@
 | :-- | --: | --: | --: | --: |
 | 画布与文档 | 5 | 4 | 0 | 1 |
 | 绘制与图层 | 12 | 10 | 1 | 1 |
-| 路径、文本与蒙版 | 8 | 4 | 1 | 3 |
+| 路径、文本与蒙版 | 8 | 5 | 1 | 2 |
 | MVSL 编辑表 | 9 | 6 | 3 | 0 |
 | 命令面与工程纪律 | 9 | 9 | 0 | 0 |
 | 容器与互操作 | 7 | 6 | 0 | 1 |
-| 人类界面（AI 修图 demo） | 9 | 8 | 0 | 1 |
+| 人类界面（AI 修图 demo） | 9 | 9 | 0 | 0 |
 | 性能、确定性与可复现 | 7 | 7 | 0 | 0 |
-| **合计** | **66** | **54** | **5** | **7** |
+| **合计** | **66** | **56** | **5** | **5** |
 
 ## 现场量的数字（现算，不手写）
 
@@ -23,8 +23,8 @@
 | 引擎命令面（字典条数） | 75 | floors.toml ← verify.sh#catalog |
 | native 测试条数 | 527 | floors.toml ← verify.sh#catalog |
 | wasm-gc 测试条数 | 525 | floors.toml ← verify.sh#catalog |
-| 变异条数 | 343 | floors.toml ← verify.sh#catalog |
-| 被抓住的变异 | 339 | floors.toml ← verify.sh#catalog |
+| 变异条数 | 344 | floors.toml ← verify.sh#catalog |
+| 被抓住的变异 | 340 | floors.toml ← verify.sh#catalog |
 | 人类可达命令 | 72 | floors.toml ← ui_audit.py |
 | 人类够不着的命令（目标 0） | 3 | floors.toml ← ui_audit.py |
 | AI 工具面条数 | 61 | floors.toml ← build_demo.sh#doc-tools |
@@ -32,12 +32,12 @@
 | （命令, 键）配对 | 244 | floors.toml ← key_effect_audit.py |
 | 有读取点的配对 | 244 | floors.toml ← key_effect_audit.py |
 | **收了却没人读的键（目标 0）** | 0 | key_effect_audit.py 现场量 |
-| 对抗性参数 fuzz 行数 | 5761 | floors.toml ← panic_hunt.py |
+| 对抗性参数 fuzz 行数 | 6105 | floors.toml ← panic_hunt.py |
 | 浏览器自检项 | 31 | floors.toml ← build_demo.sh#selfcheck |
 | 点击贯通断言 | 112 | floors.toml ← build_demo.sh#clickthrough |
 | 可点处理器 | 90 | floors.toml ← build_demo.sh#clickthrough |
 
-> **别把接线计数当能力**：AI 工具 60 条 / 人类可达 70 条说的是「有没有入口」，一个入口背后可能只是"回一个错误"；行为由`verify.sh` 与 `build_demo.sh` 的各步钉住，而"参数收了没人读"这类空壳由 `key_effect_audit.py` 现场数。
+> **别把接线计数当能力**：AI 工具 61 条 / 人类可达 72 条说的是「有没有入口」，一个入口背后可能只是"回一个错误"；行为由`verify.sh` 与 `build_demo.sh` 的各步钉住，而"参数收了没人读"这类空壳由 `key_effect_audit.py` 现场数。
 
 ## 分域明细
 
@@ -84,7 +84,7 @@
 | 路径二次编辑（加/删锚点）、形状转路径、路径文字、SVG/AI 导入 | 未做 | `agent/session.mbt#cmd_set_style` | `set-style points=` 只能整表替换顶点；不能在路径上加/删锚点、不能把已有形状转成路径。 |
 | 文本：ASCII 点阵字形（无 CJK、无字体文件） | 部分 / 有声明边界 | `render/scene.mbt#glyph_columns` | 字形表在 demo 侧；`rot`/`flip` 已生效，`query-layer` 报盒子而墨是字形（`text_ink` 与渲染共用一处）。 |
 | 文本盒子跟着内容走 + `set-text` 原地改字号 | 已做 | `agent/session.mbt#text_box` | `add-text` 与 `set-text` 共用 `text_box`；显式 `w=`/`h=` 才固定；`lint` 兜「盒子装不下自己的文字」。 |
-| 文本排版：对齐、行距、字距、自动换行 | 未做 | `render/scene.mbt#text_glyphs` | 一行直排、无对齐/字距/行距参数、无换行；多行文本只能拆成多个层。 |
+| 文本排版：对齐、行距、字距、自动换行 | 已做 | `render/scene.mbt#text_layout` · `verify.sh#native-test` | ②C：`align=left|center|right`、`line_height=1..64`、`letter_spacing=-5..32`、`wrap=1/0` + `w=` 盒宽，文本里的 `\n` 是**硬换行**；单位是「字形格」（字号/7，至少 1），排版只有一处实现（`render.text_layout`，渲染与 `pick` 的读点共用，非默认排版抬到渲染契约第 8 档）。未做：CJK/字体文件、连字符与标点避让、两端对齐/竖排/首行缩进、非整数行距。 |
 | 几何蒙版：矩形/椭圆/多边形 + 圆角/羽化/毛化/反选 | 已做 | `core/document.mbt#mask_param_error` | 参数判据一处（入口与 lint 共用）；`set-mask` 是全参数的部分更新；软边与选择子共用 `pixel.soft_cover`。 |
 | 栅格蒙版（画笔涂抹）、live mask（引用下层 alpha） | 未做 | `render/scene.mbt#mask_cover_at` | 蒙版只有几何的：`mask_cover_at` 只认 rect/ellipse/polygon + invert。 |
 | 语义标签：可打可摘，并作为 MVSL 的层作用域（`layer=@tag`） | 已做 | `core/mvsl.mbt#expand_layer_scopes` | 展开只有一处（渲染/impact/assert/lint 共用）；活绑定在**执行时**展开，落不到任何层则拒绝。 |
@@ -115,7 +115,7 @@
 | :-- | :-- | :-- | :-- |
 | 命令字典（`agent/tools.mbt`）与分发同步，`list-tools` 每条真实可调 | 已做 | `agent/session.mbt#tools_json` · `verify.sh#catalog` | 字典是 LLM 唯一的说明书；`help`/`list-tools`/README 名单全部从它出。 |
 | 字典 ↔ 解析器参数对账（承诺的 `key=` 必须真的认） | 已做 | `agent/ops.mbt#check_kv_args` · `verify.sh#params` | 键清单只有一个事实源；读不出键表/命令名不是字面量 → 判失败而不是静默跳过。 |
-| 「收了却没人读的键」审计（行为式：配对四个出口） | 已做 | `key_effect_audit.py#main` · `verify.sh#scorecard` | 每个（命令, 键）配对跑两遍比回包/指纹/层表/render sha；全都没变 = 空壳。现测 187 对，死键 0。 |
+| 「收了却没人读的键」审计（行为式：配对四个出口） | 已做 | `key_effect_audit.py#main` · `verify.sh#scorecard` | 每个（命令, 键）配对跑两遍比回包/指纹/层表/render sha；全都没变 = 空壳。现测 244 对，死键 0。 |
 | 参数零容忍：认不出的键 / 越界的值 / 用不上的值都在入口拒 | 已做 | `agent/ops.mbt#check_kv_names` · `verify.sh#params` | 「用不上的参数」也在入口拒（例：`census components=` 没有 `within=` 时、`erase color=`）。 |
 | 对抗性参数 fuzz：全部命令 × 敌意语料只回错、不崩 | 已做 | `panic_hunt.py#main` · `verify.sh#panic-hunt` | 断言退出码 0 + 每行恰好一条 JSON 回包 + stderr 无 panic；红了二分指名那一行。 |
 | 变异门 + 锚点自检（「测试全绿」不等于「行为被守护」） | 已做 | `mutation_scan.py#main` · `verify.sh#anchors` | 287 条变异、284 条被抓住、3 条已确认等价；INVALID/UNKNOWN 都判失败（不是「通过」）。 |
@@ -136,7 +136,7 @@
 | previews/{flat,thumb}.png：保存时自动渲染（含编辑表） | 已做 | `mpd/mpd.mbt#preview_png` | 预览与 `render` 同一张图（编辑表是渲染的最终一遍）。 |
 | PSD **读**（真实 .psd：合成图 + 图层/可见性/不透明度/混合/盒） | 已做 | `codec/psd.mbt#psd_decode` · `verify.sh#psd-corpus` | 12 例 psd-tools 写出的语料 + 8 例边界；结构期望与合成图 sha 由 Pillow/psd-tools 双读算好；边界（位深 16/CMYK/ZIP/图层组/真蒙版）两处入口都明确拒绝，不降级。 |
 | PSD **写**（`export-psd-b64`：栅格化图层 + 层记录 + 混合/不透明度/可见性 + 合成图） | 已做 | `agent/psd_out.mbt#cmd_export_psd_b64` · `verify.sh#psd-roundtrip` | 每层按渲染器真实画面烤像素（opacity/visible 不烤进去，隐藏层内容保留），层盒子取 alpha 紧包围盒，合成图写平面序 RGB。判据：psd-tools + Pillow 读我们写出的文件（合成图逐位、层表逐字段），离线门禁核导出 sha/render sha/合成图 sha/层表。边界：装了编辑表、含调整层、超限画布明确拒绝；文本层是位图、组烤成一个层、蒙版与样式烤进像素。 |
-| SVG / AI / 其他位图格式的导入导出 | 未做 | `agent/session.mbt#cmd_open_b64` | 导入只有 PNG（8-bit RGB/RGBA/灰非交错）与 `.mpd`；导出只有 `.mpd` 与 PNG。 |
+| SVG / AI / 其他位图格式的导入导出 | 未做 | `agent/session.mbt#cmd_open_b64` | SVG/AI（Illustrator）与其他位图格式没有导入导出：现有导入是 PNG（8-bit RGB/RGBA/灰非交错）、`.mpd` 与 PSD（③；读/写各自做到哪见上两条），导出是 `.mpd`、PNG 与 PSD。 |
 
 
 ### 人类界面（AI 修图 demo）
@@ -152,7 +152,7 @@
 | 步骤历史面板（点一行 `goto` 跳回，未来步骤画成灰行可重做） | 已做 | `agent/session.mbt#cmd_goto` | 跳回复用 undo/redo 原语；跳回后再操作会丢掉后面的步骤（PS 语义）。 |
 | 画布上的自由变换（Ctrl+T：一个手势 = 一条 `transform` = 一步历史） | 已做 | `agent/session.mbt#cmd_transform` | 手柄画不画由 `caps` 说了算（文本/笔触/调整层只画框、不画缩放手柄）。 |
 | 图层样式 fx 的属性面板（投影/描边/发光/内阴影） | 已做 | `demo/main.mbt#props_html` | 四件套的开关与参数都由 `props_html` 按 `query-layer` 报出的样式面画控件，点击走 `do_ui_cmd`（同一条 `set-fx` 命令，没有旁路）；`panel_html_wbtest` 直接调纯函数断言控件存在，`clickthrough` 用哑 DOM 调处理器再从引擎读回。 |
-| 文本排版面板（对齐/行距/字距/换行） | 未做 | `demo/main.mbt#refresh_props` | 现在面板只给文本层画内容与字号两个控件。 |
+| 文本排版面板（对齐/行距/字距/换行） | 已做 | `demo/main.mbt#align_select` · `build_demo.sh#clickthrough` | ②C：文本层的属性面板画对齐下拉 + 折行开关 + 行距/字距输入（`align_select`/`wrap_select`，行距/字距在 `props_html` 里），改哪一格都拼同一条 `set-text` 走 `do_ui_cmd`（没有旁路）；`panel_html_wbtest` 直接调纯函数断言四个控件都在且回填引擎报的当前值，`clickthrough` 用哑 DOM 调处理器再从引擎读回 `text_style`。 |
 | 浏览器内自检（30 项）：工具面 + MVSL 闭环真的可达 | 已做 | `demo/selfcheck.mbt#selfcheck_cases` · `build_demo.sh#node-headless` | 自检项是浏览器里真跑一遍引擎的清单（工具面/MVSL 闭环/分析出口），不是接线计数。 |
 
 

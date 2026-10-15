@@ -192,10 +192,14 @@ note = "`add-text` 与 `set-text` 共用 `text_box`；显式 `w=`/`h=` 才固定
 [[area.item]]
 id = "text-layout"
 title = "文本排版：对齐、行距、字距、自动换行"
-status = "missing"
-anchor = "render/scene.mbt#text_glyphs"
-must_contain = "text_glyphs"
-note = "一行直排、无对齐/字距/行距参数、无换行；多行文本只能拆成多个层。"
+status = "done"
+anchor = "render/scene.mbt#text_layout"
+must_contain = "text_layout"
+gate = "verify.sh#native-test"
+note = "②C：`align=left|center|right`、`line_height=1..64`、`letter_spacing=-5..32`、`wrap=1/0` + `w=` 盒宽，文本里的 `\\n` 是**硬换行**；单位是「字形格」（字号/7，至少 1），排版只有一处实现（`render.text_layout`，渲染与 `pick` 的读点共用，非默认排版抬到渲染契约第 8 档）。未做：CJK/字体文件、连字符与标点避让、两端对齐/竖排/首行缩进、非整数行距。"
+# ⚠️ 这两条是**改状态**而不是加条目：②C 做完后它们一直写着 missing，
+# 而 README/DESIGN/测试早就按"已做"说话了——记分卡是能力边界的权威清单，
+# 它烂着比没有更坏（同一条纪律：文档过期的判据要有门禁）。
 
 [[area.item]]
 id = "mask"
@@ -326,7 +330,7 @@ status = "done"
 anchor = "key_effect_audit.py#main"
 must_contain = "main"
 gate = "verify.sh#scorecard"
-note = "每个（命令, 键）配对跑两遍比回包/指纹/层表/render sha；全都没变 = 空壳。现测 187 对，死键 0。"
+note = "每个（命令, 键）配对跑两遍比回包/指纹/层表/render sha；全都没变 = 空壳。现测 244 对，死键 0。"
 
 [[area.item]]
 id = "kv-zero-tolerance"
@@ -441,7 +445,7 @@ title = "SVG / AI / 其他位图格式的导入导出"
 status = "missing"
 anchor = "agent/session.mbt#cmd_open_b64"
 must_contain = "cmd_open_b64"
-note = "导入只有 PNG（8-bit RGB/RGBA/灰非交错）与 `.mpd`；导出只有 `.mpd` 与 PNG。"
+note = "SVG/AI（Illustrator）与其他位图格式没有导入导出：现有导入是 PNG（8-bit RGB/RGBA/灰非交错）、`.mpd` 与 PSD（③；读/写各自做到哪见上两条），导出是 `.mpd`、PNG 与 PSD。"
 
 [[area]]
 id = "ux"
@@ -501,10 +505,11 @@ note = "四件套的开关与参数都由 `props_html` 按 `query-layer` 报出�
 [[area.item]]
 id = "text-panel"
 title = "文本排版面板（对齐/行距/字距/换行）"
-status = "missing"
-anchor = "demo/main.mbt#refresh_props"
-must_contain = "refresh_props"
-note = "现在面板只给文本层画内容与字号两个控件。"
+status = "done"
+anchor = "demo/main.mbt#align_select"
+must_contain = "align_select"
+gate = "build_demo.sh#clickthrough"
+note = "②C：文本层的属性面板画对齐下拉 + 折行开关 + 行距/字距输入（`align_select`/`wrap_select`，行距/字距在 `props_html` 里），改哪一格都拼同一条 `set-text` 走 `do_ui_cmd`（没有旁路）；`panel_html_wbtest` 直接调纯函数断言四个控件都在且回填引擎报的当前值，`clickthrough` 用哑 DOM 调处理器再从引擎读回 `text_style`。"
 [[area.item]]
 id = "browser-selfcheck"
 title = "浏览器内自检（30 项）：工具面 + MVSL 闭环真的可达"
